@@ -2835,7 +2835,7 @@ const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpYXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNwenJubnFlc2hlamRtbm9jdnV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTY0NDMsImV4cCI6MjEwMjM3MjQ0M30.Ku9F2tiMWYnDEg9zV1eTL3gRhMf7MrBD6tHISwiEDIs';
 
 async function getSupabase() {
-  if (SUPABASE_ANON_KEY.includes('PASTE_YOUR')) return null;
+  if (SUPABASE_ANON_KEY.includes('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpYXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNwenJubnFlc2hlamRtbm9jdnV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTY0NDMsImV4cCI6MjEwMjM3MjQ0M30.Ku9F2tiMWYnDEg9zV1eTL3gRhMf7MrBD6tHISwiEDIs')) return null;
   if (!window.supabase) {
     await new Promise((resolve, reject) => {
       const s = document.createElement('script');

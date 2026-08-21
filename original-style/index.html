@@ -29,7 +29,6 @@ body {
 }
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
-
 .wrap {
   min-height: 100vh;
   display: grid;
@@ -40,7 +39,6 @@ a:hover { text-decoration: underline; }
   .hero { padding: 40px 24px 20px !important; }
   .panel-side { padding: 24px !important; }
 }
-
 .hero {
   padding: 56px clamp(24px, 5vw, 64px);
   display: flex;
@@ -91,7 +89,6 @@ a:hover { text-decoration: underline; }
   font-weight: 700;
   flex-shrink: 0;
 }
-
 .panel-side {
   background: var(--panel);
   border-left: 1px solid var(--line);
@@ -103,7 +100,6 @@ a:hover { text-decoration: underline; }
 @media (max-width: 860px) {
   .panel-side { border-left: 0; border-top: 1px solid var(--line); }
 }
-
 .card {
   width: 100%;
   max-width: 400px;
@@ -168,7 +164,6 @@ input:focus {
   margin-top: 10px;
 }
 .btn-secondary:hover { background: var(--bg); }
-
 .msg {
   margin-top: 14px;
   padding: 12px 14px;
@@ -179,7 +174,6 @@ input:focus {
 .msg.show { display: block; }
 .msg.ok { background: #ECFDF5; color: #047857; }
 .msg.err { background: #FEF2F2; color: #B91C1C; }
-
 .divider {
   display: flex;
   align-items: center;
@@ -194,7 +188,6 @@ input:focus {
   height: 1px;
   background: var(--line);
 }
-
 .foot {
   margin-top: 20px;
   font-size: 13px;
@@ -217,35 +210,29 @@ input:focus {
     <h1>Simple invoicing for independent businesses</h1>
     <p>
       Create clean invoices, track what’s paid, and keep your data private.
-      V1 runs in your browser. Create a free account to be ready for v2.
+      V1 runs in your browser. Sign in to sync with the cloud when you’re ready.
     </p>
     <div class="features">
       <div><span>✓</span> Unlimited local invoices</div>
       <div><span>✓</span> Clients, tax fields &amp; PDF export</div>
       <div><span>✓</span> No subscription required for v1</div>
-      <div><span>✓</span> Account ready for upcoming cloud features</div>
+      <div><span>✓</span> Cloud sync when signed in</div>
     </div>
   </section>
-
   <section class="panel-side">
     <div class="card" id="authCard">
       <h2>Create your account</h2>
       <p class="sub">We’ll email you a magic link — no password needed.</p>
-
       <form id="authForm">
         <label for="email">Email</label>
         <input id="email" name="email" type="email" required placeholder="you@company.com" autocomplete="email">
-
         <label for="name">Your name (optional)</label>
         <input id="name" name="name" type="text" placeholder="Ada Lovelace" autocomplete="name">
-
-        <button class="btn btn-secondary" type="submit" id="submitBtn">Send magic link</button>
+        <button class="btn" type="submit" id="submitBtn">Send magic link</button>
       </form>
-
       <div class="msg" id="msg"></div>
-
       <div class="divider">or skip for now</div>
-      <a class="btn" href="app.html" id="continueApp" style="display:block;text-align:center;text-decoration:none">
+      <a class="btn btn-secondary" href="app.html" id="continueApp" style="display:block;text-align:center;text-decoration:none">
         Continue without account
       </a>
       <p class="foot">
@@ -253,7 +240,6 @@ input:focus {
         By continuing you agree to use Invoicedey for legitimate invoicing.
       </p>
     </div>
-
     <div class="card user-box" id="userBox">
       <h2>You’re signed in</h2>
       <p>Signed in as <strong id="userEmail"></strong></p>
@@ -264,14 +250,22 @@ input:focus {
     </div>
   </section>
 </div>
-
 <script>
 /* ==== Configure Supabase ==== */
 const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNwenJubnFlc2hlamRtbm9jdnV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTY0NDMsImV4cCI6MjEwMjM3MjQ0M30.Ku9F2tiMWYnDEg9zV1eTL3gRhMf7MrBD6tHISwiEDIs';
 
-let supabaseClient = null;
+function isAnonKeyConfigured() {
+  return !!(
+    SUPABASE_ANON_KEY &&
+    SUPABASE_ANON_KEY.trim() &&
+    !SUPABASE_ANON_KEY.includes('PASTE_YOUR') &&
+    SUPABASE_ANON_KEY.length > 40 &&
+    SUPABASE_ANON_KEY.startsWith('eyJ')
+  );
+}
 
+let supabaseClient = null;
 async function loadSupabase() {
   if (supabaseClient) return supabaseClient;
   if (!window.supabase) {
@@ -286,24 +280,20 @@ async function loadSupabase() {
   supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   return supabaseClient;
 }
-
 function showMsg(text, ok) {
   const el = document.getElementById('msg');
   el.textContent = text;
   el.className = 'msg show ' + (ok ? 'ok' : 'err');
 }
-
 function showSignedIn(email) {
   document.getElementById('authCard').style.display = 'none';
   document.getElementById('userBox').classList.add('show');
   document.getElementById('userEmail').textContent = email || '';
 }
-
 function showSignedOut() {
   document.getElementById('authCard').style.display = 'block';
   document.getElementById('userBox').classList.remove('show');
 }
-
 async function ensureProfile(client, user, fullName) {
   if (!user) return false;
   const name = (fullName || user.user_metadata?.full_name || '').trim();
@@ -312,7 +302,6 @@ async function ensureProfile(client, user, fullName) {
     email: user.email || null,
     full_name: name
   };
-  // Prefer upsert; fall back to insert then update for older RLS setups
   let { error } = await client.from('profiles').upsert(row, { onConflict: 'id' });
   if (error) {
     console.warn('profile upsert failed', error.message);
@@ -329,11 +318,8 @@ async function ensureProfile(client, user, fullName) {
   }
   return true;
 }
-
 async function init() {
-  // Testing / local: no anon key required to use the app
-  if (SUPABASE_ANON_KEY.includes('PASTE_YOUR') || !SUPABASE_ANON_KEY.trim()) {
-    // Keep magic-link form visible but soft-hint only; do not block the page
+  if (!isAnonKeyConfigured()) {
     const sub = document.querySelector('#authCard .sub');
     if (sub) {
       sub.textContent = 'Magic link sign-in needs a Supabase key later. For now, continue without an account.';
@@ -342,6 +328,7 @@ async function init() {
   }
   try {
     const client = await loadSupabase();
+    // Handle magic-link tokens in URL hash/query
     const { data: { session } } = await client.auth.getSession();
     if (session?.user) {
       await ensureProfile(client, session.user);
@@ -359,21 +346,19 @@ async function init() {
     });
   } catch (e) {
     console.warn(e);
+    showMsg(e.message || 'Could not start auth', false);
   }
 }
-
 document.getElementById('authForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const email = document.getElementById('email').value.trim();
   const name = document.getElementById('name').value.trim();
   const btn = document.getElementById('submitBtn');
   if (!email) return;
-
-  if (SUPABASE_ANON_KEY.includes('PASTE_YOUR') || !SUPABASE_ANON_KEY.trim()) {
+  if (!isAnonKeyConfigured()) {
     showMsg('Sign-in is not configured yet. Use “Continue without account” to open the app.', false);
     return;
   }
-
   btn.disabled = true;
   btn.textContent = 'Sending…';
   try {
@@ -399,7 +384,6 @@ document.getElementById('authForm').addEventListener('submit', async (e) => {
     btn.textContent = 'Send magic link';
   }
 });
-
 document.getElementById('logoutBtn').addEventListener('click', async () => {
   try {
     const client = await loadSupabase();
@@ -409,7 +393,6 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
     showMsg(e.message || 'Logout failed', false);
   }
 });
-
 init();
 </script>
 </body>
