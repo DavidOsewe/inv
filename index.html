@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#155eef" />
+    <title>Invoicedey — invoicing for independent work</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="#dashboard" aria-label="Invoicedey home">invoice<span>dey</span></a>
+        <nav aria-label="Main navigation">
+          <button class="nav-link active" data-page="dashboard"><i>⌂</i> Overview</button>
+          <button class="nav-link" data-page="invoices"><i>▤</i> Invoices</button>
+          <button class="nav-link" data-page="clients"><i>♙</i> Clients</button>
+          <button class="nav-link" data-page="settings"><i>⚙</i> Business settings</button>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="trial"><strong>Built for independent work.</strong><br />Your data stays in this browser until cloud sync is connected.</div>
+          <button class="profile-button" data-page="settings"><span class="avatar">ID</span><span><b id="businessNameSmall">My business</b><small>Settings</small></span></button>
+        </div>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <button class="menu-button" id="menuButton" aria-label="Open menu">☰</button>
+          <div><p class="eyebrow" id="pageEyebrow">OVERVIEW</p><h1 id="pageTitle">Good morning</h1></div>
+          <button class="button primary" id="newInvoice">+ New invoice</button>
+        </header>
+
+        <section class="page active" id="dashboard">
+          <div class="welcome"><div><h2>Make getting paid the easy part.</h2><p>Create professional invoices in minutes, then keep a calm eye on your cash flow.</p></div><button class="button primary" id="welcomeInvoice">Create an invoice <span>→</span></button></div>
+          <div class="metrics" id="metrics"></div>
+          <div class="content-grid">
+            <section class="card"><div class="card-heading"><div><h2>Recent invoices</h2><p>Your latest activity</p></div><button class="text-button" data-page="invoices">See all</button></div><div id="recentInvoices"></div></section>
+            <section class="card insight"><div class="card-heading"><div><h2>Cash-flow insight</h2><p>What needs your attention</p></div></div><div id="insight"></div></section>
+          </div>
+        </section>
+
+        <section class="page" id="invoices">
+          <div class="toolbar"><div class="search"><span>⌕</span><input id="invoiceSearch" type="search" placeholder="Search invoice, client, or status" /></div><button class="button primary" id="listNewInvoice">+ New invoice</button></div>
+          <section class="card table-card"><div id="invoiceTable"></div></section>
+        </section>
+
+        <section class="page" id="clients">
+          <div class="toolbar"><p class="page-intro">Save client details once and invoice them in seconds.</p><button class="button primary" id="newClient">+ Add client</button></div>
+          <section class="card table-card"><div id="clientTable"></div></section>
+        </section>
+
+        <section class="page" id="settings">
+          <section class="card form-card"><div class="card-heading"><div><h2>Business settings</h2><p>These details appear on every invoice.</p></div></div><form id="settingsForm" class="form-grid"><label>Business name<input required name="name" placeholder="e.g. Studio Ade" /></label><label>Email address<input type="email" name="email" placeholder="you@business.com" /></label><label class="full">Business address<textarea name="address" rows="3" placeholder="Street, city, country"></textarea></label><label>Default currency<select name="currency"><option value="USD">USD — US dollar</option><option value="EUR">EUR — Euro</option><option value="GBP">GBP — Pound sterling</option><option value="NGN">NGN — Nigerian naira</option></select></label><label>Invoice prefix<input name="prefix" maxlength="10" placeholder="INV" /></label><div class="form-actions full"><button class="button primary">Save changes</button></div></form></section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="invoiceDialog" class="dialog wide"><form method="dialog" id="invoiceForm"><header class="dialog-header"><div><p class="eyebrow">NEW INVOICE</p><h2>Create an invoice</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header><div class="dialog-body"><div class="form-grid"><label>Client<select required name="clientId" id="invoiceClient"></select></label><label>Invoice number<input required name="number" id="invoiceNumber" /></label><label>Issue date<input required type="date" name="issueDate" /></label><label>Due date<input required type="date" name="dueDate" /></label><label>Currency<select name="currency" id="invoiceCurrency"><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option><option value="NGN">NGN</option></select></label><label>Status<select name="status"><option value="draft">Draft</option><option value="sent">Sent</option></select></label></div><div class="line-items"><div class="line-title"><h3>Line items</h3><button type="button" class="text-button" id="addLine">+ Add line</button></div><div id="lineItems"></div></div><div class="totals"><span>Subtotal</span><b id="subtotal">$0.00</b><span>Tax <input id="taxRate" type="number" min="0" max="100" value="0" />%</span><b id="taxTotal">$0.00</b><strong>Total</strong><strong id="invoiceTotal">$0.00</strong></div></div><footer class="dialog-footer"><button class="button" value="cancel">Cancel</button><button class="button primary" id="saveInvoice" value="default">Save invoice</button></footer></form></dialog>
+
+    <dialog id="clientDialog" class="dialog"><form method="dialog" id="clientForm"><header class="dialog-header"><div><p class="eyebrow">CLIENT</p><h2>Add a client</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header><div class="dialog-body form-grid"><label>Client or company name<input required name="name" placeholder="Acme Inc." /></label><label>Email address<input type="email" name="email" placeholder="billing@acme.com" /></label><label class="full">Billing address<textarea name="address" rows="3"></textarea></label></div><footer class="dialog-footer"><button class="button" value="cancel">Cancel</button><button class="button primary" value="default">Save client</button></footer></form></dialog>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
