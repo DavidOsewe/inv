@@ -2832,16 +2832,16 @@ switchTo('dashboard');
 
 /* Shared account status + profile sync (magic link only — no payments) */
 const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpYXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNwenJubnFlc2hlamRtbm9jdnV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTY0NDMsImV4cCI6MjEwMjM3MjQ0M30.Ku9F2tiMWYnDEg9zV1eTL3gRhMf7MrBD6tHISwiEDIs';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
 
 async function getSupabase() {
   // Supabase is configured with the public URL + anon/publishable key.
   // Never use the secret/service-role key in this browser file.
   if (
     !SUPABASE_URL ||
-    !SUPABASE_ANON_KEY ||
+    !SUPABASE_PUBLISHABLE_KEY ||
     SUPABASE_URL.includes('YOUR_') ||
-    SUPABASE_ANON_KEY.includes('YOUR_')
+    SUPABASE_PUBLISHABLE_KEY.includes('YOUR_')
   ) {
     console.warn('Supabase is not configured.');
     return null;
@@ -2854,7 +2854,7 @@ async function getSupabase() {
       document.head.appendChild(s);
     });
   }
-  return window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 }
 
 async function syncProfile(client, user) {
