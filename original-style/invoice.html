@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invoice — Invoicedey</title>
+<style>
+  :root { --blue:#2467E3; --text:#0F172A; --muted:#64748B; --line:#E2E8F0; --bg:#F8FAFC; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap { max-width:820px; margin:0 auto; padding:28px 16px 60px; }
+  .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:18px; }
+  .brand { font-weight:800; font-size:20px; letter-spacing:-.6px; }
+  .brand em { color:var(--blue); font-style:normal; }
+  .button { display:inline-flex; align-items:center; justify-content:center; padding:10px 14px; border:1px solid var(--line); border-radius:9px; background:#fff; color:var(--text); text-decoration:none; font-weight:700; cursor:pointer; }
+  .button.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:28px; box-shadow:0 8px 30px rgba(15,23,42,.06); }
+  .head { display:flex; justify-content:space-between; gap:30px; padding-bottom:22px; border-bottom:2px solid var(--blue); }
+  .issuer { font-size:22px; font-weight:800; }
+  .contact { color:var(--muted); font-size:12px; white-space:pre-line; margin-top:5px; }
+  .doc { text-align:right; }
+  .doc-type { color:var(--blue); font-weight:800; text-transform:uppercase; letter-spacing:1.5px; font-size:11px; }
+  .meta { color:var(--muted); font-size:12px; margin-top:5px; line-height:1.6; }
+  .parties { display:grid; grid-template-columns:1fr 1fr; gap:30px; padding:25px 0; }
+  .label { color:#94A3B8; text-transform:uppercase; font-size:10px; font-weight:800; letter-spacing:.8px; margin-bottom:5px; }
+  .party-name { font-weight:700; font-size:15px; }
+  .party-extra { color:var(--muted); font-size:12px; white-space:pre-line; margin-top:3px; }
+  .title { font-size:21px; font-weight:800; margin:0 0 8px; }
+  .table { width:100%; border-collapse:collapse; margin-top:20px; }
+  .table th { text-align:left; color:#94A3B8; text-transform:uppercase; font-size:10px; letter-spacing:.5px; padding:9px 7px; border-bottom:2px solid var(--line); }
+  .table td { padding:11px 7px; border-bottom:1px solid #F1F5F9; }
+  .right { text-align:right; }
+  .totals { width:300px; margin:20px 0 25px auto; }
+  .totals div { display:flex; justify-content:space-between; gap:20px; padding:6px 0; color:var(--muted); }
+  .totals .grand { border-top:2px solid var(--text); margin-top:7px; padding-top:11px; color:var(--text); font-weight:800; font-size:16px; }
+  .payment { border-top:1px solid var(--line); padding-top:16px; color:var(--muted); white-space:pre-line; }
+  .viral { margin-top:24px; padding-top:15px; border-top:1px solid var(--line); text-align:center; color:var(--muted); font-size:12px; }
+  .viral a { color:var(--blue); font-weight:800; text-decoration:none; }
+  .state { text-align:center; padding:60px 20px; }
+  .state h1 { margin:0 0 8px; }
+  .state p { color:var(--muted); margin:0 auto 20px; max-width:500px; }
+  @media(max-width:640px){
+    .card { padding:20px; }
+    .head,.parties { grid-template-columns:1fr; display:grid; }
+    .doc { text-align:left; }
+    .totals { width:100%; }
+    .table { font-size:12px; }
+  }
+  @media print {
+    body { background:#fff; }
+    .wrap { padding:0; max-width:none; }
+    .topbar,.share-actions { display:none; }
+    .card { border:0; box-shadow:none; padding:0; }
+    .viral { margin-top:20px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">invoice<em>dey</em></div>
+    <div class="share-actions">
+      <button class="button" onclick="window.print()">Print / Save PDF</button>
+      <a class="button primary" href="index.html">Create your invoice</a>
+    </div>
+  </div>
+  <main id="app" class="card">
+    <div class="state"><h1>Loading invoice…</h1><p>Please wait.</p></div>
+  </main>
+</div>
+<script>
+const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
+
+function esc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function moneyMinor(value, currency) {
+  const digits = ['JPY','NGN'].includes(currency) ? 0 : 2;
+  return new Intl.NumberFormat('en-US', { style:'currency', currency:currency || 'USD', maximumFractionDigits:digits }).format((Number(value)||0) / Math.pow(10, digits));
+}
+function formatDate(value) {
+  if (!value) return '—';
+  try { return new Date(String(value).slice(0,10) + 'T12:00:00').toLocaleDateString(); } catch { return value; }
+}
+async function loadSupabase() {
+  if (!window.supabase) {
+    await new Promise((resolve,reject)=>{
+      const s=document.createElement('script');
+      s.src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+      s.onload=resolve; s.onerror=reject; document.head.appendChild(s);
+    });
+  }
+  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+}
+function renderNotFound(message) {
+  document.getElementById('app').innerHTML = '<div class="state"><h1>Invoice unavailable</h1><p>' + esc(message) + '</p><a class="button primary" href="index.html">Create an invoice with Invoicedey</a></div>';
+}
+function render(data) {
+  if (!data) { renderNotFound('This invoice link is invalid, expired, or no longer public.'); return; }
+  const i=data.invoice, o=data.issuer||{}, c=data.client||{};
+  const address = o.address?.text || c.billing_address?.address || '';
+  const clientAddress = c.billing_address?.address || '';
+  const lines=(data.lines||[]).map(line=>'<tr><td>'+esc(line.description)+'</td><td class="right">'+esc(line.quantity)+'</td><td class="right">'+moneyMinor(line.unit_amount_minor,i.currency)+'</td><td class="right">'+moneyMinor(line.line_total_minor,i.currency)+'</td></tr>').join('');
+  const issuerContact=[o.email,o.phone,address].filter(Boolean).map(esc).join('<br>');
+  const taxLabel=o.tax_label || 'Tax';
+  document.title=(i.invoice_number || 'Invoice')+' — Invoicedey';
+  document.getElementById('app').innerHTML = `
+    <div class="head">
+      <div><div class="issuer">${esc(o.name || 'Business')}</div><div class="contact">${issuerContact}</div></div>
+      <div class="doc"><div class="doc-type">Invoice</div><div class="meta">${esc(i.invoice_number)} · ${esc(i.currency)}<br>Issued ${esc(formatDate(i.issue_date))}<br>Due ${esc(formatDate(i.due_date))}</div></div>
+    </div>
+    <div class="parties">
+      <div><div class="label">Bill to</div><div class="party-name">${esc(c.name || 'Client')}</div>${c.email ? '<div class="party-extra">'+esc(c.email)+'</div>' : ''}${clientAddress ? '<div class="party-extra">'+esc(clientAddress)+'</div>' : ''}</div>
+      <div><div class="label">Status</div><div class="party-name">${esc(String(i.status || 'draft').replace('_',' '))}</div></div>
+    </div>
+    <h1 class="title">Invoice ${esc(i.invoice_number)}</h1>
+    <table class="table"><thead><tr><th>Description</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">Amount</th></tr></thead><tbody>${lines || '<tr><td colspan="4">No line items</td></tr>'}</tbody></table>
+    <div class="totals">
+      <div><span>Subtotal</span><span>${moneyMinor(i.subtotal_minor,i.currency)}</span></div>
+      <div><span>${esc(taxLabel)} (${esc(i.tax_rate)}%)</span><span>${moneyMinor(i.tax_minor,i.currency)}</span></div>
+      <div class="grand"><span>Total</span><span>${moneyMinor(i.total_minor,i.currency)}</span></div>
+    </div>
+    ${o.payment_details ? '<div class="payment"><b>Payment instructions</b>\n'+esc(o.payment_details)+'</div>' : ''}
+    ${o.tax_registration_number ? '<div class="payment"><b>Tax ID</b>\n'+esc(o.tax_registration_number)+'</div>' : ''}
+    <div class="viral">Need to create an invoice? <a href="index.html">Try Invoicedey — free.</a></div>
+  `;
+}
+(async()=>{
+  const token=new URLSearchParams(location.search).get('token');
+  if (!token) { renderNotFound('No invoice token was provided.'); return; }
+  if (!SUPABASE_PUBLISHABLE_KEY || SUPABASE_PUBLISHABLE_KEY.includes('PASTE_YOUR')) { renderNotFound('Public invoice viewing is not configured yet.'); return; }
+  try {
+    const client=await loadSupabase();
+    const {data,error}=await client.rpc('get_public_invoice',{p_token:token});
+    if (error) throw error;
+    render(data);
+  } catch (e) {
+    console.error(e);
+    renderNotFound('We could not load this invoice right now.');
+  }
+})();
+</script>
+</body>
+</html>
