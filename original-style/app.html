@@ -2950,12 +2950,44 @@ async function pushCloudState() {
       };
       if (!payload.client_id) continue;
       if (invoice.cloudId) {
-        const { error } = await cloud.client.from('invoices').update(payload).eq('id', invoice.cloudId);
+        // Existing local-to-cloud link: update the cloud invoice.
+        const { error } = await cloud.client
+          .from('invoices')
+          .update(payload)
+          .eq('id', invoice.cloudId);
         if (error) throw error;
       } else {
-        const { data, error } = await cloud.client.from('invoices').insert(payload).select('id').single();
-        if (error) throw error;
-        invoice.cloudId = data.id;
+        // No cloudId yet. The invoice may already exist in Supabase
+        // (for example, after a browser reset or an earlier sync).
+        // Look it up by the database's unique key before inserting.
+        const { data: existingInvoice, error: lookupError } = await cloud.client
+          .from('invoices')
+          .select('id')
+          .eq('organization_id', organizationId)
+          .eq('invoice_number', invoice.number)
+          .maybeSingle();
+
+        if (lookupError) throw lookupError;
+
+        if (existingInvoice) {
+          // Reconnect the local invoice to the existing cloud record.
+          invoice.cloudId = existingInvoice.id;
+
+          const { error } = await cloud.client
+            .from('invoices')
+            .update(payload)
+            .eq('id', existingInvoice.id);
+          if (error) throw error;
+        } else {
+          // Truly new invoice: create it in Supabase.
+          const { data, error } = await cloud.client
+            .from('invoices')
+            .insert(payload)
+            .select('id')
+            .single();
+          if (error) throw error;
+          invoice.cloudId = data.id;
+        }
       }
       const { error: deleteError } = await cloud.client.from('invoice_line_items').delete().eq('invoice_id', invoice.cloudId);
       if (deleteError) throw deleteError;
@@ -3872,5 +3904,3 @@ switchTo('dashboard');
 </script>
 </body>
 </html>
-
-
