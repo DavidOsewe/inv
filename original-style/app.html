@@ -3414,6 +3414,7 @@ function getPrintCSS() {
       color: #64748b;
       font-size: 11px;
     }
+    .viral-footer a { color: #2467E3; text-decoration: none; }
     .viral-footer strong { color: #2467E3; }
     .terms {
       border-top: 1px solid #e2e8f0;
@@ -3438,7 +3439,7 @@ function getPrintCSS() {
 }
 
 function openPrintDocument(title, bodyHtml) {
-  const viralFooter = '<div class="viral-footer">Need to create an invoice? <strong>Try Invoicedey — free.</strong></div>';
+  const viralFooter = '<div class="viral-footer">Need to create an invoice? <a href="https://inv-pukka1.vercel.app/?utm_source=invoice_pdf&utm_medium=pdf&utm_campaign=viral_invoice" target="_blank" rel="noopener noreferrer"><strong>Try Invoicedey — free.</strong></a></div>';
   const htmlDoc = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' +
     title + '</title><style>' + getPrintCSS() + '</style></head><body>' + bodyHtml + viralFooter + '</body></html>';
   const w = window.open('', '_blank');
