@@ -7,6 +7,16 @@
 </style></head><body><div class="wrap">
 <div class="top"><div><div class="brand">invoice<em>dey</em></div><h1>Growth control centre</h1><p class="sub">Measure the invoice → distribution → signup loop.</p></div><div class="actions"><button class="btn" onclick="location.href='/app.html'">← Back to app</button><button class="btn primary" id="refresh">Refresh</button></div></div>
 <div id="status" class="empty">Loading growth data…</div>
+<div id="loginBox" class="empty" style="display:none;max-width:520px;margin:0 auto">
+  <h2 style="margin:0 0 8px">Founder sign in</h2>
+  <p style="margin:0 0 16px;color:#64748B">Sign in with the same email you use for InvoiceDey. We’ll send a magic link back to this growth dashboard.</p>
+  <form id="loginForm" style="display:flex;gap:8px">
+    <input id="loginEmail" type="email" required placeholder="you@example.com"
+      style="flex:1;padding:11px 13px;border:1px solid #E2E8F0;border-radius:10px;font:inherit">
+    <button class="btn primary" type="submit">Send magic link</button>
+  </form>
+  <div id="loginMsg" style="margin-top:12px;color:#64748B;font-size:12px"></div>
+</div>
 <div id="dash" style="display:none">
 <div class="cards">
 <div class="card"><div class="label">Invoices created</div><div class="value" id="ic">0</div><div class="hint">Core activation</div></div>
@@ -28,8 +38,30 @@
 const SUPABASE_URL='https://spzrnnqeshejdmnocvut.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY='sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
 const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY),$=id=>document.getElementById(id),fmt=n=>Number(n||0).toLocaleString();
-async function load(){ $('status').className='empty';$('status').textContent='Loading growth data…';$('status').style.display='block';$('dash').style.display='none';const {data:{session}}=await sb.auth.getSession();if(!session){location.href='/index.html';return}const {data,error}=await sb.rpc('growth_dashboard',{p_since:new Date(Date.now()-30*86400000).toISOString()});if(error){$('status').className='error';$('status').innerHTML='<b>Growth dashboard unavailable.</b><br><br>'+esc(error.message)+'<br><br>Run <code>003_growth_dashboard.sql</code> and add your Supabase Auth email to <code>growth_admins</code>.';return}const k=data.kpis||{};$('ic').textContent=fmt(k.invoices_created);$('pd').textContent=fmt(k.pdf_downloads);$('is').textContent=fmt(k.invoice_shares);$('pv').textContent=fmt(k.public_views);$('pc').textContent=fmt(k.public_cta_clicks);$('su').textContent=fmt(k.unique_signups);$('sr').textContent=(k.share_rate||0)+'%';$('cr').textContent=(k.view_to_cta_rate||0)+'%';$('f1').textContent=fmt(k.invoices_created);$('f2').textContent=fmt(k.invoice_shares);$('f3').textContent=fmt(k.public_views);$('f4').textContent=fmt(k.public_cta_clicks);$('f5').textContent=fmt(k.unique_signups);$('r1').textContent=(k.share_rate||0)+'% of create';$('r2').textContent=(k.share_to_view_rate||0)+'% of share';$('r3').textContent=(k.view_to_cta_rate||0)+'% of view';$('r4').textContent=(k.cta_to_signup_rate||0)+'% of click';$('period').textContent='Since '+new Date(data.since).toLocaleDateString();render(data.daily||[]);$('status').style.display='none';$('dash').style.display='block'}
-function render(rows){const by={};rows.forEach(r=>{(by[r.day]??={})[r.event_name]=Number(r.event_count||0)});const days=Object.keys(by).sort(),max=Math.max(1,...days.map(d=>Math.max(by[d].invoice_created||0,by[d].invoice_shared||0,by[d].public_invoice_viewed||0,by[d].signup_completed||0)));$('bars').innerHTML=days.map(d=>{const x=by[d],h=n=>Math.max(2,Math.round(n/max*145));return '<div class="day"><div class="bar" style="height:'+h(x.invoice_created||0)+'px"></div><div class="bar share" style="height:'+h(x.invoice_shared||0)+'px"></div><div class="bar view" style="height:'+h(x.public_invoice_viewed||0)+'px"></div><div class="bar signup" style="height:'+h(x.signup_completed||0)+'px"></div><small>'+d.slice(5)+'</small></div>'}).join('')||'<div class="empty">No analytics events yet.</div>'}
+async function load(){
+  $('status').className='empty';$('status').textContent='Loading growth data…';$('status').style.display='block';$('dash').style.display='none';$('loginBox').style.display='none';
+  const {data:{session},error:sessionError}=await sb.auth.getSession();
+  if(sessionError){$('status').className='error';$('status').textContent='Authentication error: '+sessionError.message;return}
+  if(!session){
+    $('status').style.display='none';
+    $('loginBox').style.display='block';
+    return;
+  }
+  const {data,error}=await sb.rpc('growth_dashboard',{p_since:new Date(Date.now()-30*86400000).toISOString()});
+if(error){$('status').className='error';$('status').innerHTML='<b>Growth dashboard unavailable.</b><br><br>'+esc(error.message)+'<br><br>Run <code>003_growth_dashboard.sql</code> and add your Supabase Auth email to <code>growth_admins</code>.';return}const k=data.kpis||{};$('ic').textContent=fmt(k.invoices_created);$('pd').textContent=fmt(k.pdf_downloads);$('is').textContent=fmt(k.invoice_shares);$('pv').textContent=fmt(k.public_views);$('pc').textContent=fmt(k.public_cta_clicks);$('su').textContent=fmt(k.unique_signups);$('sr').textContent=(k.share_rate||0)+'%';$('cr').textContent=(k.view_to_cta_rate||0)+'%';$('f1').textContent=fmt(k.invoices_created);$('f2').textContent=fmt(k.invoice_shares);$('f3').textContent=fmt(k.public_views);$('f4').textContent=fmt(k.public_cta_clicks);$('f5').textContent=fmt(k.unique_signups);$('r1').textContent=(k.share_rate||0)+'% of create';$('r2').textContent=(k.share_to_view_rate||0)+'% of share';$('r3').textContent=(k.view_to_cta_rate||0)+'% of view';$('r4').textContent=(k.cta_to_signup_rate||0)+'% of click';$('period').textContent='Since '+new Date(data.since).toLocaleDateString();render(data.daily||[]);$('status').style.display='none';$('dash').style.display='block'}
+function render(rows){const by={};rows.forEach(r=>{const d=r.day||r.day_date;(by[d]??={})[r.event_name]=Number(r.event_count||0)});const days=Object.keys(by).sort(),max=Math.max(1,...days.map(d=>Math.max(by[d].invoice_created||0,by[d].invoice_shared||0,by[d].public_invoice_viewed||0,by[d].signup_completed||0)));$('bars').innerHTML=days.map(d=>{const x=by[d],h=n=>Math.max(2,Math.round(n/max*145));return '<div class="day"><div class="bar" style="height:'+h(x.invoice_created||0)+'px"></div><div class="bar share" style="height:'+h(x.invoice_shared||0)+'px"></div><div class="bar view" style="height:'+h(x.public_invoice_viewed||0)+'px"></div><div class="bar signup" style="height:'+h(x.signup_completed||0)+'px"></div><small>'+d.slice(5)+'</small></div>'}).join('')||'<div class="empty">No analytics events yet.</div>'}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]) )}
-$('refresh').onclick=load;load();
+$('refresh').onclick=load;
+$('loginForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const email=$('loginEmail').value.trim();
+  $('loginMsg').textContent='Sending magic link…';
+  const {error}=await sb.auth.signInWithOtp({
+    email,
+    options:{emailRedirectTo:window.location.origin+'/growth.html'}
+  });
+  $('loginMsg').textContent=error ? error.message : 'Magic link sent. Check your email, then return here.';
+});
+sb.auth.onAuthStateChange((event,session)=>{if(session)load();});
+load();
 </script></body></html>
