@@ -10,6 +10,10 @@
       "dest": "/invoice.html"
     },
     {
+      "src": "/growth.html",
+      "dest": "/growth.html"
+    },
+    {
       "src": "/",
       "dest": "/index.html"
     }
