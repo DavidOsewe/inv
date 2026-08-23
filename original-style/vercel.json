@@ -5,6 +5,7 @@
     {"src": "/invoice.html", "dest": "/invoice.html"},
     {"src": "/growth.html", "dest": "/growth.html"},
     {"src": "/growth-intelligence.html", "dest": "/growth-intelligence.html"},
+    {"src": "/growth-intelligence-v2.html", "dest": "/growth-intelligence-v2.html"},
     {"src": "/", "dest": "/index.html"}
   ]
 }
