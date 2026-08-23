@@ -60,8 +60,8 @@
   <div class="topbar">
     <div class="brand">invoice<em>dey</em></div>
     <div class="share-actions">
-      <button class="button" onclick="window.print()">Print / Save PDF</button>
-      <a class="button primary" href="index.html">Create your invoice</a>
+      <button class="button" id="publicPrintBtn" type="button">Print / Save PDF</button>
+      <a class="button primary" id="publicCreateInvoiceBtn" href="index.html">Create your invoice</a>
     </div>
   </div>
   <main id="app" class="card">
@@ -95,6 +95,30 @@ async function loadSupabase() {
   }
   return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 }
+
+function getPublicSessionId() {
+  let id = sessionStorage.getItem('invoicedey-public-session');
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem('invoicedey-public-session', id);
+  }
+  return id;
+}
+
+async function trackPublic(eventName, metadata = {}) {
+  try {
+    if (!SUPABASE_PUBLISHABLE_KEY || SUPABASE_PUBLISHABLE_KEY.includes('PASTE_YOUR')) return;
+    const client = await loadSupabase();
+    await client.from('analytics_events').insert({
+      event_name: eventName,
+      user_id: null,
+      session_id: getPublicSessionId(),
+      metadata
+    });
+  } catch (e) {
+    console.debug('public analytics', e.message || e);
+  }
+}
 function renderNotFound(message) {
   document.getElementById('app').innerHTML = '<div class="state"><h1>Invoice unavailable</h1><p>' + esc(message) + '</p><a class="button primary" href="index.html">Create an invoice with Invoicedey</a></div>';
 }
@@ -125,7 +149,7 @@ function render(data) {
     </div>
     ${o.payment_details ? '<div class="payment"><b>Payment instructions</b>\n'+esc(o.payment_details)+'</div>' : ''}
     ${o.tax_registration_number ? '<div class="payment"><b>Tax ID</b>\n'+esc(o.tax_registration_number)+'</div>' : ''}
-    <div class="viral">Need to create an invoice? <a href="index.html">Try Invoicedey — free.</a></div>
+    <div class="viral">Need to create an invoice? <a id="publicFooterCta" href="index.html">Try Invoicedey — free.</a></div>
   `;
 }
 (async()=>{
@@ -137,6 +161,23 @@ function render(data) {
     const {data,error}=await client.rpc('get_public_invoice',{p_token:token});
     if (error) throw error;
     render(data);
+    if (data?.invoice) {
+      await trackPublic('public_invoice_viewed', {
+        invoice_number: data.invoice.invoice_number,
+        currency: data.invoice.currency,
+        status: data.invoice.status
+      });
+    }
+    const printBtn = document.getElementById('publicPrintBtn');
+    if (printBtn) printBtn.addEventListener('click', () => {
+      trackPublic('public_invoice_downloaded', { invoice_number: data.invoice.invoice_number, format: 'print_pdf' });
+      window.print();
+    });
+    const ctaHandler = (source) => () => {
+      trackPublic('public_invoice_cta_clicked', { invoice_number: data.invoice.invoice_number, source });
+    };
+    document.getElementById('publicCreateInvoiceBtn')?.addEventListener('click', ctaHandler('top_button'));
+    document.getElementById('publicFooterCta')?.addEventListener('click', ctaHandler('footer'));
   } catch (e) {
     console.error(e);
     renderNotFound('We could not load this invoice right now.');

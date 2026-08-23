@@ -1474,7 +1474,7 @@ input:focus:not(:focus-visible) {
 </select>
           </div>
         </div>
-        <div class="field"><label>Business address</label><input data-p="address"></div>
+        <div class="field"><label>Website / address</label><input data-p="address"></div>
 
         <h3 style="margin:28px 0 12px;font-size:15px;font-weight:700">Tax & compliance</h3>
         <p style="color:var(--muted);margin:-4px 0 16px;font-size:13px">
@@ -1830,6 +1830,7 @@ function showGrowthModal(title, message) {
   document.getElementById('growthModalTitle').textContent = title;
   document.getElementById('growthModalMessage').textContent = message;
   modal.classList.add('show');
+  track('account_prompt_shown', { title });
 }
 function maybePromptSignup() {
   if (cloud.user) return;
@@ -2535,6 +2536,7 @@ function persist(s) {
   }
   save();
   if (isNew) track('invoice_created', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
+  if (s === 'Sent') track('invoice_sent', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
   ensurePayments(edit);
   syncPaidFlag(edit);
   toast(edit.paid ? 'Invoice paid in full.' : amountPaid(edit) > 0 ? 'Invoice saved (partially paid).' : s === 'Sent' ? 'Invoice marked as sent.' : 'Draft saved.');
@@ -2995,6 +2997,7 @@ async function syncOrganizationProfile(organizationId) {
     currency: db.profile.reporting || 'USD',
     contact_email: db.profile.email || null,
     phone: db.profile.phone || null,
+    website: null,
     tax_registration_number: db.profile.taxId || null,
     address: { text: db.profile.address || '' },
     payment_details: db.profile.paymentDetails || '',
@@ -3256,6 +3259,13 @@ async function startCloudSync(client, user) {
 
 track('app_opened');
 
+const growthSignupLink = document.getElementById('growthSignup');
+if (growthSignupLink) {
+  growthSignupLink.addEventListener('click', () => {
+    track('signup_cta_clicked', { source: 'growth_modal' });
+  });
+}
+
 (async function initAccountLine() {
   const line = document.getElementById('accountLine');
   const logoutBtn = document.getElementById('appLogoutBtn');
@@ -3264,6 +3274,11 @@ track('app_opened');
 
   async function render(session) {
     if (session?.user) {
+      const signupKey = 'invoicedey-signup-completed-' + session.user.id;
+      if (!localStorage.getItem(signupKey)) {
+        localStorage.setItem(signupKey, '1');
+        await track('signup_completed', { source: 'auth_session' });
+      }
       await syncProfile(client, session.user);
       await startCloudSync(client, session.user);
       line.innerHTML = 'Signed in as <b style="color:var(--text)">' + (session.user.email || '') + '</b>';
@@ -3450,6 +3465,7 @@ function printInvoice() {
     toast('Open an invoice first to print.');
     return;
   }
+  track('invoice_downloaded', { invoice_id: edit.cloudId || edit.id, invoice_number: edit.number, format: 'print_pdf' });
   try { preview(); } catch (e) {}
   const panel = document.getElementById('previewPanel');
   if (!panel) {
