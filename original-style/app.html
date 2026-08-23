@@ -1474,7 +1474,7 @@ input:focus:not(:focus-visible) {
 </select>
           </div>
         </div>
-        <div class="field"><label>Website / address</label><input data-p="address"></div>
+        <div class="field"><label>Business address</label><input data-p="address"></div>
 
         <h3 style="margin:28px 0 12px;font-size:15px;font-weight:700">Tax & compliance</h3>
         <p style="color:var(--muted);margin:-4px 0 16px;font-size:13px">
@@ -2997,7 +2997,6 @@ async function syncOrganizationProfile(organizationId) {
     currency: db.profile.reporting || 'USD',
     contact_email: db.profile.email || null,
     phone: db.profile.phone || null,
-    website: null,
     tax_registration_number: db.profile.taxId || null,
     address: { text: db.profile.address || '' },
     payment_details: db.profile.paymentDetails || '',
