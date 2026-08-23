@@ -6,7 +6,11 @@
       "dest": "/app.html"
     },
     {
-      "src": "/(.*)",
+      "src": "/invoice.html",
+      "dest": "/invoice.html"
+    },
+    {
+      "src": "/",
       "dest": "/index.html"
     }
   ]
