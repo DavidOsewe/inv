@@ -1,21 +1,10 @@
 {
   "version": 2,
   "routes": [
-    {
-      "src": "/app.html",
-      "dest": "/app.html"
-    },
-    {
-      "src": "/invoice.html",
-      "dest": "/invoice.html"
-    },
-    {
-      "src": "/growth.html",
-      "dest": "/growth.html"
-    },
-    {
-      "src": "/",
-      "dest": "/index.html"
-    }
+    {"src": "/app.html", "dest": "/app.html"},
+    {"src": "/invoice.html", "dest": "/invoice.html"},
+    {"src": "/growth.html", "dest": "/growth.html"},
+    {"src": "/growth-intelligence.html", "dest": "/growth-intelligence.html"},
+    {"src": "/", "dest": "/index.html"}
   ]
 }
