@@ -162,11 +162,24 @@ function render(data) {
     if (error) throw error;
     render(data);
     if (data?.invoice) {
-      await trackPublic('public_invoice_viewed', {
-        invoice_number: data.invoice.invoice_number,
-        currency: data.invoice.currency,
-        status: data.invoice.status
-      });
+      const viewKey = 'invoicedey-viewed:' + String(
+        data.invoice.id || data.invoice.invoice_id || data.invoice.invoice_number
+      );
+
+      // Count one invoice view per browser session, rather than refreshing
+      // the same invoice repeatedly as multiple views.
+      if (!sessionStorage.getItem(viewKey)) {
+        sessionStorage.setItem(viewKey, '1');
+
+        await trackPublic('public_invoice_viewed', {
+          invoice_id: data.invoice.id || data.invoice.invoice_id || null,
+          invoice_number: data.invoice.invoice_number,
+          currency: data.invoice.currency,
+          status: data.invoice.status,
+          page_url: location.href,
+          referrer: document.referrer || null
+        });
+      }
     }
     const printBtn = document.getElementById('publicPrintBtn');
     if (printBtn) printBtn.addEventListener('click', () => {
