@@ -252,17 +252,51 @@ input:focus {
   </section>
 </div>
 <script>
+/* InvoiceDey Growth — capture UTM parameters before magic-link redirect */
+(function () {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    const keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
+    if (!keys.some(k => p.has(k))) return;
+
+    const key = 'invoicedey-growth-landing-v1';
+    const touch = {
+      utm_source: p.get('utm_source'),
+      utm_medium: p.get('utm_medium'),
+      utm_campaign: p.get('utm_campaign'),
+      utm_content: p.get('utm_content'),
+      utm_term: p.get('utm_term'),
+      landing_url: window.location.href,
+      landing_page: window.location.pathname,
+      referrer: document.referrer || null,
+      captured_at: new Date().toISOString()
+    };
+
+    let data = null;
+    try { data = JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) {}
+
+    if (!data) data = { first_touch: touch, last_touch: touch };
+    else data.last_touch = touch;
+
+    localStorage.setItem(key, JSON.stringify(data));
+    localStorage.setItem('invoicedey-last-utm', JSON.stringify(touch));
+  } catch (e) {
+    console.debug('landing attribution', e.message || e);
+  }
+})();
+</script>
+
+<script>
 /* ==== Configure Supabase ==== */
 const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNwenJubnFlc2hlamRtbm9jdnV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTY0NDMsImV4cCI6MjEwMjM3MjQ0M30.Ku9F2tiMWYnDEg9zV1eTL3gRhMf7MrBD6tHISwiEDIs';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
 
-function isAnonKeyConfigured() {
+function isPublishableKeyConfigured() {
   return !!(
-    SUPABASE_ANON_KEY &&
-    SUPABASE_ANON_KEY.trim() &&
-    !SUPABASE_ANON_KEY.includes('PASTE_YOUR') &&
-    SUPABASE_ANON_KEY.length > 40 &&
-    SUPABASE_ANON_KEY.startsWith('eyJ')
+    SUPABASE_PUBLISHABLE_KEY &&
+    SUPABASE_PUBLISHABLE_KEY.trim() &&
+    SUPABASE_PUBLISHABLE_KEY.startsWith('sb_publishable_') &&
+    SUPABASE_PUBLISHABLE_KEY.length > 20
   );
 }
 
@@ -278,7 +312,7 @@ async function loadSupabase() {
       document.head.appendChild(s);
     });
   }
-  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
   return supabaseClient;
 }
 function showMsg(text, ok) {
@@ -320,7 +354,7 @@ async function ensureProfile(client, user, fullName) {
   return true;
 }
 async function init() {
-  if (!isAnonKeyConfigured()) {
+  if (!isPublishableKeyConfigured()) {
     const sub = document.querySelector('#authCard .sub');
     if (sub) {
       sub.textContent = 'Magic link sign-in needs a Supabase key later. For now, continue without an account.';
@@ -356,7 +390,7 @@ document.getElementById('authForm').addEventListener('submit', async (e) => {
   const name = document.getElementById('name').value.trim();
   const btn = document.getElementById('submitBtn');
   if (!email) return;
-  if (!isAnonKeyConfigured()) {
+  if (!isPublishableKeyConfigured()) {
     showMsg('Sign-in is not configured yet. Use “Continue without account” to open the app.', false);
     return;
   }
@@ -398,4 +432,3 @@ init();
 </script>
 </body>
 </html>
-
