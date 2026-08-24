@@ -3358,18 +3358,104 @@ async function track(eventName, metadata = {}) {
       params.has('utm_content') ||
       params.has('utm_term');
 
-    const inferred = inferSourceMedium(params);
+    let current;
 
-    const current = {
-      source: inferred.source,
-      medium: inferred.medium,
-      campaign: params.get('utm_campaign') || null,
-      content: params.get('utm_content') || null,
-      term: params.get('utm_term') || null,
-      landing_page: window.location.pathname,
-      referrer: document.referrer || null,
-      touched_at: new Date().toISOString()
-    };
+    if (hasCampaign) {
+      // Explicit campaign parameters always win.
+      current = {
+        source: params.get('utm_source') || 'unknown',
+        medium: params.get('utm_medium') || 'campaign',
+        campaign: params.get('utm_campaign') || null,
+        content: params.get('utm_content') || null,
+        term: params.get('utm_term') || null,
+        landing_page: window.location.pathname,
+        referrer: document.referrer || null,
+        touched_at: new Date().toISOString()
+      };
+    } else {
+      const referrer = document.referrer || '';
+
+      if (!referrer) {
+        current = {
+          source: 'direct',
+          medium: 'none',
+          campaign: null,
+          content: null,
+          term: null,
+          landing_page: window.location.pathname,
+          referrer: null,
+          touched_at: new Date().toISOString()
+        };
+      } else {
+        try {
+          const refUrl = new URL(referrer);
+          const host = refUrl.hostname.toLowerCase();
+          const currentHost = window.location.hostname.toLowerCase();
+
+          if (host === currentHost) {
+            // Internal navigation must NOT overwrite an existing campaign.
+            if (existing?.last_touch) {
+              current = existing.last_touch;
+            } else {
+              current = {
+                source: 'invoicedey',
+                medium: 'internal',
+                campaign: null,
+                content: null,
+                term: null,
+                landing_page: window.location.pathname,
+                referrer,
+                touched_at: new Date().toISOString()
+              };
+            }
+          } else if (host.includes('google.')) {
+            current = {
+              source: 'google',
+              medium: 'organic',
+              campaign: null,
+              content: null,
+              term: null,
+              landing_page: window.location.pathname,
+              referrer,
+              touched_at: new Date().toISOString()
+            };
+          } else if (host.includes('bing.')) {
+            current = {
+              source: 'bing',
+              medium: 'organic',
+              campaign: null,
+              content: null,
+              term: null,
+              landing_page: window.location.pathname,
+              referrer,
+              touched_at: new Date().toISOString()
+            };
+          } else {
+            current = {
+              source: host.replace(/^www\./, ''),
+              medium: 'referral',
+              campaign: null,
+              content: null,
+              term: null,
+              landing_page: window.location.pathname,
+              referrer,
+              touched_at: new Date().toISOString()
+            };
+          }
+        } catch (_) {
+          current = {
+            source: 'referral',
+            medium: 'referral',
+            campaign: null,
+            content: null,
+            term: null,
+            landing_page: window.location.pathname,
+            referrer,
+            touched_at: new Date().toISOString()
+          };
+        }
+      }
+    }
 
     const attribution = existing || {
       anonymous_id: getAnonymousId(),
@@ -3377,7 +3463,19 @@ async function track(eventName, metadata = {}) {
       last_touch: current
     };
 
-    if (hasCampaign || !existing || document.referrer) attribution.last_touch = current;
+    if (!existing) {
+      attribution.first_touch = current;
+      attribution.last_touch = current;
+    } else if (hasCampaign) {
+      // New explicit campaign = new last touch, but never overwrite first touch.
+      attribution.last_touch = current;
+    } else if (
+      current.source !== 'invoicedey' &&
+      current.medium !== 'internal'
+    ) {
+      // External organic/referral/direct touch can update last touch.
+      attribution.last_touch = current;
+    }
 
     localStorage.setItem(ATTR_KEY, JSON.stringify(attribution));
     return attribution;
@@ -3390,6 +3488,21 @@ async function track(eventName, metadata = {}) {
   };
 
   capture();
+
+  // If Vercel/index routing or the login flow moves the user to app.html,
+  // recover UTM parameters from the previous URL when possible.
+  try {
+    const stored = window.InvoiceDeyGrowth?.getAttribution?.();
+    if (stored?.first_touch?.campaign) {
+      window.InvoiceDeyGrowth.campaign = {
+        source: stored.first_touch.source,
+        medium: stored.first_touch.medium,
+        campaign: stored.first_touch.campaign,
+        content: stored.first_touch.content,
+        term: stored.first_touch.term
+      };
+    }
+  } catch (_) {}
 })();
 
 async function saveGrowthAttributionForUser(client, user) {
@@ -3421,9 +3534,10 @@ async function saveGrowthAttributionForUser(client, user) {
       term: first.term,
       landing_page: first.landing_page,
       referrer: first.referrer,
+      country_code: (navigator.language || '').split('-')[1]?.toUpperCase() || null,
       first_touch: true,
       last_touch: JSON.stringify(first) === JSON.stringify(last),
-      metadata: { attribution_version: 'v1' }
+      metadata: { attribution_version: 'v1.1' }
     }];
 
     if (JSON.stringify(first) !== JSON.stringify(last)) {
@@ -3436,6 +3550,7 @@ async function saveGrowthAttributionForUser(client, user) {
         term: last.term,
         landing_page: last.landing_page,
         referrer: last.referrer,
+        country_code: (navigator.language || '').split('-')[1]?.toUpperCase() || null,
         first_touch: false,
         last_touch: true
       });
