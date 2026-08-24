@@ -70,7 +70,7 @@
 </div>
 <script>
 const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
-const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
+const SUPABASE_PUBLISHABLE_KEY = 'PASTE_YOUR_SUPABASE_PUBLISHABLE_KEY_HERE';
 
 function esc(v) {
   return String(v == null ? '' : v)
@@ -129,7 +129,7 @@ function render(data) {
   const clientAddress = c.billing_address?.address || '';
   const lines=(data.lines||[]).map(line=>'<tr><td>'+esc(line.description)+'</td><td class="right">'+esc(line.quantity)+'</td><td class="right">'+moneyMinor(line.unit_amount_minor,i.currency)+'</td><td class="right">'+moneyMinor(line.line_total_minor,i.currency)+'</td></tr>').join('');
   const issuerContact=[o.email,o.phone,address].filter(Boolean).map(esc).join('<br>');
-  const taxLabel=o.tax_label || 'Tax';
+  const taxLabel=i.tax_label || o.tax_label || 'Tax';
   document.title=(i.invoice_number || 'Invoice')+' — Invoicedey';
   document.getElementById('app').innerHTML = `
     <div class="head">
@@ -148,7 +148,7 @@ function render(data) {
       <div class="grand"><span>Total</span><span>${moneyMinor(i.total_minor,i.currency)}</span></div>
     </div>
     ${o.payment_details ? '<div class="payment"><b>Payment instructions</b>\n'+esc(o.payment_details)+'</div>' : ''}
-    ${o.tax_registration_number ? '<div class="payment"><b>Tax ID</b>\n'+esc(o.tax_registration_number)+'</div>' : ''}
+    ${(i.tax_registration_number || o.tax_registration_number) ? '<div class="payment"><b>'+esc(taxLabel)+' ID / registration</b>\n'+esc(i.tax_registration_number || o.tax_registration_number)+'</div>' : ''}
     <div class="viral">Need to create an invoice? <a id="publicFooterCta" href="index.html">Try Invoicedey — free.</a></div>
   `;
 }

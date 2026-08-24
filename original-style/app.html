@@ -1476,35 +1476,59 @@ input:focus:not(:focus-visible) {
         </div>
         <div class="field"><label>Business address</label><input data-p="address"></div>
 
-        <h3 style="margin:28px 0 12px;font-size:15px;font-weight:700">Tax & compliance</h3>
+        <h3 style="margin:28px 0 12px;font-size:15px;font-weight:700">Tax profile</h3>
         <p style="color:var(--muted);margin:-4px 0 16px;font-size:13px">
-          Used on invoices for US (EIN / Sales Tax), Europe (VAT), and Australia (ABN / GST).
+          V1 supports manual tax configuration for the US, UK, Australia, Canada, Nigeria and India.
+          InvoiceDey does not determine tax liability automatically.
         </p>
         <div class="three">
           <div class="field">
-            <label>Business tax ID number</label>
-            <input data-p="taxId" placeholder="e.g. EU VAT, ABN, or EIN">
-          </div>
-          <div class="field">
-            <label>Tax type (shown on invoices)</label>
-            <select data-p="taxLabel" id="taxLabelSelect">
-              <option value="Tax">Tax</option>
-              <option value="VAT">VAT (EU / UK)</option>
-              <option value="GST">GST (AU / NZ / SG)</option>
-              <option value="Sales Tax">Sales Tax (US)</option>
-              <option value="HST">HST (Canada)</option>
-              <option value="SST">SST</option>
-              <option value="IVA">IVA</option>
-              <option value="ABN">ABN (Australia ID label)</option>
-              <option value="EIN">EIN (US ID label)</option>
+            <label>Business country</label>
+            <select data-p="taxCountry" id="taxCountry">
+              <option value="US">United States</option>
+              <option value="GB">United Kingdom</option>
+              <option value="AU">Australia</option>
+              <option value="CA">Canada</option>
+              <option value="NG">Nigeria</option>
+              <option value="IN">India</option>
             </select>
           </div>
           <div class="field">
-            <label>Default tax rate</label>
-            <input data-p="defaultTax" id="defaultTax" type="number" min="0" max="100" step="0.01" value="0" placeholder="e.g. 20">
+            <label>State / Province</label>
+            <input data-p="taxState" id="taxState" placeholder="e.g. Texas, Ontario, Lagos">
+          </div>
+          <div class="field">
+            <label>Tax registered?</label>
+            <select id="taxRegistered">
+              <option value="false">No</option>
+              <option value="true">Yes</option>
+            </select>
+          </div>
+        </div>
+        <div class="three">
+          <div class="field">
+            <label>Tax registration number</label>
+            <input data-p="taxId" placeholder="VAT / GST / EIN / ABN / GSTIN">
+          </div>
+          <div class="field">
+            <label>Tax type</label>
+            <select data-p="taxLabel" id="taxLabelSelect">
+              <option value="Tax">Tax</option>
+              <option value="Sales Tax">Sales Tax</option>
+              <option value="VAT">VAT</option>
+              <option value="GST">GST</option>
+              <option value="GST/HST">GST/HST</option>
+              <option value="HST">HST</option>
+              <option value="IVA">IVA</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Default tax rate (%)</label>
+            <input data-p="defaultTax" id="defaultTax" type="number" min="0" max="100" step="0.01" value="0" placeholder="0">
             <div id="taxSuggestHint" style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.4"></div>
           </div>
         </div>
+        <div id="taxV1Notice" style="display:none;margin:0 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);font-size:12px;color:var(--muted)"></div>
 
         <h3 style="margin:28px 0 12px;font-size:15px;font-weight:700">Payment details</h3>
         <p style="color:var(--muted);margin:-4px 0 16px;font-size:13px">
@@ -1582,7 +1606,11 @@ input:focus:not(:focus-visible) {
             <div class="field">
               <label>Tax rate (%)</label>
               <input id="tax" type="number" min="0" max="100" step="0.01" value="0" placeholder="0">
-              <div style="font-size:11px;color:var(--muted);margin-top:4px">Uses your profile tax type on the invoice. Override rate per invoice anytime.</div>
+              <select id="invoiceTaxLabel" style="margin-top:7px">
+                <option value="Tax">Tax</option><option value="Sales Tax">Sales Tax</option><option value="VAT">VAT</option>
+                <option value="GST">GST</option><option value="GST/HST">GST/HST</option><option value="HST">HST</option><option value="IVA">IVA</option>
+              </select>
+              <div style="font-size:11px;color:var(--muted);margin-top:4px">Uses your profile tax type by default. Override per invoice if needed.</div>
             </div>
           </div>
           <div class="two">
@@ -1773,6 +1801,9 @@ const defaultDB = {
     taxId: '',
     taxLabel: 'Tax',
     defaultTax: 0,
+    taxCountry: 'US',
+    taxState: '',
+    taxRegistered: false,
     invoicePrefix: 'INV',
     nextInvoiceNumber: 1,
     paymentDetails: 'Bank transfer\nAccount name: Your Company\nIBAN / Account: \nReference: Invoice number'
@@ -1784,6 +1815,9 @@ let db = JSON.parse(localStorage.getItem('invoicedey-v2') || 'null') || structur
 // Migrate older profiles
 if (db.profile) {
   db.profile.taxId = db.profile.taxId ?? '';
+  db.profile.taxCountry = db.profile.taxCountry ?? 'US';
+  db.profile.taxState = db.profile.taxState ?? '';
+  db.profile.taxRegistered = db.profile.taxRegistered ?? false;
   db.profile.taxLabel = db.profile.taxLabel ?? 'Tax';
   db.profile.defaultTax = db.profile.defaultTax ?? 0;
   db.profile.invoicePrefix = db.profile.invoicePrefix ?? 'INV';
@@ -2232,16 +2266,8 @@ function profile() {
     'data:image/svg+xml,' + encodeURIComponent(
       '<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="100%" height="100%" fill="#E8F0FE"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#2467E3" font-size="16" font-family="system-ui" font-weight="700">ID</text></svg>'
     );
-  if (typeof applyTaxSuggestion === 'function') {
-    applyTaxSuggestion(db.profile.reporting || 'USD', false);
-    const hint = $('#taxSuggestHint');
-    if (hint) {
-      const s = suggestTaxForCurrency(db.profile.reporting || 'USD');
-      hint.textContent = s.region
-        ? ('Suggested for ' + (db.profile.reporting || 'USD') + ': ' + s.label + ' @ ' + s.rate + '%. ' + s.region + ' Override anytime.')
-        : '';
-    }
-  }
+  if ($('#taxRegistered')) $('#taxRegistered').value = String(!!db.profile.taxRegistered);
+  applyTaxCountrySuggestion(db.profile.taxCountry || 'US', false);
 }
 
 function nextInvoiceNumber() {
@@ -2266,6 +2292,8 @@ function newInvoice() {
     _nextAfterSave: num.next,
     currency: db.profile.reporting,
     tax: db.profile.defaultTax ?? 0,
+    taxLabel: db.profile.taxLabel || 'Tax',
+    taxId: db.profile.taxId || '',
     issue: today,
     due: today,
     client: '',
@@ -2346,9 +2374,9 @@ function preview() {
   $('#pLogo').style.display = p.logo ? 'block' : 'none';
   $('#pLogo').src = p.logo || '';
   // Document title: "Tax Invoice" when GST/VAT (or similar) is charged
-  const taxType = (p.taxLabel || 'Tax').toUpperCase();
+  const taxType = (edit?.taxLabel || p.taxLabel || 'Tax').toUpperCase();
   const taxRate = +edit.tax || 0;
-  const useTaxInvoice = taxRate > 0 && /^(VAT|GST|HST|SST|IVA)$/i.test(p.taxLabel || '');
+  const useTaxInvoice = taxRate > 0 && /^(VAT|GST|GST\/HST|HST|SST|IVA)$/i.test(edit?.taxLabel || p.taxLabel || '');
   const docTitle = useTaxInvoice ? 'Tax Invoice' : 'Invoice';
   const pDoc = document.getElementById('pDocTitle');
   if (pDoc) pDoc.textContent = docTitle;
@@ -2383,11 +2411,12 @@ function preview() {
     </tr>`
   ).join('');
   $('#pSub').textContent = money(sub(edit), edit.currency);
-  const label = (db.profile.taxLabel || 'Tax');
+  const label = (edit?.taxLabel || db.profile.taxLabel || 'Tax');
   const rate = +edit.tax || 0;
   // Tax type only appears on the totals row
   $('#taxLabel').textContent = rate ? (label + ' (' + rate + '%)') : label;
   $('#pTax').textContent = money(tax(edit), edit.currency);
+  if ($('#invoiceTaxLabel')) $('#invoiceTaxLabel').value = edit.taxLabel || db.profile.taxLabel || 'Tax';
   // Hide zero tax row visually? Keep visible for transparency (0.00).
   $('#pTotal').textContent = money(total(edit), edit.currency);
   // Payment status under totals on the live preview
@@ -2804,15 +2833,39 @@ $('#saveProfile').onclick = () => {
     if (e.dataset.p === 'name' || e.dataset.p === 'email') val = (val || '').trim();
     db.profile[e.dataset.p] = val;
   });
+  db.profile.taxRegistered = $('#taxRegistered')?.value === 'true';
   save();
-  track('profile_saved');
+  if (cloud.client && cloud.user) {
+    try {
+      const orgId = await ensureCloudOrganization();
+      await cloud.client.rpc('create_or_update_tax_profile', {
+        p_country_code: db.profile.taxCountry || 'US',
+        p_state_code: db.profile.taxState || null,
+        p_tax_registered: !!db.profile.taxRegistered,
+        p_tax_registration_number: db.profile.taxId || null,
+        p_default_tax_rate: Number(db.profile.defaultTax || 0),
+        p_tax_label: db.profile.taxLabel || 'Tax',
+        p_tax_settings: { source: 'invoicedey-tax-v1' }
+      });
+      await syncOrganizationProfile(orgId);
+    } catch (e) {
+      console.warn('tax profile sync', e.message || e);
+      toast('Profile saved locally; tax profile sync failed.');
+      return;
+    }
+  }
+  track('profile_saved', { tax_country: db.profile.taxCountry, tax_registered: db.profile.taxRegistered });
   toast('Business profile saved.');
 };
 
 // Auto-index tax type + rate from reporting currency; user can still change both manually
 document.addEventListener('change', e => {
-  if (e.target && e.target.id === 'reportingSelect') {
-    applyTaxSuggestion(e.target.value, true);
+  if (e.target && e.target.id === 'taxCountry') {
+    applyTaxCountrySuggestion(e.target.value, true);
+    const state = $('#taxState');
+    if (state && e.target.value === 'US') state.placeholder = 'e.g. Texas';
+    else if (state && e.target.value === 'CA') state.placeholder = 'e.g. Ontario';
+    else if (state) state.placeholder = 'State / Province / Region';
   }
   if (e.target && e.target.id === 'currency' && edit) {
     // Optional soft suggest when invoice currency changes (does not lock fields)
@@ -2825,6 +2878,38 @@ document.addEventListener('change', e => {
     }
   }
 });
+
+function suggestTaxForCountry(code) {
+  const map = {
+    US: { label:'Sales Tax', rate:0, note:'US sales tax is jurisdiction- and transaction-specific. Confirm your applicable rate and taxability.' },
+    GB: { label:'VAT', rate:20, note:'UK VAT: 20% is the standard starting rate; confirm your actual VAT treatment.' },
+    AU: { label:'GST', rate:10, note:'Australia GST: 10% starting rate; confirm registration and supply treatment.' },
+    CA: { label:'GST/HST', rate:0, note:'Canada GST/HST varies by province and supply. Enter the applicable rate manually.' },
+    NG: { label:'VAT', rate:7.5, note:'Nigeria VAT: 7.5% starting rate; confirm your applicable treatment.' },
+    IN: { label:'GST', rate:0, note:'India GST varies by supply/place of supply. Configure the applicable rate manually.' }
+  };
+  return map[code] || {label:'Tax',rate:0,note:'Set your tax type and rate manually.'};
+}
+function applyTaxCountrySuggestion(code, writeFields) {
+  const s = suggestTaxForCountry(code);
+  const label=$('#taxLabelSelect'), rate=$('#defaultTax'), hint=$('#taxSuggestHint'), notice=$('#taxV1Notice');
+  if(writeFields){
+    if(label && ![...label.options].some(o=>o.value===s.label)){
+      const o=document.createElement('option'); o.value=s.label; o.textContent=s.label; label.appendChild(o);
+    }
+    if(label) label.value=s.label;
+    if(rate) rate.value=s.rate;
+    db.profile.taxCountry=code;
+    db.profile.taxLabel=s.label;
+    db.profile.defaultTax=s.rate;
+  }
+  if(hint) hint.textContent='Suggested starting configuration: '+s.label+' @ '+s.rate+'%.';
+  if(notice){
+    notice.style.display='block';
+    notice.textContent=s.note+' V1 uses manual rates and does not calculate nexus, exemptions, place-of-supply or taxability automatically.';
+  }
+  return s;
+}
 
 function applyTaxSuggestion(code, writeProfileFields) {
   const suggestion = suggestTaxForCurrency(code);
@@ -2851,6 +2936,16 @@ function applyTaxSuggestion(code, writeProfileFields) {
   }
   return suggestion;
 }
+
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'invoiceTaxLabel' && edit) {
+    edit.taxLabel = e.target.value;
+    preview();
+  }
+  if (e.target && e.target.id === 'taxRegistered') {
+    db.profile.taxRegistered = e.target.value === 'true';
+  }
+});
 
 $('#logoFile').onchange = e => {
   const f = e.target.files[0];
@@ -3011,6 +3106,18 @@ async function pushCloudState() {
   try {
     const organizationId = await ensureCloudOrganization();
     await syncOrganizationProfile(organizationId);
+    if (cloud.client && cloud.user && db.profile.taxCountry) {
+      const { error: taxProfileError } = await cloud.client.rpc('create_or_update_tax_profile', {
+        p_country_code: db.profile.taxCountry,
+        p_state_code: db.profile.taxState || null,
+        p_tax_registered: !!db.profile.taxRegistered,
+        p_tax_registration_number: db.profile.taxId || null,
+        p_default_tax_rate: Number(db.profile.defaultTax || 0),
+        p_tax_label: db.profile.taxLabel || 'Tax',
+        p_tax_settings: { source: 'invoicedey-tax-v1' }
+      });
+      if (taxProfileError) throw taxProfileError;
+    }
     for (const localClient of db.clients) {
       if (!localClient.cloudId) {
         const { data, error } = await cloud.client.from('clients').insert({
@@ -3044,6 +3151,17 @@ async function pushCloudState() {
         subtotal_minor: toMinor(sub(invoice), currency),
         tax_minor: toMinor(tax(invoice), currency),
         total_minor: toMinor(total(invoice), currency),
+        tax_label: db.profile.taxLabel || 'Tax',
+        tax_jurisdiction: db.profile.taxState || db.profile.taxCountry || null,
+        tax_registration_number: db.profile.taxId || null,
+        tax_details: {
+          country_code: db.profile.taxCountry || null,
+          state_code: db.profile.taxState || null,
+          tax_registered: !!db.profile.taxRegistered,
+          tax_label: db.profile.taxLabel || 'Tax',
+          tax_rate: Number(invoice.tax || 0),
+          source: 'invoicedey-tax-v1'
+        },
         sent_at: cloudStatus(invoice) === 'sent' ? new Date().toISOString() : null
       };
       if (invoice.publicShareToken) {
@@ -3101,7 +3219,12 @@ async function pushCloudState() {
         description: line.desc || 'Line item',
         quantity: Number(line.qty || 0),
         unit_amount_minor: toMinor(line.rate, currency),
-        line_total_minor: toMinor(lineAmount(line), currency)
+        line_total_minor: toMinor(lineAmount(line), currency),
+        tax_rate: Number(invoice.tax || 0),
+        tax_minor: toMinor(lineAmount(line) * Number(invoice.tax || 0) / 100, currency),
+        tax_type: db.profile.taxLabel || 'Tax',
+        tax_jurisdiction: db.profile.taxState || db.profile.taxCountry || null,
+        tax_details: { country_code: db.profile.taxCountry || null, state_code: db.profile.taxState || null }
       })).filter(line => line.quantity > 0);
       if (lines.length) {
         const { error } = await cloud.client.from('invoice_line_items').insert(lines);
@@ -3210,6 +3333,16 @@ function queueCloudSync() {
 
 async function hydrateFromCloud() {
   const organizationId = await ensureCloudOrganization();
+  const { data: remoteTaxProfile } = await cloud.client.from('organization_tax_profiles')
+    .select('*').eq('organization_id', organizationId).maybeSingle();
+  if (remoteTaxProfile) {
+    db.profile.taxCountry = remoteTaxProfile.country_code || db.profile.taxCountry || 'US';
+    db.profile.taxState = remoteTaxProfile.state_code || '';
+    db.profile.taxRegistered = !!remoteTaxProfile.tax_registered;
+    db.profile.taxId = remoteTaxProfile.tax_registration_number || db.profile.taxId || '';
+    db.profile.taxLabel = remoteTaxProfile.tax_label || db.profile.taxLabel || 'Tax';
+    db.profile.defaultTax = Number(remoteTaxProfile.default_tax_rate ?? db.profile.defaultTax ?? 0);
+  }
   const { data: remoteInvoices, error } = await cloud.client.from('invoices')
     .select('*, clients(*), invoice_line_items(*), payments(*)')
     .eq('organization_id', organizationId)
@@ -3227,7 +3360,7 @@ async function hydrateFromCloud() {
     id: invoice.id, cloudId: invoice.id, number: invoice.invoice_number, client: invoice.clients?.id || '',
     publicShareToken: invoice.public_share_token || '',
     publicShareEnabled: !!invoice.public_share_enabled,
-    currency: invoice.currency, issue: invoice.issue_date, due: invoice.due_date, tax: Number(invoice.tax_rate || 0),
+    currency: invoice.currency, issue: invoice.issue_date, due: invoice.due_date, tax: Number(invoice.tax_rate || 0), taxLabel: invoice.tax_label || db.profile.taxLabel || 'Tax', taxId: invoice.tax_registration_number || db.profile.taxId || '',
     status: invoice.status === 'paid' ? 'Paid' : invoice.status === 'sent' ? 'Sent' : 'Draft',
     title: '', note: 'Thank you for your business.', terms: db.profile.paymentDetails || '',
     lines: (invoice.invoice_line_items || []).sort((a, b) => a.position - b.position).map(line => ({
@@ -4033,6 +4166,7 @@ function addPaymentToEdit(amount, date, note, method) {
   delete copy._nextAfterSave;
   if (idx >= 0) db.invoices[idx] = copy;
   else {
+
     db.invoices.unshift(copy);
     if (edit._nextAfterSave) {
       db.profile.nextInvoiceNumber = edit._nextAfterSave;
