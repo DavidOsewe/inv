@@ -2799,7 +2799,7 @@ $('#confirm').onclick = () => {
   }
 };
 
-$('#saveProfile').onclick = () => {
+$('#saveProfile').onclick = async () => {
   clearInvalid(document.getElementById('profile'));
   const errors = [];
   const nameEl = document.querySelector('[data-p="name"]');
