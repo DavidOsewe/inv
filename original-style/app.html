@@ -3,6 +3,7 @@
 <!doctype html>
 <html lang="en">
 <head>
+<!-- InvoiceDey Growth V1 attribution: additive integration. -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Invoicedey — App</title>
@@ -3270,6 +3271,133 @@ async function track(eventName, metadata = {}) {
   }
 }
 
+
+/* =========================================================
+   GROWTH V1 — CAMPAIGN ATTRIBUTION
+   Additive only. Uses the existing Supabase client.
+   ========================================================= */
+
+(function initGrowthAttribution() {
+  const ATTR_KEY = 'invoicedey-growth-attribution-v1';
+  const ANON_KEY = 'invoicedey-anonymous-id';
+
+  function getAnonymousId() {
+    let id = localStorage.getItem(ANON_KEY);
+    if (!id) {
+      id = (window.crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : 'anon-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      localStorage.setItem(ANON_KEY, id);
+    }
+    return id;
+  }
+
+  function getStored() {
+    try {
+      return JSON.parse(localStorage.getItem(ATTR_KEY) || 'null');
+    } catch {
+      return null;
+    }
+  }
+
+  function capture() {
+    const params = new URLSearchParams(window.location.search);
+    const existing = getStored();
+
+    const hasCampaign =
+      params.has('utm_source') ||
+      params.has('utm_medium') ||
+      params.has('utm_campaign') ||
+      params.has('utm_content') ||
+      params.has('utm_term');
+
+    const current = {
+      source: params.get('utm_source') || (existing?.last_touch?.source || 'direct'),
+      medium: params.get('utm_medium') || (existing?.last_touch?.medium || 'none'),
+      campaign: params.get('utm_campaign') || (existing?.last_touch?.campaign || null),
+      content: params.get('utm_content') || (existing?.last_touch?.content || null),
+      term: params.get('utm_term') || (existing?.last_touch?.term || null),
+      landing_page: window.location.pathname,
+      referrer: document.referrer || (existing?.last_touch?.referrer || null),
+      touched_at: new Date().toISOString()
+    };
+
+    const attribution = existing || {
+      anonymous_id: getAnonymousId(),
+      first_touch: current,
+      last_touch: current
+    };
+
+    if (hasCampaign) attribution.last_touch = current;
+
+    localStorage.setItem(ATTR_KEY, JSON.stringify(attribution));
+    return attribution;
+  }
+
+  window.InvoiceDeyGrowth = {
+    getAttribution: getStored,
+    captureAttribution: capture,
+    anonymousId: getAnonymousId()
+  };
+
+  capture();
+})();
+
+async function saveGrowthAttributionForUser(client, user) {
+  if (!client || !user) return;
+
+  try {
+    const attribution = window.InvoiceDeyGrowth?.getAttribution();
+    if (!attribution) return;
+
+    const { data: existing, error: lookupError } = await client
+      .from('marketing_touchpoints')
+      .select('id')
+      .eq('user_id', user.id)
+      .limit(1);
+
+    if (lookupError || existing?.length) return;
+
+    const first = attribution.first_touch || attribution.last_touch;
+    const last = attribution.last_touch || first;
+
+    const rows = [{
+      anonymous_id: attribution.anonymous_id || window.InvoiceDeyGrowth.anonymousId,
+      user_id: user.id,
+      session_id: sessionStorage.getItem('invoicedey-session') || null,
+      source: first.source,
+      medium: first.medium,
+      campaign: first.campaign,
+      content: first.content,
+      term: first.term,
+      landing_page: first.landing_page,
+      referrer: first.referrer,
+      first_touch: true,
+      last_touch: JSON.stringify(first) === JSON.stringify(last),
+      metadata: { attribution_version: 'v1' }
+    }];
+
+    if (JSON.stringify(first) !== JSON.stringify(last)) {
+      rows.push({
+        ...rows[0],
+        source: last.source,
+        medium: last.medium,
+        campaign: last.campaign,
+        content: last.content,
+        term: last.term,
+        landing_page: last.landing_page,
+        referrer: last.referrer,
+        first_touch: false,
+        last_touch: true
+      });
+    }
+
+    await client.from('marketing_touchpoints').insert(rows);
+  } catch (e) {
+    console.debug('growth attribution', e.message || e);
+  }
+}
+
 function ensureEditSavedForShare() {
   if (!edit) return null;
   normalizeLineNumbers();
@@ -3413,6 +3541,10 @@ if (growthSignupLink) {
         localStorage.setItem(signupKey, '1');
         await track('signup_completed', { source: 'auth_session' });
       }
+
+      // Growth V1: connect campaign attribution to the authenticated user.
+      await saveGrowthAttributionForUser(client, session.user);
+
       await syncProfile(client, session.user);
       await startCloudSync(client, session.user);
       line.innerHTML = 'Signed in as <b style="color:var(--text)">' + (session.user.email || '') + '</b>';
