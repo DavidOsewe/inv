@@ -4166,7 +4166,6 @@ function addPaymentToEdit(amount, date, note, method) {
   delete copy._nextAfterSave;
   if (idx >= 0) db.invoices[idx] = copy;
   else {
-
     db.invoices.unshift(copy);
     if (edit._nextAfterSave) {
       db.profile.nextInvoiceNumber = edit._nextAfterSave;
