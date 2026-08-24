@@ -3,6 +3,48 @@
 <!doctype html>
 <html lang="en">
 <head>
+<script>
+/* InvoiceDey Growth: capture campaign at the FIRST landing URL.
+   This must run before routing/authentication changes the URL/referrer. */
+(function () {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    const keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
+    const hasUtm = keys.some(k => p.has(k));
+    if (!hasUtm) return;
+
+    const key = 'invoicedey-growth-landing-v1';
+    const existing = JSON.parse(localStorage.getItem(key) || 'null');
+
+    const touch = {
+      utm_source: p.get('utm_source'),
+      utm_medium: p.get('utm_medium'),
+      utm_campaign: p.get('utm_campaign'),
+      utm_content: p.get('utm_content'),
+      utm_term: p.get('utm_term'),
+      landing_url: window.location.href,
+      landing_page: window.location.pathname,
+      referrer: document.referrer || null,
+      captured_at: new Date().toISOString()
+    };
+
+    // First campaign wins for first-touch. Every explicit campaign click
+    // becomes the new last-touch.
+    const data = existing || {
+      first_touch: touch,
+      last_touch: touch
+    };
+
+    if (!existing) data.first_touch = touch;
+    data.last_touch = touch;
+
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (e) {
+    console.debug('growth landing capture', e.message || e);
+  }
+})();
+</script>
+
 <!-- InvoiceDey Growth V1 attribution: additive integration. -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -3351,6 +3393,13 @@ async function track(eventName, metadata = {}) {
     const params = new URLSearchParams(window.location.search);
     const existing = getStored();
 
+    let landing = null;
+    try {
+      landing = JSON.parse(
+        localStorage.getItem('invoicedey-growth-landing-v1') || 'null'
+      );
+    } catch (_) {}
+
     const hasCampaign =
       params.has('utm_source') ||
       params.has('utm_medium') ||
@@ -3360,8 +3409,8 @@ async function track(eventName, metadata = {}) {
 
     let current;
 
+    // Highest priority: explicit UTM in the current URL.
     if (hasCampaign) {
-      // Explicit campaign parameters always win.
       current = {
         source: params.get('utm_source') || 'unknown',
         medium: params.get('utm_medium') || 'campaign',
@@ -3372,7 +3421,24 @@ async function track(eventName, metadata = {}) {
         referrer: document.referrer || null,
         touched_at: new Date().toISOString()
       };
-    } else {
+    }
+    // Second priority: campaign captured before Vercel routing.
+    else if (landing?.last_touch?.utm_source ||
+             landing?.last_touch?.utm_campaign) {
+      const t = landing.last_touch;
+
+      current = {
+        source: t.utm_source || 'unknown',
+        medium: t.utm_medium || 'campaign',
+        campaign: t.utm_campaign || null,
+        content: t.utm_content || null,
+        term: t.utm_term || null,
+        landing_page: t.landing_page || '/app.html',
+        referrer: t.referrer || null,
+        touched_at: t.captured_at || new Date().toISOString()
+      };
+    }
+    else {
       const referrer = document.referrer || '';
 
       if (!referrer) {
@@ -3392,22 +3458,8 @@ async function track(eventName, metadata = {}) {
           const host = refUrl.hostname.toLowerCase();
           const currentHost = window.location.hostname.toLowerCase();
 
-          if (host === currentHost) {
-            // Internal navigation must NOT overwrite an existing campaign.
-            if (existing?.last_touch) {
-              current = existing.last_touch;
-            } else {
-              current = {
-                source: 'invoicedey',
-                medium: 'internal',
-                campaign: null,
-                content: null,
-                term: null,
-                landing_page: window.location.pathname,
-                referrer,
-                touched_at: new Date().toISOString()
-              };
-            }
+          if (host === currentHost && existing?.last_touch) {
+            current = existing.last_touch;
           } else if (host.includes('google.')) {
             current = {
               source: 'google',
@@ -3466,14 +3518,13 @@ async function track(eventName, metadata = {}) {
     if (!existing) {
       attribution.first_touch = current;
       attribution.last_touch = current;
-    } else if (hasCampaign) {
-      // New explicit campaign = new last touch, but never overwrite first touch.
+    } else if (hasCampaign || landing?.last_touch) {
+      // Explicit campaign / landing campaign updates last-touch.
       attribution.last_touch = current;
     } else if (
       current.source !== 'invoicedey' &&
       current.medium !== 'internal'
     ) {
-      // External organic/referral/direct touch can update last touch.
       attribution.last_touch = current;
     }
 
@@ -3537,7 +3588,7 @@ async function saveGrowthAttributionForUser(client, user) {
       country_code: (navigator.language || '').split('-')[1]?.toUpperCase() || null,
       first_touch: true,
       last_touch: JSON.stringify(first) === JSON.stringify(last),
-      metadata: { attribution_version: 'v1.1' }
+      metadata: { attribution_version: 'v1.2' }
     }];
 
     if (JSON.stringify(first) !== JSON.stringify(last)) {
