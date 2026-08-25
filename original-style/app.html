@@ -3310,7 +3310,7 @@ async function pushCloudState() {
 }
 
 /* ---------- Growth attribution + funnel analytics ---------- */
-const ATTRIBUTION_KEY = 'invoicedey-attribution-v1';
+const ATTRIBUTION_KEY = 'invoicedey-attribution-v2';
 const ANON_ID_KEY = 'invoicedey-anonymous-id';
 const SESSION_ID_KEY = 'invoicedey-session';
 
@@ -3340,8 +3340,14 @@ function getSessionId() {
   return id;
 }
 
+function attributionStorageKey() {
+  // Attribution belongs to the anonymous browser identity, not to a shared
+  // global browser bucket. This prevents campaign bleed between accounts.
+  return ATTRIBUTION_KEY + '-' + getAnonymousId();
+}
+
 function readAttribution() {
-  try { return JSON.parse(localStorage.getItem(ATTRIBUTION_KEY) || 'null'); }
+  try { return JSON.parse(localStorage.getItem(attributionStorageKey()) || 'null'); }
   catch { return null; }
 }
 
@@ -3376,7 +3382,7 @@ function captureAttribution() {
       touched_at: now,
       attribution_version: 'v2'
     };
-    localStorage.setItem(ATTRIBUTION_KEY, JSON.stringify(first));
+    localStorage.setItem(attributionStorageKey(), JSON.stringify(first));
     return first;
   }
 
@@ -3393,7 +3399,7 @@ function captureAttribution() {
       touched_at: now,
       attribution_version: 'v2'
     };
-    localStorage.setItem(ATTRIBUTION_KEY, JSON.stringify(updated));
+    localStorage.setItem(attributionStorageKey(), JSON.stringify(updated));
     return updated;
   }
 
@@ -3484,9 +3490,12 @@ async function track(eventName, metadata = {}) {
   }
 }
 
-captureAttribution();
+// Capture UTM parameters before any authentication, redirect, or funnel event.
+// The URL has already been verified to preserve the UTM query string.
 getAnonymousId();
 getSessionId();
+localStorage.removeItem('invoicedey-attribution-v1');
+captureAttribution();
 
 function ensureEditSavedForShare() {
   if (!edit) return null;
@@ -3663,7 +3672,7 @@ async function startCloudSync(client, user) {
   }
 }
 
-track('app_opened', { funnel_stage: 'visit' });
+track('app_opened', { funnel_stage: 'visit', attribution_capture: true });
 
 const growthSignupLink = document.getElementById('growthSignup');
 if (growthSignupLink) {
