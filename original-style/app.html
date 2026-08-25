@@ -1813,9 +1813,16 @@ const defaultDB = {
   clients: [],
   invoices: []
 };
-let db = JSON.parse(localStorage.getItem('invoicedey-v2') || 'null') || structuredClone(defaultDB);
-// Migrate older profiles
-if (db.profile) {
+const LEGACY_DB_KEY = 'invoicedey-v2';
+const ANON_DB_KEY = 'invoicedey-anonymous-v1';
+let activeUserId = null;
+let db = JSON.parse(localStorage.getItem(ANON_DB_KEY) || 'null')
+  || JSON.parse(localStorage.getItem(LEGACY_DB_KEY) || 'null')
+  || structuredClone(defaultDB);
+
+function normalizeDbProfile() {
+  // Migrate older profiles
+  if (db.profile) {
   db.profile.taxId = db.profile.taxId ?? '';
   db.profile.taxCountry = db.profile.taxCountry ?? 'US';
   db.profile.taxState = db.profile.taxState ?? '';
@@ -1825,6 +1832,40 @@ if (db.profile) {
   db.profile.invoicePrefix = db.profile.invoicePrefix ?? 'INV';
   db.profile.nextInvoiceNumber = db.profile.nextInvoiceNumber ?? (db.invoices.length + 1);
   db.profile.paymentDetails = db.profile.paymentDetails ?? '';
+  }
+}
+normalizeDbProfile();
+
+function scopedDbKey(userId) {
+  return 'invoicedey-v2-user-' + userId;
+}
+
+function loadDefaultDb() {
+  db = structuredClone(defaultDB);
+  normalizeDbProfile();
+}
+
+function loadUserLocalDb(userId) {
+  const key = scopedDbKey(userId);
+  const stored = localStorage.getItem(key);
+  if (stored) {
+    try {
+      db = JSON.parse(stored) || structuredClone(defaultDB);
+    } catch {
+      db = structuredClone(defaultDB);
+    }
+  } else {
+    loadDefaultDb();
+  }
+  normalizeDbProfile();
+}
+
+function persistDb() {
+  if (activeUserId) {
+    localStorage.setItem(scopedDbKey(activeUserId), JSON.stringify(db));
+  } else {
+    localStorage.setItem(ANON_DB_KEY, JSON.stringify(db));
+  }
 }
 
 /* ---------- Growth foundation ---------- */
@@ -1942,7 +1983,7 @@ $('#themeToggle').onclick = () => {
 
 /* ---------- Core helpers ---------- */
 function save() {
-  localStorage.setItem('invoicedey-v2', JSON.stringify(db));
+  persistDb();
   if (typeof queueCloudSync === 'function') queueCloudSync();
 }
 function client(id) {
@@ -3011,46 +3052,29 @@ switchTo('dashboard');
 
 /* Shared account status + profile sync (magic link only — no payments) */
 const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
-const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
-
-/*
-  ONE Supabase client for the whole page.
-  No custom Supabase storage key is used, so index.html and app.html
-  share the same authentication session.
-*/
-let supabaseClientPromise = null;
+const SUPABASE_PUBLISHABLE_KEY = 'publishable key here';
 
 async function getSupabase() {
-  if (supabaseClientPromise) return supabaseClientPromise;
-
-  supabaseClientPromise = (async () => {
-    if (
-      !SUPABASE_URL ||
-      !SUPABASE_PUBLISHABLE_KEY ||
-      SUPABASE_URL.includes('YOUR_') ||
-      SUPABASE_PUBLISHABLE_KEY.includes('YOUR_')
-    ) {
-      console.warn('Supabase is not configured.');
-      return null;
-    }
-
-    if (!window.supabase) {
-      await new Promise((resolve, reject) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
-        s.onload = resolve;
-        s.onerror = reject;
-        document.head.appendChild(s);
-      });
-    }
-
-    return window.supabase.createClient(
-      SUPABASE_URL,
-      SUPABASE_PUBLISHABLE_KEY
-    );
-  })();
-
-  return supabaseClientPromise;
+  // Supabase is configured with the public URL + anon/publishable key.
+  // Never use the secret/service-role key in this browser file.
+  if (
+    !SUPABASE_URL ||
+    !SUPABASE_PUBLISHABLE_KEY ||
+    SUPABASE_URL.includes('YOUR_') ||
+    SUPABASE_PUBLISHABLE_KEY.includes('YOUR_')
+  ) {
+    console.warn('Supabase is not configured.');
+    return null;
+  }
+  if (!window.supabase) {
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+      s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 }
 
 async function syncProfile(client, user) {
@@ -3125,7 +3149,6 @@ async function pushCloudState() {
   try {
     const organizationId = await ensureCloudOrganization();
     await syncOrganizationProfile(organizationId);
-
     if (cloud.client && cloud.user && db.profile.taxCountry) {
       const { error: taxProfileError } = await cloud.client.rpc('create_or_update_tax_profile', {
         p_country_code: db.profile.taxCountry,
@@ -3138,35 +3161,8 @@ async function pushCloudState() {
       });
       if (taxProfileError) throw taxProfileError;
     }
-
-    /*
-      IMPORTANT:
-      Local cloudId values can become stale when a browser/session changes
-      organization. An UPDATE against a row hidden by RLS can return zero rows
-      without an error. If we then insert child rows using that stale ID,
-      invoice_line_items RLS correctly rejects them.
-
-      Therefore every existing cloudId is first verified against the CURRENT
-      organization. If it is not visible in the current organization, we
-      discard the stale link and create/reconnect the record in this org.
-    */
-
     for (const localClient of db.clients) {
-      let clientIsValid = false;
-
-      if (localClient.cloudId) {
-        const { data: existingClient, error: clientCheckError } = await cloud.client
-          .from('clients')
-          .select('id')
-          .eq('id', localClient.cloudId)
-          .eq('organization_id', organizationId)
-          .maybeSingle();
-
-        if (clientCheckError) throw clientCheckError;
-        clientIsValid = !!existingClient;
-      }
-
-      if (!clientIsValid) {
+      if (!localClient.cloudId) {
         const { data, error } = await cloud.client.from('clients').insert({
           organization_id: organizationId,
           name: localClient.name || 'Unnamed client',
@@ -3174,21 +3170,16 @@ async function pushCloudState() {
           billing_address: { address: localClient.address || '' },
           tax_id: localClient.taxId || null
         }).select('id').single();
-
         if (error) throw error;
         localClient.cloudId = data.id;
       } else {
         const { error } = await cloud.client.from('clients').update({
-          name: localClient.name || 'Unnamed client',
-          email: localClient.email || null,
-          billing_address: { address: localClient.address || '' },
-          tax_id: localClient.taxId || null
-        }).eq('id', localClient.cloudId).eq('organization_id', organizationId);
-
+          name: localClient.name || 'Unnamed client', email: localClient.email || null,
+          billing_address: { address: localClient.address || '' }, tax_id: localClient.taxId || null
+        }).eq('id', localClient.cloudId);
         if (error) throw error;
       }
     }
-
     for (const invoice of db.invoices) {
       const currency = invoice.currency || db.profile.reporting || 'USD';
       const payload = {
@@ -3216,52 +3207,22 @@ async function pushCloudState() {
         },
         sent_at: cloudStatus(invoice) === 'sent' ? new Date().toISOString() : null
       };
-
-      // Public share tokens are globally unique. Do NOT carry a stale local
-      // token into an update/insert before we know which cloud invoice we are
-      // attaching to. Doing so can cause 23505 on invoices_public_share_token_key.
-      // We attach the correct token only after resolving the cloud invoice below.
-
-      if (!payload.client_id) continue;
-
-      let invoiceIsValid = false;
-
-      if (invoice.cloudId) {
-        const { data: existingById, error: invoiceCheckError } = await cloud.client
-          .from('invoices')
-          .select('id, public_share_token, public_share_enabled')
-          .eq('id', invoice.cloudId)
-          .eq('organization_id', organizationId)
-          .maybeSingle();
-
-        if (invoiceCheckError) throw invoiceCheckError;
-
-        if (existingById) {
-          invoiceIsValid = true;
-          invoice.publicShareToken =
-            existingById.public_share_token || invoice.publicShareToken || '';
-          invoice.publicShareEnabled =
-            !!existingById.public_share_enabled;
-
-          if (invoice.publicShareToken) {
-            payload.public_share_token = invoice.publicShareToken;
-            payload.public_share_enabled = invoice.publicShareEnabled;
-          }
-
-          const { error } = await cloud.client
-            .from('invoices')
-            .update(payload)
-            .eq('id', existingById.id)
-            .eq('organization_id', organizationId);
-
-          if (error) throw error;
-        } else {
-          // Stale cloudId from another organization/session.
-          invoice.cloudId = null;
-        }
+      if (invoice.publicShareToken) {
+        payload.public_share_token = invoice.publicShareToken;
+        payload.public_share_enabled = !!invoice.publicShareEnabled;
       }
-
-      if (!invoiceIsValid) {
+      if (!payload.client_id) continue;
+      if (invoice.cloudId) {
+        // Existing local-to-cloud link: update the cloud invoice.
+        const { error } = await cloud.client
+          .from('invoices')
+          .update(payload)
+          .eq('id', invoice.cloudId);
+        if (error) throw error;
+      } else {
+        // No cloudId yet. The invoice may already exist in Supabase
+        // (for example, after a browser reset or an earlier sync).
+        // Look it up by the database's unique key before inserting.
         const { data: existingInvoice, error: lookupError } = await cloud.client
           .from('invoices')
           .select('id, public_share_token, public_share_enabled')
@@ -3272,55 +3233,29 @@ async function pushCloudState() {
         if (lookupError) throw lookupError;
 
         if (existingInvoice) {
+          // Reconnect the local invoice to the existing cloud record.
           invoice.cloudId = existingInvoice.id;
-          invoice.publicShareToken =
-            existingInvoice.public_share_token || invoice.publicShareToken || '';
-          invoice.publicShareEnabled =
-            !!existingInvoice.public_share_enabled;
-
-          if (invoice.publicShareToken) {
-            payload.public_share_token = invoice.publicShareToken;
-            payload.public_share_enabled = invoice.publicShareEnabled;
-          }
+          invoice.publicShareToken = existingInvoice.public_share_token || invoice.publicShareToken || '';
+          invoice.publicShareEnabled = !!existingInvoice.public_share_enabled;
 
           const { error } = await cloud.client
             .from('invoices')
             .update(payload)
-            .eq('id', existingInvoice.id)
-            .eq('organization_id', organizationId);
-
+            .eq('id', existingInvoice.id);
           if (error) throw error;
         } else {
-          // This is a genuinely new cloud invoice. A local token may belong to
-          // an invoice in another organization (or another cloud record), so
-          // never reuse it blindly. Generate a fresh token only when sharing is
-          // enabled/was previously enabled locally.
-          if (invoice.publicShareEnabled || invoice.publicShareToken) {
-            invoice.publicShareToken = crypto.randomUUID().replace(/-/g, '');
-            payload.public_share_token = invoice.publicShareToken;
-            payload.public_share_enabled = !!invoice.publicShareEnabled;
-          }
-
+          // Truly new invoice: create it in Supabase.
           const { data, error } = await cloud.client
             .from('invoices')
             .insert(payload)
             .select('id')
             .single();
-
           if (error) throw error;
           invoice.cloudId = data.id;
         }
       }
-
-      // At this point invoice.cloudId is guaranteed to belong to the
-      // currently authenticated user's organization.
-      const { error: deleteError } = await cloud.client
-        .from('invoice_line_items')
-        .delete()
-        .eq('invoice_id', invoice.cloudId);
-
+      const { error: deleteError } = await cloud.client.from('invoice_line_items').delete().eq('invoice_id', invoice.cloudId);
       if (deleteError) throw deleteError;
-
       const lines = (invoice.lines || []).map((line, position) => ({
         invoice_id: invoice.cloudId,
         position,
@@ -3329,46 +3264,30 @@ async function pushCloudState() {
         unit_amount_minor: toMinor(line.rate, currency),
         line_total_minor: toMinor(lineAmount(line), currency),
         tax_rate: Number(invoice.tax || 0),
-        tax_minor: toMinor(
-          lineAmount(line) * Number(invoice.tax || 0) / 100,
-          currency
-        ),
+        tax_minor: toMinor(lineAmount(line) * Number(invoice.tax || 0) / 100, currency),
         tax_type: db.profile.taxLabel || 'Tax',
         tax_jurisdiction: db.profile.taxState || db.profile.taxCountry || null,
-        tax_details: {
-          country_code: db.profile.taxCountry || null,
-          state_code: db.profile.taxState || null
-        }
+        tax_details: { country_code: db.profile.taxCountry || null, state_code: db.profile.taxState || null }
       })).filter(line => line.quantity > 0);
-
       if (lines.length) {
-        const { error } = await cloud.client
-          .from('invoice_line_items')
-          .insert(lines);
-
+        const { error } = await cloud.client.from('invoice_line_items').insert(lines);
         if (error) throw error;
       }
-
       for (const payment of ensurePayments(invoice)) {
         if (payment.cloudId) continue;
-
         const { data, error } = await cloud.client.from('payments').insert({
           invoice_id: invoice.cloudId,
           amount_minor: toMinor(payment.amount, currency),
           currency,
           status: 'succeeded',
           provider: 'manual',
-          paid_at: payment.date
-            ? new Date(payment.date).toISOString()
-            : new Date().toISOString()
+          paid_at: payment.date ? new Date(payment.date).toISOString() : new Date().toISOString()
         }).select('id').single();
-
         if (error) throw error;
         payment.cloudId = data.id;
       }
     }
-
-    localStorage.setItem('invoicedey-v2', JSON.stringify(db));
+    persistDb();
   } catch (error) {
     console.error('CLOUD SYNC FAILED:', error);
     alert('CLOUD SYNC FAILED: ' + (error?.message || JSON.stringify(error)));
@@ -3495,7 +3414,7 @@ async function hydrateFromCloud() {
       date: payment.paid_at?.slice(0, 10) || invoice.issue_date, note: 'Payment received'
     }))
   }));
-  localStorage.setItem('invoicedey-v2', JSON.stringify(db));
+  persistDb();
   return true;
 }
 
@@ -3503,10 +3422,23 @@ async function startCloudSync(client, user) {
   if (cloud.hydrated && cloud.user?.id === user.id) return;
   cloud.client = client;
   cloud.user = user;
+  cloud.organizationId = null;
+  cloud.hydrated = false;
+
+  // Every authenticated user gets an isolated local dataset.
+  // Never reuse the previous account's local records or cloud IDs.
+  activeUserId = user.id;
+  loadUserLocalDb(user.id);
+
   try {
     const loaded = await hydrateFromCloud();
     cloud.hydrated = true;
-    if (!loaded) await pushCloudState();
+    if (!loaded) {
+      // Only push records that were explicitly saved for this user.
+      // A new/disposable account therefore starts clean instead of inheriting
+      // the previous account's invoices/clients from the old global key.
+      await pushCloudState();
+    }
     dashboard();
   } catch (error) {
     console.warn('cloud sync setup', error.message || error);
@@ -3554,6 +3486,18 @@ if (growthSignupLink) {
 
   if (logoutBtn) {
     logoutBtn.onclick = async () => {
+      clearTimeout(cloud.timer);
+      cloud.timer = null;
+      cloud.client = null;
+      cloud.user = null;
+      cloud.organizationId = null;
+      cloud.hydrated = false;
+      cloud.syncing = false;
+      activeUserId = null;
+      loadDefaultDb();
+      localStorage.removeItem(LEGACY_DB_KEY);
+      localStorage.removeItem(ANON_DB_KEY);
+      dashboard();
       await client.auth.signOut();
       toast('Logged out.');
       // Keep user on app; session cleared on index too (same origin storage)
