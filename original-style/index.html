@@ -1,0 +1,485 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invoicedey — Simple invoicing for freelancers</title>
+<style>
+:root {
+  --blue: #2467E3;
+  --blue-hover: #1d56c4;
+  --blue-soft: #E8F0FE;
+  --bg: #F8FAFC;
+  --panel: #FFFFFF;
+  --line: #E2E8F0;
+  --text: #0F172A;
+  --muted: #64748B;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(15,23,42,0.06), 0 1px 2px rgba(15,23,42,0.04);
+  --shadow-lg: 0 12px 40px rgba(15,23,42,0.12);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  font: 15px/1.5 Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+}
+@media (max-width: 860px) {
+  .wrap { grid-template-columns: 1fr; }
+  .hero { padding: 40px 24px 20px !important; }
+  .panel-side { padding: 24px !important; }
+}
+.hero {
+  padding: 56px clamp(24px, 5vw, 64px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.logo {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.8px;
+  margin-bottom: 40px;
+}
+.logo em { color: var(--blue); font-style: normal; }
+.hero h1 {
+  margin: 0 0 14px;
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 800;
+  letter-spacing: -1px;
+  line-height: 1.15;
+}
+.hero p {
+  margin: 0 0 28px;
+  color: var(--muted);
+  font-size: 16px;
+  max-width: 440px;
+}
+.features {
+  display: grid;
+  gap: 12px;
+  max-width: 420px;
+}
+.features div {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 14px;
+  color: var(--text);
+}
+.features span {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--blue-soft);
+  color: var(--blue);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.panel-side {
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  padding: 56px clamp(24px, 4vw, 48px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+@media (max-width: 860px) {
+  .panel-side { border-left: 0; border-top: 1px solid var(--line); }
+}
+.card {
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+}
+.card h2 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+}
+.card .sub {
+  margin: 0 0 24px;
+  color: var(--muted);
+  font-size: 14px;
+}
+label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  margin-bottom: 14px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(36,103,227,0.18);
+}
+.btn {
+  width: 100%;
+  padding: 13px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--blue);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(36,103,227,0.28);
+  transition: background 0.15s;
+}
+.btn:hover { background: var(--blue-hover); }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-secondary {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  margin-top: 10px;
+}
+.btn-secondary:hover { background: var(--bg); }
+.msg {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  display: none;
+}
+.msg.show { display: block; }
+.msg.ok { background: #ECFDF5; color: #047857; }
+.msg.err { background: #FEF2F2; color: #B91C1C; }
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.divider::before, .divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.foot {
+  margin-top: 20px;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+}
+.user-box {
+  display: none;
+  text-align: center;
+}
+.user-box.show { display: block; }
+.user-box p { margin: 0 0 16px; color: var(--muted); }
+.user-box strong { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="hero">
+    <div class="logo">invoice<em>dey</em></div>
+    <h1>Simple invoicing for independent businesses</h1>
+    <p>
+      Create clean invoices, track what’s paid, and keep your data private.
+      V1 runs in your browser. Sign in to sync with the cloud when you’re ready.
+    </p>
+    <div class="features">
+      <div><span>✓</span> Unlimited local invoices</div>
+      <div><span>✓</span> Clients, tax fields &amp; PDF export</div>
+      <div><span>✓</span> No subscription required for v1</div>
+      <div><span>✓</span> Cloud sync when signed in</div>
+    </div>
+  </section>
+  <section class="panel-side">
+    <div class="card" id="authCard">
+      <h2>Create your account</h2>
+      <p class="sub">We’ll email you a magic link — no password needed.</p>
+      <form id="authForm">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" required placeholder="you@company.com" autocomplete="email">
+        <label for="name">Your name (optional)</label>
+        <input id="name" name="name" type="text" placeholder="Ada Lovelace" autocomplete="name">
+        <button class="btn" type="submit" id="submitBtn">Send magic link</button>
+      </form>
+      <div class="msg" id="msg"></div>
+      <div class="divider">or skip for now</div>
+      <a class="btn btn-secondary" href="app.html" id="continueApp" style="display:block;text-align:center;text-decoration:none">
+        Continue without account
+      </a>
+      <p class="foot">
+        Already have a link? Check your email.<br>
+        By continuing you agree to use Invoicedey for legitimate invoicing.
+      </p>
+    </div>
+    <div class="card user-box" id="userBox">
+      <h2>You’re signed in</h2>
+      <p>Signed in as <strong id="userEmail"></strong></p>
+      <a class="btn" href="app.html" style="display:block;text-align:center;text-decoration:none;margin-bottom:10px">
+        Open invoice app
+      </a>
+      <button class="btn btn-secondary" type="button" id="logoutBtn">Log out</button>
+    </div>
+  </section>
+</div>
+<script>
+/*
+  InvoiceDey Growth — landing attribution bridge
+
+  app.html stores attribution under:
+    invoicedey-attribution-v2-[anonymous_id]
+
+  The landing page now uses the SAME anonymous_id and storage format,
+  so campaign data survives the magic-link redirect into app.html.
+*/
+(function () {
+  try {
+    const ANON_KEY = 'invoicedey-anonymous-id';
+    const ATTR_PREFIX = 'invoicedey-attribution-v2-';
+
+    function uuidLike() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 3 | 8);
+        return v.toString(16);
+      });
+    }
+
+    let anonymousId = localStorage.getItem(ANON_KEY);
+    if (!anonymousId) {
+      anonymousId = uuidLike();
+      localStorage.setItem(ANON_KEY, anonymousId);
+    }
+
+    const p = new URLSearchParams(window.location.search);
+    const keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
+    const hasCampaign = keys.some(k => (p.get(k) || '').trim());
+
+    if (!hasCampaign) return;
+
+    const storageKey = ATTR_PREFIX + anonymousId;
+    const now = new Date().toISOString();
+
+    let existing = null;
+    try {
+      existing = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    } catch (_) {}
+
+    const touch = {
+      source: (p.get('utm_source') || 'direct').trim(),
+      medium: (p.get('utm_medium') || 'none').trim(),
+      campaign: (p.get('utm_campaign') || '').trim(),
+      content: (p.get('utm_content') || '').trim(),
+      term: (p.get('utm_term') || '').trim(),
+      landing_page: window.location.pathname || '/',
+      referrer: document.referrer || '',
+      first_touch: !existing,
+      last_touch: true,
+      touched_at: now,
+      attribution_version: 'v2'
+    };
+
+    const attribution = existing ? {
+      ...existing,
+      source: touch.source || existing.source || 'direct',
+      medium: touch.medium || existing.medium || 'none',
+      campaign: touch.campaign || existing.campaign || '',
+      content: touch.content || existing.content || '',
+      term: touch.term || existing.term || '',
+      referrer: touch.referrer || existing.referrer || '',
+      last_touch: true,
+      touched_at: now,
+      attribution_version: 'v2'
+    } : touch;
+
+    localStorage.setItem(storageKey, JSON.stringify(attribution));
+
+    // Legacy/debug keys; v2 above is authoritative for app.html.
+    localStorage.setItem('invoicedey-growth-landing-v1', JSON.stringify({
+      first_touch: existing || touch,
+      last_touch: touch
+    }));
+    localStorage.setItem('invoicedey-last-utm', JSON.stringify(touch));
+  } catch (e) {
+    console.debug('landing attribution', e.message || e);
+  }
+})();
+</script>
+
+<script>
+/* ==== Configure Supabase ==== */
+const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
+
+function isPublishableKeyConfigured() {
+  return !!(
+    SUPABASE_PUBLISHABLE_KEY &&
+    SUPABASE_PUBLISHABLE_KEY.trim() &&
+    SUPABASE_PUBLISHABLE_KEY.startsWith('sb_publishable_') &&
+    SUPABASE_PUBLISHABLE_KEY.length > 20
+  );
+}
+
+let supabaseClient = null;
+async function loadSupabase() {
+  if (supabaseClient) return supabaseClient;
+  if (!window.supabase) {
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  return supabaseClient;
+}
+function showMsg(text, ok) {
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.className = 'msg show ' + (ok ? 'ok' : 'err');
+}
+function showSignedIn(email) {
+  document.getElementById('authCard').style.display = 'none';
+  document.getElementById('userBox').classList.add('show');
+  document.getElementById('userEmail').textContent = email || '';
+}
+function showSignedOut() {
+  document.getElementById('authCard').style.display = 'block';
+  document.getElementById('userBox').classList.remove('show');
+}
+async function ensureProfile(client, user, fullName) {
+  if (!user) return false;
+  const name = (fullName || user.user_metadata?.full_name || '').trim();
+  const row = {
+    id: user.id,
+    email: user.email || null,
+    full_name: name
+  };
+  let { error } = await client.from('profiles').upsert(row, { onConflict: 'id' });
+  if (error) {
+    console.warn('profile upsert failed', error.message);
+    const { error: e2 } = await client.from('profiles').insert(row);
+    if (e2) {
+      const { error: e3 } = await client.from('profiles').update({
+        email: row.email,
+        full_name: row.full_name
+      }).eq('id', user.id);
+      if (e3) console.warn('profile update failed', e3.message);
+      else return true;
+      return false;
+    }
+  }
+  return true;
+}
+async function init() {
+  if (!isPublishableKeyConfigured()) {
+    const sub = document.querySelector('#authCard .sub');
+    if (sub) {
+      sub.textContent = 'Magic link sign-in needs a Supabase key later. For now, continue without an account.';
+    }
+    return;
+  }
+  try {
+    const client = await loadSupabase();
+    // Handle magic-link tokens in URL hash/query
+    const { data: { session } } = await client.auth.getSession();
+    if (session?.user) {
+      await ensureProfile(client, session.user);
+      showSignedIn(session.user.email);
+    }
+    client.auth.onAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+          await ensureProfile(client, session.user);
+        }
+        showSignedIn(session.user.email);
+      } else {
+        showSignedOut();
+      }
+    });
+  } catch (e) {
+    console.warn(e);
+    showMsg(e.message || 'Could not start auth', false);
+  }
+}
+document.getElementById('authForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('email').value.trim();
+  const name = document.getElementById('name').value.trim();
+  const btn = document.getElementById('submitBtn');
+  if (!email) return;
+  if (!isPublishableKeyConfigured()) {
+    showMsg('Sign-in is not configured yet. Use “Continue without account” to open the app.', false);
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    const client = await loadSupabase();
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: window.location.origin + '/app.html',
+        data: name ? { full_name: name } : undefined
+      }
+    });
+    if (error) throw error;
+    showMsg('Check your email for the magic link. You can close this tab.', true);
+  } catch (err) {
+    const msg = err?.message || 'Could not send magic link.';
+    if (/rate limit/i.test(msg)) {
+      showMsg('Too many attempts. Please wait a bit and try again.', false);
+    } else {
+      showMsg(msg, false);
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send magic link';
+  }
+});
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  try {
+    const client = await loadSupabase();
+    await client.auth.signOut();
+    showSignedOut();
+  } catch (e) {
+    showMsg(e.message || 'Logout failed', false);
+  }
+});
+init();
+</script>
+</body>
+</html>< ! - -   t e s t   u p d a t e   - - >  
+ 
