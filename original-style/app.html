@@ -3125,6 +3125,7 @@ async function pushCloudState() {
   try {
     const organizationId = await ensureCloudOrganization();
     await syncOrganizationProfile(organizationId);
+
     if (cloud.client && cloud.user && db.profile.taxCountry) {
       const { error: taxProfileError } = await cloud.client.rpc('create_or_update_tax_profile', {
         p_country_code: db.profile.taxCountry,
@@ -3137,8 +3138,35 @@ async function pushCloudState() {
       });
       if (taxProfileError) throw taxProfileError;
     }
+
+    /*
+      IMPORTANT:
+      Local cloudId values can become stale when a browser/session changes
+      organization. An UPDATE against a row hidden by RLS can return zero rows
+      without an error. If we then insert child rows using that stale ID,
+      invoice_line_items RLS correctly rejects them.
+
+      Therefore every existing cloudId is first verified against the CURRENT
+      organization. If it is not visible in the current organization, we
+      discard the stale link and create/reconnect the record in this org.
+    */
+
     for (const localClient of db.clients) {
-      if (!localClient.cloudId) {
+      let clientIsValid = false;
+
+      if (localClient.cloudId) {
+        const { data: existingClient, error: clientCheckError } = await cloud.client
+          .from('clients')
+          .select('id')
+          .eq('id', localClient.cloudId)
+          .eq('organization_id', organizationId)
+          .maybeSingle();
+
+        if (clientCheckError) throw clientCheckError;
+        clientIsValid = !!existingClient;
+      }
+
+      if (!clientIsValid) {
         const { data, error } = await cloud.client.from('clients').insert({
           organization_id: organizationId,
           name: localClient.name || 'Unnamed client',
@@ -3146,16 +3174,21 @@ async function pushCloudState() {
           billing_address: { address: localClient.address || '' },
           tax_id: localClient.taxId || null
         }).select('id').single();
+
         if (error) throw error;
         localClient.cloudId = data.id;
       } else {
         const { error } = await cloud.client.from('clients').update({
-          name: localClient.name || 'Unnamed client', email: localClient.email || null,
-          billing_address: { address: localClient.address || '' }, tax_id: localClient.taxId || null
-        }).eq('id', localClient.cloudId);
+          name: localClient.name || 'Unnamed client',
+          email: localClient.email || null,
+          billing_address: { address: localClient.address || '' },
+          tax_id: localClient.taxId || null
+        }).eq('id', localClient.cloudId).eq('organization_id', organizationId);
+
         if (error) throw error;
       }
     }
+
     for (const invoice of db.invoices) {
       const currency = invoice.currency || db.profile.reporting || 'USD';
       const payload = {
@@ -3183,22 +3216,47 @@ async function pushCloudState() {
         },
         sent_at: cloudStatus(invoice) === 'sent' ? new Date().toISOString() : null
       };
+
       if (invoice.publicShareToken) {
         payload.public_share_token = invoice.publicShareToken;
         payload.public_share_enabled = !!invoice.publicShareEnabled;
       }
+
       if (!payload.client_id) continue;
+
+      let invoiceIsValid = false;
+
       if (invoice.cloudId) {
-        // Existing local-to-cloud link: update the cloud invoice.
-        const { error } = await cloud.client
+        const { data: existingById, error: invoiceCheckError } = await cloud.client
           .from('invoices')
-          .update(payload)
-          .eq('id', invoice.cloudId);
-        if (error) throw error;
-      } else {
-        // No cloudId yet. The invoice may already exist in Supabase
-        // (for example, after a browser reset or an earlier sync).
-        // Look it up by the database's unique key before inserting.
+          .select('id, public_share_token, public_share_enabled')
+          .eq('id', invoice.cloudId)
+          .eq('organization_id', organizationId)
+          .maybeSingle();
+
+        if (invoiceCheckError) throw invoiceCheckError;
+
+        if (existingById) {
+          invoiceIsValid = true;
+          invoice.publicShareToken =
+            existingById.public_share_token || invoice.publicShareToken || '';
+          invoice.publicShareEnabled =
+            !!existingById.public_share_enabled;
+
+          const { error } = await cloud.client
+            .from('invoices')
+            .update(payload)
+            .eq('id', existingById.id)
+            .eq('organization_id', organizationId);
+
+          if (error) throw error;
+        } else {
+          // Stale cloudId from another organization/session.
+          invoice.cloudId = null;
+        }
+      }
+
+      if (!invoiceIsValid) {
         const { data: existingInvoice, error: lookupError } = await cloud.client
           .from('invoices')
           .select('id, public_share_token, public_share_enabled')
@@ -3209,29 +3267,40 @@ async function pushCloudState() {
         if (lookupError) throw lookupError;
 
         if (existingInvoice) {
-          // Reconnect the local invoice to the existing cloud record.
           invoice.cloudId = existingInvoice.id;
-          invoice.publicShareToken = existingInvoice.public_share_token || invoice.publicShareToken || '';
-          invoice.publicShareEnabled = !!existingInvoice.public_share_enabled;
+          invoice.publicShareToken =
+            existingInvoice.public_share_token || invoice.publicShareToken || '';
+          invoice.publicShareEnabled =
+            !!existingInvoice.public_share_enabled;
 
           const { error } = await cloud.client
             .from('invoices')
             .update(payload)
-            .eq('id', existingInvoice.id);
+            .eq('id', existingInvoice.id)
+            .eq('organization_id', organizationId);
+
           if (error) throw error;
         } else {
-          // Truly new invoice: create it in Supabase.
           const { data, error } = await cloud.client
             .from('invoices')
             .insert(payload)
             .select('id')
             .single();
+
           if (error) throw error;
           invoice.cloudId = data.id;
         }
       }
-      const { error: deleteError } = await cloud.client.from('invoice_line_items').delete().eq('invoice_id', invoice.cloudId);
+
+      // At this point invoice.cloudId is guaranteed to belong to the
+      // currently authenticated user's organization.
+      const { error: deleteError } = await cloud.client
+        .from('invoice_line_items')
+        .delete()
+        .eq('invoice_id', invoice.cloudId);
+
       if (deleteError) throw deleteError;
+
       const lines = (invoice.lines || []).map((line, position) => ({
         invoice_id: invoice.cloudId,
         position,
@@ -3240,29 +3309,45 @@ async function pushCloudState() {
         unit_amount_minor: toMinor(line.rate, currency),
         line_total_minor: toMinor(lineAmount(line), currency),
         tax_rate: Number(invoice.tax || 0),
-        tax_minor: toMinor(lineAmount(line) * Number(invoice.tax || 0) / 100, currency),
+        tax_minor: toMinor(
+          lineAmount(line) * Number(invoice.tax || 0) / 100,
+          currency
+        ),
         tax_type: db.profile.taxLabel || 'Tax',
         tax_jurisdiction: db.profile.taxState || db.profile.taxCountry || null,
-        tax_details: { country_code: db.profile.taxCountry || null, state_code: db.profile.taxState || null }
+        tax_details: {
+          country_code: db.profile.taxCountry || null,
+          state_code: db.profile.taxState || null
+        }
       })).filter(line => line.quantity > 0);
+
       if (lines.length) {
-        const { error } = await cloud.client.from('invoice_line_items').insert(lines);
+        const { error } = await cloud.client
+          .from('invoice_line_items')
+          .insert(lines);
+
         if (error) throw error;
       }
+
       for (const payment of ensurePayments(invoice)) {
         if (payment.cloudId) continue;
+
         const { data, error } = await cloud.client.from('payments').insert({
           invoice_id: invoice.cloudId,
           amount_minor: toMinor(payment.amount, currency),
           currency,
           status: 'succeeded',
           provider: 'manual',
-          paid_at: payment.date ? new Date(payment.date).toISOString() : new Date().toISOString()
+          paid_at: payment.date
+            ? new Date(payment.date).toISOString()
+            : new Date().toISOString()
         }).select('id').single();
+
         if (error) throw error;
         payment.cloudId = data.id;
       }
     }
+
     localStorage.setItem('invoicedey-v2', JSON.stringify(db));
   } catch (error) {
     console.error('CLOUD SYNC FAILED:', error);
