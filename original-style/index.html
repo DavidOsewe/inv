@@ -252,33 +252,83 @@ input:focus {
   </section>
 </div>
 <script>
-/* InvoiceDey Growth — capture UTM parameters before magic-link redirect */
+/*
+  InvoiceDey Growth — landing attribution bridge
+
+  app.html stores attribution under:
+    invoicedey-attribution-v2-[anonymous_id]
+
+  The landing page now uses the SAME anonymous_id and storage format,
+  so campaign data survives the magic-link redirect into app.html.
+*/
 (function () {
   try {
+    const ANON_KEY = 'invoicedey-anonymous-id';
+    const ATTR_PREFIX = 'invoicedey-attribution-v2-';
+
+    function uuidLike() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 3 | 8);
+        return v.toString(16);
+      });
+    }
+
+    let anonymousId = localStorage.getItem(ANON_KEY);
+    if (!anonymousId) {
+      anonymousId = uuidLike();
+      localStorage.setItem(ANON_KEY, anonymousId);
+    }
+
     const p = new URLSearchParams(window.location.search);
     const keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
-    if (!keys.some(k => p.has(k))) return;
+    const hasCampaign = keys.some(k => (p.get(k) || '').trim());
 
-    const key = 'invoicedey-growth-landing-v1';
+    if (!hasCampaign) return;
+
+    const storageKey = ATTR_PREFIX + anonymousId;
+    const now = new Date().toISOString();
+
+    let existing = null;
+    try {
+      existing = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    } catch (_) {}
+
     const touch = {
-      utm_source: p.get('utm_source'),
-      utm_medium: p.get('utm_medium'),
-      utm_campaign: p.get('utm_campaign'),
-      utm_content: p.get('utm_content'),
-      utm_term: p.get('utm_term'),
-      landing_url: window.location.href,
-      landing_page: window.location.pathname,
-      referrer: document.referrer || null,
-      captured_at: new Date().toISOString()
+      source: (p.get('utm_source') || 'direct').trim(),
+      medium: (p.get('utm_medium') || 'none').trim(),
+      campaign: (p.get('utm_campaign') || '').trim(),
+      content: (p.get('utm_content') || '').trim(),
+      term: (p.get('utm_term') || '').trim(),
+      landing_page: window.location.pathname || '/',
+      referrer: document.referrer || '',
+      first_touch: !existing,
+      last_touch: true,
+      touched_at: now,
+      attribution_version: 'v2'
     };
 
-    let data = null;
-    try { data = JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) {}
+    const attribution = existing ? {
+      ...existing,
+      source: touch.source || existing.source || 'direct',
+      medium: touch.medium || existing.medium || 'none',
+      campaign: touch.campaign || existing.campaign || '',
+      content: touch.content || existing.content || '',
+      term: touch.term || existing.term || '',
+      referrer: touch.referrer || existing.referrer || '',
+      last_touch: true,
+      touched_at: now,
+      attribution_version: 'v2'
+    } : touch;
 
-    if (!data) data = { first_touch: touch, last_touch: touch };
-    else data.last_touch = touch;
+    localStorage.setItem(storageKey, JSON.stringify(attribution));
 
-    localStorage.setItem(key, JSON.stringify(data));
+    // Legacy/debug keys; v2 above is authoritative for app.html.
+    localStorage.setItem('invoicedey-growth-landing-v1', JSON.stringify({
+      first_touch: existing || touch,
+      last_touch: touch
+    }));
     localStorage.setItem('invoicedey-last-utm', JSON.stringify(touch));
   } catch (e) {
     console.debug('landing attribution', e.message || e);
