@@ -2590,6 +2590,54 @@ function validateInvoice(requireSent) {
   return [...new Set(errors)];
 }
 
+async function trackPersistedInvoiceEvents(localInvoiceId, options = {}) {
+  try {
+    // Flush the queued cloud sync now for authenticated users. This gives the
+    // analytics events the canonical cloud invoice UUID instead of the local
+    // browser UUID.
+    if (cloud.client && cloud.user) {
+      clearTimeout(cloud.timer);
+      cloud.timer = null;
+      await pushCloudState();
+    }
+
+    const invoice = db.invoices.find(i => i.id === localInvoiceId);
+    if (!invoice) return;
+
+    const invoiceId = invoice.cloudId || invoice.id;
+    const base = {
+      invoice_id: invoiceId,
+      invoice_number: invoice.number,
+      currency: invoice.currency
+    };
+
+    if (options.isNew) {
+      await track('invoice_created', base);
+
+      // Activation is a one-time milestone per account, not every invoice.
+      const activationOwner = activeUserId || getAnonymousId();
+      const activationKey = 'invoicedey-growth-first_invoice_created-' + activationOwner;
+      if (!localStorage.getItem(activationKey)) {
+        localStorage.setItem(activationKey, '1');
+        await track('invoice_activation', {
+          ...base,
+          activation: 'first_invoice_created'
+        });
+      }
+    }
+
+    if (options.status === 'Sent') {
+      await track('invoice_sent', base);
+    }
+
+    if (invoice.paid) {
+      await track('invoice_paid', base);
+    }
+  } catch (e) {
+    console.debug('invoice analytics', e.message || e);
+  }
+}
+
 function persist(s) {
   normalizeLineNumbers();
   const requireSent = s === 'Sent';
@@ -2616,14 +2664,20 @@ function persist(s) {
     db.invoices[n] = toSave;
   }
   save();
-  if (isNew) {
-    track('invoice_created', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
-    track('invoice_activation', { invoice_id: edit.id, invoice_number: edit.number, activation: 'first_invoice_created' });
-  }
-  if (s === 'Sent') track('invoice_sent', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
+
+  // Analytics are emitted after the invoice has had a chance to sync so every
+  // invoice event uses the canonical Supabase invoice UUID when available.
+  // This also guarantees the funnel order: created → activation → sent → paid.
+  trackPersistedInvoiceEvents(edit.id, {
+    isNew,
+    status: s,
+    currency: edit.currency,
+    invoiceNumber: edit.number
+  });
+
   ensurePayments(edit);
   syncPaidFlag(edit);
-  if (edit.paid) track('invoice_paid', { invoice_id: edit.cloudId || edit.id, invoice_number: edit.number, currency: edit.currency });
+
   toast(edit.paid ? 'Invoice paid in full.' : amountPaid(edit) > 0 ? 'Invoice saved (partially paid).' : s === 'Sent' ? 'Invoice marked as sent.' : 'Draft saved.');
   switchTo('invoices');
   if (isNew) maybePromptSignup();
@@ -3690,10 +3744,18 @@ if (growthSignupLink) {
 
   async function render(session) {
     if (session?.user) {
+      // Set the authenticated identity before any funnel event is emitted.
+      // Otherwise signup_completed is stored with user_id = null.
+      cloud.client = client;
+      cloud.user = session.user;
+
       const signupKey = 'invoicedey-signup-completed-' + session.user.id;
       if (!localStorage.getItem(signupKey)) {
         localStorage.setItem(signupKey, '1');
-        await track('signup_completed', { source: 'auth_session', funnel_stage: 'signup' });
+        await track('signup_completed', {
+          source: 'auth_session',
+          funnel_stage: 'signup'
+        });
       }
       await syncProfile(client, session.user);
       await startCloudSync(client, session.user);
