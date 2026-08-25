@@ -1816,9 +1816,9 @@ const defaultDB = {
 const LEGACY_DB_KEY = 'invoicedey-v2';
 const ANON_DB_KEY = 'invoicedey-anonymous-v1';
 let activeUserId = null;
-let db = JSON.parse(localStorage.getItem(ANON_DB_KEY) || 'null')
-  || JSON.parse(localStorage.getItem(LEGACY_DB_KEY) || 'null')
-  || structuredClone(defaultDB);
+// IMPORTANT: never hydrate the UI from a previous account before auth resolves.
+// Each authenticated user gets a completely separate local database.
+let db = structuredClone(defaultDB);
 
 function normalizeDbProfile() {
   // Migrate older profiles
@@ -3420,23 +3420,29 @@ async function hydrateFromCloud() {
 
 async function startCloudSync(client, user) {
   if (cloud.hydrated && cloud.user?.id === user.id) return;
+
+  // Stop anything queued for the previous account before switching users.
+  clearTimeout(cloud.timer);
+  cloud.timer = null;
+  cloud.syncing = false;
+
   cloud.client = client;
   cloud.user = user;
   cloud.organizationId = null;
   cloud.hydrated = false;
 
-  // Every authenticated user gets an isolated local dataset.
-  // Never reuse the previous account's local records or cloud IDs.
+  // Hard account boundary: load ONLY this user's local cache.
+  // Never carry the previous user's db, cloud IDs, clients or invoices.
   activeUserId = user.id;
   loadUserLocalDb(user.id);
+  dashboard();
 
   try {
     const loaded = await hydrateFromCloud();
     cloud.hydrated = true;
     if (!loaded) {
-      // Only push records that were explicitly saved for this user.
-      // A new/disposable account therefore starts clean instead of inheriting
-      // the previous account's invoices/clients from the old global key.
+      // New account: db is the clean user-scoped database, so this cannot
+      // push records belonging to another disposable email/account.
       await pushCloudState();
     }
     dashboard();
@@ -3495,7 +3501,8 @@ if (growthSignupLink) {
       cloud.syncing = false;
       activeUserId = null;
       loadDefaultDb();
-      localStorage.removeItem(LEGACY_DB_KEY);
+      // Do not copy the signed-in user's data into anonymous/global storage.
+      // The next account will load its own user-scoped cache after auth.
       localStorage.removeItem(ANON_DB_KEY);
       dashboard();
       await client.auth.signOut();
