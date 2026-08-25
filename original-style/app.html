@@ -1,3 +1,5 @@
+
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -1338,7 +1340,8 @@ input:focus:not(:focus-visible) {
     </button>
     <div class="side-note">
       <b>Invoicedey V1</b>
-      Private &amp; local. Export a backup from Business profile.
+      <div id="growthMeter" style="margin-top:5px;color:var(--muted)"></div>
+      Create invoices free. Cloud sync is available when signed in.
       <div id="accountLine" style="margin-top:10px;font-size:12px;line-height:1.5">
         <a href="index.html" style="color:var(--blue);font-weight:600;text-decoration:none">Account</a>
         <button type="button" id="appLogoutBtn" style="display:none;margin-top:8px;padding:0;border:0;background:none;color:var(--muted);font:inherit;font-size:12px;font-weight:600;cursor:pointer">Log out</button>
@@ -1354,6 +1357,7 @@ input:focus:not(:focus-visible) {
       </div>
       <div class="buttons">
         <button class="button" onclick="printInvoice();return false;">Print / save PDF</button>
+        <button class="button" id="shareInvoiceBtn" type="button" onclick="shareInvoice();return false;" style="display:none">Share invoice</button>
         <button class="button" id="headerReceiptBtn" type="button" onclick="printReceipt();return false;" style="display:none">Receipt PDF</button>
         <button class="button primary" id="new">+ Create invoice</button>
       </div>
@@ -1472,37 +1476,61 @@ input:focus:not(:focus-visible) {
 </select>
           </div>
         </div>
-        <div class="field"><label>Website / address</label><input data-p="address"></div>
+        <div class="field"><label>Business address</label><input data-p="address"></div>
 
-        <h3 style="margin:28px 0 12px;font-size:15px;font-weight:700">Tax & compliance</h3>
+        <h3 style="margin:28px 0 12px;font-size:15px;font-weight:700">Tax profile</h3>
         <p style="color:var(--muted);margin:-4px 0 16px;font-size:13px">
-          Used on invoices for US (EIN / Sales Tax), Europe (VAT), and Australia (ABN / GST).
+          V1 supports manual tax configuration for the US, UK, Australia, Canada, Nigeria and India.
+          InvoiceDey does not determine tax liability automatically.
         </p>
         <div class="three">
           <div class="field">
-            <label>Business tax ID number</label>
-            <input data-p="taxId" placeholder="e.g. EU VAT, ABN, or EIN">
-          </div>
-          <div class="field">
-            <label>Tax type (shown on invoices)</label>
-            <select data-p="taxLabel" id="taxLabelSelect">
-              <option value="Tax">Tax</option>
-              <option value="VAT">VAT (EU / UK)</option>
-              <option value="GST">GST (AU / NZ / SG)</option>
-              <option value="Sales Tax">Sales Tax (US)</option>
-              <option value="HST">HST (Canada)</option>
-              <option value="SST">SST</option>
-              <option value="IVA">IVA</option>
-              <option value="ABN">ABN (Australia ID label)</option>
-              <option value="EIN">EIN (US ID label)</option>
+            <label>Business country</label>
+            <select data-p="taxCountry" id="taxCountry">
+              <option value="US">United States</option>
+              <option value="GB">United Kingdom</option>
+              <option value="AU">Australia</option>
+              <option value="CA">Canada</option>
+              <option value="NG">Nigeria</option>
+              <option value="IN">India</option>
             </select>
           </div>
           <div class="field">
-            <label>Default tax rate</label>
-            <input data-p="defaultTax" id="defaultTax" type="number" min="0" max="100" step="0.01" value="0" placeholder="e.g. 20">
+            <label>State / Province</label>
+            <input data-p="taxState" id="taxState" placeholder="e.g. Texas, Ontario, Lagos">
+          </div>
+          <div class="field">
+            <label>Tax registered?</label>
+            <select id="taxRegistered">
+              <option value="false">No</option>
+              <option value="true">Yes</option>
+            </select>
+          </div>
+        </div>
+        <div class="three">
+          <div class="field">
+            <label>Tax registration number</label>
+            <input data-p="taxId" placeholder="VAT / GST / EIN / ABN / GSTIN">
+          </div>
+          <div class="field">
+            <label>Tax type</label>
+            <select data-p="taxLabel" id="taxLabelSelect">
+              <option value="Tax">Tax</option>
+              <option value="Sales Tax">Sales Tax</option>
+              <option value="VAT">VAT</option>
+              <option value="GST">GST</option>
+              <option value="GST/HST">GST/HST</option>
+              <option value="HST">HST</option>
+              <option value="IVA">IVA</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Default tax rate (%)</label>
+            <input data-p="defaultTax" id="defaultTax" type="number" min="0" max="100" step="0.01" value="0" placeholder="0">
             <div id="taxSuggestHint" style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.4"></div>
           </div>
         </div>
+        <div id="taxV1Notice" style="display:none;margin:0 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);font-size:12px;color:var(--muted)"></div>
 
         <h3 style="margin:28px 0 12px;font-size:15px;font-weight:700">Payment details</h3>
         <p style="color:var(--muted);margin:-4px 0 16px;font-size:13px">
@@ -1580,7 +1608,11 @@ input:focus:not(:focus-visible) {
             <div class="field">
               <label>Tax rate (%)</label>
               <input id="tax" type="number" min="0" max="100" step="0.01" value="0" placeholder="0">
-              <div style="font-size:11px;color:var(--muted);margin-top:4px">Uses your profile tax type on the invoice. Override rate per invoice anytime.</div>
+              <select id="invoiceTaxLabel" style="margin-top:7px">
+                <option value="Tax">Tax</option><option value="Sales Tax">Sales Tax</option><option value="VAT">VAT</option>
+                <option value="GST">GST</option><option value="GST/HST">GST/HST</option><option value="HST">HST</option><option value="IVA">IVA</option>
+              </select>
+              <div style="font-size:11px;color:var(--muted);margin-top:4px">Uses your profile tax type by default. Override per invoice if needed.</div>
             </div>
           </div>
           <div class="two">
@@ -1743,6 +1775,16 @@ input:focus:not(:focus-visible) {
   </div>
 </div>
 
+<div class="modalback" id="growthModal">
+  <div class="modal">
+    <h2 id="growthModalTitle">Save your invoice</h2>
+    <p id="growthModalMessage">Create a free account to save invoices in the cloud, access them on any device, and share professional invoice links.</p>
+    <div class="buttons" style="justify-content:flex-end;margin-top:20px;gap:10px;flex-wrap:wrap">
+      <button class="button" id="growthLater">Not now</button>
+      <a class="button primary" id="growthSignup" href="index.html" style="text-decoration:none">Create free account</a>
+    </div>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -1761,6 +1803,9 @@ const defaultDB = {
     taxId: '',
     taxLabel: 'Tax',
     defaultTax: 0,
+    taxCountry: 'US',
+    taxState: '',
+    taxRegistered: false,
     invoicePrefix: 'INV',
     nextInvoiceNumber: 1,
     paymentDetails: 'Bank transfer\nAccount name: Your Company\nIBAN / Account: \nReference: Invoice number'
@@ -1772,12 +1817,66 @@ let db = JSON.parse(localStorage.getItem('invoicedey-v2') || 'null') || structur
 // Migrate older profiles
 if (db.profile) {
   db.profile.taxId = db.profile.taxId ?? '';
+  db.profile.taxCountry = db.profile.taxCountry ?? 'US';
+  db.profile.taxState = db.profile.taxState ?? '';
+  db.profile.taxRegistered = db.profile.taxRegistered ?? false;
   db.profile.taxLabel = db.profile.taxLabel ?? 'Tax';
   db.profile.defaultTax = db.profile.defaultTax ?? 0;
   db.profile.invoicePrefix = db.profile.invoicePrefix ?? 'INV';
   db.profile.nextInvoiceNumber = db.profile.nextInvoiceNumber ?? (db.invoices.length + 1);
   db.profile.paymentDetails = db.profile.paymentDetails ?? '';
 }
+
+/* ---------- Growth foundation ---------- */
+const FREE_INVOICE_LIMIT = 3;
+const GROWTH_USAGE_KEY = 'invoicedey-growth-v1';
+function growthMonthKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+function getGrowthUsage() {
+  const month = growthMonthKey();
+  let usage = null;
+  try { usage = JSON.parse(localStorage.getItem(GROWTH_USAGE_KEY) || 'null'); } catch {}
+  if (!usage || usage.month !== month) usage = { month, invoicesCreated: 0, signupPrompted: false };
+  return usage;
+}
+function saveGrowthUsage(usage) { localStorage.setItem(GROWTH_USAGE_KEY, JSON.stringify(usage)); }
+function freeInvoicesRemaining() { return Math.max(0, FREE_INVOICE_LIMIT - getGrowthUsage().invoicesCreated); }
+function canCreateFreeInvoice() {
+  if (freeInvoicesRemaining() > 0) return true;
+  showGrowthModal('You’ve reached the free limit', 'The Free plan includes 3 invoices per month. Create a free account to keep your invoices safely in the cloud. Paid plans can be added when billing is enabled.');
+  return false;
+}
+function recordFreeInvoiceCreated() {
+  const usage = getGrowthUsage();
+  usage.invoicesCreated += 1;
+  saveGrowthUsage(usage);
+  updateGrowthMeter();
+}
+function updateGrowthMeter() {
+  const el = document.getElementById('growthMeter');
+  if (!el) return;
+  const remaining = freeInvoicesRemaining();
+  el.textContent = remaining + ' free invoice' + (remaining === 1 ? '' : 's') + ' remaining this month';
+}
+function showGrowthModal(title, message) {
+  const modal = document.getElementById('growthModal');
+  if (!modal) return;
+  document.getElementById('growthModalTitle').textContent = title;
+  document.getElementById('growthModalMessage').textContent = message;
+  modal.classList.add('show');
+  track('account_prompt_shown', { title });
+}
+function maybePromptSignup() {
+  if (cloud.user) return;
+  const usage = getGrowthUsage();
+  if (usage.signupPrompted) return;
+  usage.signupPrompted = true;
+  saveGrowthUsage(usage);
+  setTimeout(() => showGrowthModal('Keep your invoice safe', 'Your invoice is saved on this device. Create a free account to sync it to the cloud, access it anywhere, and share it with your client.'), 450);
+}
+
 let edit = null;
 let editingClientId = null;
 let pendingConfirm = null;
@@ -1958,6 +2057,9 @@ function switchTo(v) {
   }
   const backBtn = document.getElementById('editorBack');
   if (backBtn) backBtn.style.display = v === 'editor' ? '' : 'none';
+  const shareBtn = document.getElementById('shareInvoiceBtn');
+  if (shareBtn) shareBtn.style.display = v === 'editor' ? '' : 'none';
+  updateGrowthMeter();
   if (v === 'dashboard') dashboard();
   if (v === 'invoices') invoices();
   if (v === 'clients') clients();
@@ -2072,7 +2174,7 @@ function dashboard() {
         <button class="button" type="button" onclick="switchTo('profile')">Business profile</button>
         <button class="button" type="button" onclick="switchTo('clients')">Add client</button>
       </div>
-      <div class="trust-strip"><b>Local-only for now.</b> Data is stored in this browser. Use <b>Business profile → Download backup</b> so you never lose invoices.</div>
+      <div class="trust-strip"><b>Free plan:</b> 3 invoices per month. Create an account to sync invoices across devices.</div>
     </div>`;
     return;
   }
@@ -2166,16 +2268,8 @@ function profile() {
     'data:image/svg+xml,' + encodeURIComponent(
       '<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="100%" height="100%" fill="#E8F0FE"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#2467E3" font-size="16" font-family="system-ui" font-weight="700">ID</text></svg>'
     );
-  if (typeof applyTaxSuggestion === 'function') {
-    applyTaxSuggestion(db.profile.reporting || 'USD', false);
-    const hint = $('#taxSuggestHint');
-    if (hint) {
-      const s = suggestTaxForCurrency(db.profile.reporting || 'USD');
-      hint.textContent = s.region
-        ? ('Suggested for ' + (db.profile.reporting || 'USD') + ': ' + s.label + ' @ ' + s.rate + '%. ' + s.region + ' Override anytime.')
-        : '';
-    }
-  }
+  if ($('#taxRegistered')) $('#taxRegistered').value = String(!!db.profile.taxRegistered);
+  applyTaxCountrySuggestion(db.profile.taxCountry || 'US', false);
 }
 
 function nextInvoiceNumber() {
@@ -2192,6 +2286,7 @@ function nextInvoiceNumber() {
 }
 
 function newInvoice() {
+  if (!canCreateFreeInvoice()) return;
   const num = nextInvoiceNumber();
   edit = {
     id: crypto.randomUUID(),
@@ -2199,6 +2294,8 @@ function newInvoice() {
     _nextAfterSave: num.next,
     currency: db.profile.reporting,
     tax: db.profile.defaultTax ?? 0,
+    taxLabel: db.profile.taxLabel || 'Tax',
+    taxId: db.profile.taxId || '',
     issue: today,
     due: today,
     client: '',
@@ -2209,6 +2306,8 @@ function newInvoice() {
     payments: [],
     paidAt: '',
     status: 'Draft',
+    publicShareToken: '',
+    publicShareEnabled: false,
     lines: [{ desc: 'Professional services', qty: 1, unit: 'hours', rate: 0 }]
   };
   editor();
@@ -2277,9 +2376,9 @@ function preview() {
   $('#pLogo').style.display = p.logo ? 'block' : 'none';
   $('#pLogo').src = p.logo || '';
   // Document title: "Tax Invoice" when GST/VAT (or similar) is charged
-  const taxType = (p.taxLabel || 'Tax').toUpperCase();
+  const taxType = (edit?.taxLabel || p.taxLabel || 'Tax').toUpperCase();
   const taxRate = +edit.tax || 0;
-  const useTaxInvoice = taxRate > 0 && /^(VAT|GST|HST|SST|IVA)$/i.test(p.taxLabel || '');
+  const useTaxInvoice = taxRate > 0 && /^(VAT|GST|GST\/HST|HST|SST|IVA)$/i.test(edit?.taxLabel || p.taxLabel || '');
   const docTitle = useTaxInvoice ? 'Tax Invoice' : 'Invoice';
   const pDoc = document.getElementById('pDocTitle');
   if (pDoc) pDoc.textContent = docTitle;
@@ -2314,11 +2413,12 @@ function preview() {
     </tr>`
   ).join('');
   $('#pSub').textContent = money(sub(edit), edit.currency);
-  const label = (db.profile.taxLabel || 'Tax');
+  const label = (edit?.taxLabel || db.profile.taxLabel || 'Tax');
   const rate = +edit.tax || 0;
   // Tax type only appears on the totals row
   $('#taxLabel').textContent = rate ? (label + ' (' + rate + '%)') : label;
   $('#pTax').textContent = money(tax(edit), edit.currency);
+  if ($('#invoiceTaxLabel')) $('#invoiceTaxLabel').value = edit.taxLabel || db.profile.taxLabel || 'Tax';
   // Hide zero tax row visually? Keep visible for transparency (0.00).
   $('#pTotal').textContent = money(total(edit), edit.currency);
   // Payment status under totals on the live preview
@@ -2461,14 +2561,18 @@ function persist(s) {
   if (isNew) {
     db.invoices.unshift(toSave);
     if (edit._nextAfterSave) db.profile.nextInvoiceNumber = edit._nextAfterSave;
+    recordFreeInvoiceCreated();
   } else {
     db.invoices[n] = toSave;
   }
   save();
+  if (isNew) track('invoice_created', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
+  if (s === 'Sent') track('invoice_sent', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
   ensurePayments(edit);
   syncPaidFlag(edit);
   toast(edit.paid ? 'Invoice paid in full.' : amountPaid(edit) > 0 ? 'Invoice saved (partially paid).' : s === 'Sent' ? 'Invoice marked as sent.' : 'Draft saved.');
   switchTo('invoices');
+  if (isNew) maybePromptSignup();
 }
 
 /* ---------- Events ---------- */
@@ -2610,6 +2714,14 @@ if (editorBackBtn) editorBackBtn.onclick = () => switchTo('invoices');
 $('#save').onclick = () => persist('Draft');
 $('#send').onclick = () => persist('Sent');
 
+document.getElementById('growthLater')?.addEventListener('click', () => {
+  document.getElementById('growthModal')?.classList.remove('show');
+});
+
+if (!sessionStorage.getItem('invoicedey-session')) {
+  sessionStorage.setItem('invoicedey-session', crypto.randomUUID());
+}
+
 $('#togglePreview').onclick = () => {
   const panel = $('#previewPanel');
   const btn = $('#togglePreview');
@@ -2689,7 +2801,7 @@ $('#confirm').onclick = () => {
   }
 };
 
-$('#saveProfile').onclick = () => {
+$('#saveProfile').onclick = async () => {
   clearInvalid(document.getElementById('profile'));
   const errors = [];
   const nameEl = document.querySelector('[data-p="name"]');
@@ -2723,14 +2835,39 @@ $('#saveProfile').onclick = () => {
     if (e.dataset.p === 'name' || e.dataset.p === 'email') val = (val || '').trim();
     db.profile[e.dataset.p] = val;
   });
+  db.profile.taxRegistered = $('#taxRegistered')?.value === 'true';
   save();
+  if (cloud.client && cloud.user) {
+    try {
+      const orgId = await ensureCloudOrganization();
+      await cloud.client.rpc('create_or_update_tax_profile', {
+        p_country_code: db.profile.taxCountry || 'US',
+        p_state_code: db.profile.taxState || null,
+        p_tax_registered: !!db.profile.taxRegistered,
+        p_tax_registration_number: db.profile.taxId || null,
+        p_default_tax_rate: Number(db.profile.defaultTax || 0),
+        p_tax_label: db.profile.taxLabel || 'Tax',
+        p_tax_settings: { source: 'invoicedey-tax-v1' }
+      });
+      await syncOrganizationProfile(orgId);
+    } catch (e) {
+      console.warn('tax profile sync', e.message || e);
+      toast('Profile saved locally; tax profile sync failed.');
+      return;
+    }
+  }
+  track('profile_saved', { tax_country: db.profile.taxCountry, tax_registered: db.profile.taxRegistered });
   toast('Business profile saved.');
 };
 
 // Auto-index tax type + rate from reporting currency; user can still change both manually
 document.addEventListener('change', e => {
-  if (e.target && e.target.id === 'reportingSelect') {
-    applyTaxSuggestion(e.target.value, true);
+  if (e.target && e.target.id === 'taxCountry') {
+    applyTaxCountrySuggestion(e.target.value, true);
+    const state = $('#taxState');
+    if (state && e.target.value === 'US') state.placeholder = 'e.g. Texas';
+    else if (state && e.target.value === 'CA') state.placeholder = 'e.g. Ontario';
+    else if (state) state.placeholder = 'State / Province / Region';
   }
   if (e.target && e.target.id === 'currency' && edit) {
     // Optional soft suggest when invoice currency changes (does not lock fields)
@@ -2743,6 +2880,38 @@ document.addEventListener('change', e => {
     }
   }
 });
+
+function suggestTaxForCountry(code) {
+  const map = {
+    US: { label:'Sales Tax', rate:0, note:'US sales tax is jurisdiction- and transaction-specific. Confirm your applicable rate and taxability.' },
+    GB: { label:'VAT', rate:20, note:'UK VAT: 20% is the standard starting rate; confirm your actual VAT treatment.' },
+    AU: { label:'GST', rate:10, note:'Australia GST: 10% starting rate; confirm registration and supply treatment.' },
+    CA: { label:'GST/HST', rate:0, note:'Canada GST/HST varies by province and supply. Enter the applicable rate manually.' },
+    NG: { label:'VAT', rate:7.5, note:'Nigeria VAT: 7.5% starting rate; confirm your applicable treatment.' },
+    IN: { label:'GST', rate:0, note:'India GST varies by supply/place of supply. Configure the applicable rate manually.' }
+  };
+  return map[code] || {label:'Tax',rate:0,note:'Set your tax type and rate manually.'};
+}
+function applyTaxCountrySuggestion(code, writeFields) {
+  const s = suggestTaxForCountry(code);
+  const label=$('#taxLabelSelect'), rate=$('#defaultTax'), hint=$('#taxSuggestHint'), notice=$('#taxV1Notice');
+  if(writeFields){
+    if(label && ![...label.options].some(o=>o.value===s.label)){
+      const o=document.createElement('option'); o.value=s.label; o.textContent=s.label; label.appendChild(o);
+    }
+    if(label) label.value=s.label;
+    if(rate) rate.value=s.rate;
+    db.profile.taxCountry=code;
+    db.profile.taxLabel=s.label;
+    db.profile.defaultTax=s.rate;
+  }
+  if(hint) hint.textContent='Suggested starting configuration: '+s.label+' @ '+s.rate+'%.';
+  if(notice){
+    notice.style.display='block';
+    notice.textContent=s.note+' V1 uses manual rates and does not calculate nexus, exemptions, place-of-supply or taxability automatically.';
+  }
+  return s;
+}
 
 function applyTaxSuggestion(code, writeProfileFields) {
   const suggestion = suggestTaxForCurrency(code);
@@ -2769,6 +2938,16 @@ function applyTaxSuggestion(code, writeProfileFields) {
   }
   return suggestion;
 }
+
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'invoiceTaxLabel' && edit) {
+    edit.taxLabel = e.target.value;
+    preview();
+  }
+  if (e.target && e.target.id === 'taxRegistered') {
+    db.profile.taxRegistered = e.target.value === 'true';
+  }
+});
 
 $('#logoFile').onchange = e => {
   const f = e.target.files[0];
@@ -2834,15 +3013,24 @@ switchTo('dashboard');
 const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
 
-/* One Supabase client per page: prevents GoTrueClient/session races. */
+/*
+  ONE Supabase client for the whole page.
+  No custom Supabase storage key is used, so index.html and app.html
+  share the same authentication session.
+*/
 let supabaseClientPromise = null;
 
 async function getSupabase() {
   if (supabaseClientPromise) return supabaseClientPromise;
 
   supabaseClientPromise = (async () => {
-    if (!SUPABASE_PUBLISHABLE_KEY ||
-        !SUPABASE_PUBLISHABLE_KEY.startsWith('sb_publishable_')) {
+    if (
+      !SUPABASE_URL ||
+      !SUPABASE_PUBLISHABLE_KEY ||
+      SUPABASE_URL.includes('YOUR_') ||
+      SUPABASE_PUBLISHABLE_KEY.includes('YOUR_')
+    ) {
+      console.warn('Supabase is not configured.');
       return null;
     }
 
@@ -2858,15 +3046,7 @@ async function getSupabase() {
 
     return window.supabase.createClient(
       SUPABASE_URL,
-      SUPABASE_PUBLISHABLE_KEY,
-      {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-          detectSessionInUrl: true,
-          storageKey: 'invoicedey-auth'
-        }
-      }
+      SUPABASE_PUBLISHABLE_KEY
     );
   })();
 
@@ -2924,11 +3104,39 @@ async function ensureCloudOrganization() {
   return cloud.organizationId;
 }
 
+async function syncOrganizationProfile(organizationId) {
+  if (!cloud.client || !organizationId) return;
+  const { error } = await cloud.client.from('organizations').update({
+    name: db.profile.name || 'My business',
+    currency: db.profile.reporting || 'USD',
+    contact_email: db.profile.email || null,
+    phone: db.profile.phone || null,
+    tax_registration_number: db.profile.taxId || null,
+    address: { text: db.profile.address || '' },
+    payment_details: db.profile.paymentDetails || '',
+    tax_label: db.profile.taxLabel || 'Tax'
+  }).eq('id', organizationId);
+  if (error) throw error;
+}
+
 async function pushCloudState() {
   if (!cloud.client || !cloud.user || cloud.syncing) return;
   cloud.syncing = true;
   try {
     const organizationId = await ensureCloudOrganization();
+    await syncOrganizationProfile(organizationId);
+    if (cloud.client && cloud.user && db.profile.taxCountry) {
+      const { error: taxProfileError } = await cloud.client.rpc('create_or_update_tax_profile', {
+        p_country_code: db.profile.taxCountry,
+        p_state_code: db.profile.taxState || null,
+        p_tax_registered: !!db.profile.taxRegistered,
+        p_tax_registration_number: db.profile.taxId || null,
+        p_default_tax_rate: Number(db.profile.defaultTax || 0),
+        p_tax_label: db.profile.taxLabel || 'Tax',
+        p_tax_settings: { source: 'invoicedey-tax-v1' }
+      });
+      if (taxProfileError) throw taxProfileError;
+    }
     for (const localClient of db.clients) {
       if (!localClient.cloudId) {
         const { data, error } = await cloud.client.from('clients').insert({
@@ -2962,16 +3170,65 @@ async function pushCloudState() {
         subtotal_minor: toMinor(sub(invoice), currency),
         tax_minor: toMinor(tax(invoice), currency),
         total_minor: toMinor(total(invoice), currency),
+        tax_label: db.profile.taxLabel || 'Tax',
+        tax_jurisdiction: db.profile.taxState || db.profile.taxCountry || null,
+        tax_registration_number: db.profile.taxId || null,
+        tax_details: {
+          country_code: db.profile.taxCountry || null,
+          state_code: db.profile.taxState || null,
+          tax_registered: !!db.profile.taxRegistered,
+          tax_label: db.profile.taxLabel || 'Tax',
+          tax_rate: Number(invoice.tax || 0),
+          source: 'invoicedey-tax-v1'
+        },
         sent_at: cloudStatus(invoice) === 'sent' ? new Date().toISOString() : null
       };
+      if (invoice.publicShareToken) {
+        payload.public_share_token = invoice.publicShareToken;
+        payload.public_share_enabled = !!invoice.publicShareEnabled;
+      }
       if (!payload.client_id) continue;
       if (invoice.cloudId) {
-        const { error } = await cloud.client.from('invoices').update(payload).eq('id', invoice.cloudId);
+        // Existing local-to-cloud link: update the cloud invoice.
+        const { error } = await cloud.client
+          .from('invoices')
+          .update(payload)
+          .eq('id', invoice.cloudId);
         if (error) throw error;
       } else {
-        const { data, error } = await cloud.client.from('invoices').insert(payload).select('id').single();
-        if (error) throw error;
-        invoice.cloudId = data.id;
+        // No cloudId yet. The invoice may already exist in Supabase
+        // (for example, after a browser reset or an earlier sync).
+        // Look it up by the database's unique key before inserting.
+        const { data: existingInvoice, error: lookupError } = await cloud.client
+          .from('invoices')
+          .select('id, public_share_token, public_share_enabled')
+          .eq('organization_id', organizationId)
+          .eq('invoice_number', invoice.number)
+          .maybeSingle();
+
+        if (lookupError) throw lookupError;
+
+        if (existingInvoice) {
+          // Reconnect the local invoice to the existing cloud record.
+          invoice.cloudId = existingInvoice.id;
+          invoice.publicShareToken = existingInvoice.public_share_token || invoice.publicShareToken || '';
+          invoice.publicShareEnabled = !!existingInvoice.public_share_enabled;
+
+          const { error } = await cloud.client
+            .from('invoices')
+            .update(payload)
+            .eq('id', existingInvoice.id);
+          if (error) throw error;
+        } else {
+          // Truly new invoice: create it in Supabase.
+          const { data, error } = await cloud.client
+            .from('invoices')
+            .insert(payload)
+            .select('id')
+            .single();
+          if (error) throw error;
+          invoice.cloudId = data.id;
+        }
       }
       const { error: deleteError } = await cloud.client.from('invoice_line_items').delete().eq('invoice_id', invoice.cloudId);
       if (deleteError) throw deleteError;
@@ -2981,7 +3238,12 @@ async function pushCloudState() {
         description: line.desc || 'Line item',
         quantity: Number(line.qty || 0),
         unit_amount_minor: toMinor(line.rate, currency),
-        line_total_minor: toMinor(lineAmount(line), currency)
+        line_total_minor: toMinor(lineAmount(line), currency),
+        tax_rate: Number(invoice.tax || 0),
+        tax_minor: toMinor(lineAmount(line) * Number(invoice.tax || 0) / 100, currency),
+        tax_type: db.profile.taxLabel || 'Tax',
+        tax_jurisdiction: db.profile.taxState || db.profile.taxCountry || null,
+        tax_details: { country_code: db.profile.taxCountry || null, state_code: db.profile.taxState || null }
       })).filter(line => line.quantity > 0);
       if (lines.length) {
         const { error } = await cloud.client.from('invoice_line_items').insert(lines);
@@ -3003,9 +3265,82 @@ async function pushCloudState() {
     }
     localStorage.setItem('invoicedey-v2', JSON.stringify(db));
   } catch (error) {
-    console.warn('cloud sync', error.message || error);
+    console.error('CLOUD SYNC FAILED:', error);
+    alert('CLOUD SYNC FAILED: ' + (error?.message || JSON.stringify(error)));
   } finally {
     cloud.syncing = false;
+  }
+}
+
+async function track(eventName, metadata = {}) {
+  try {
+    const client = cloud.client || await getSupabase();
+    if (!client) return;
+    await client.from('analytics_events').insert({
+      event_name: eventName,
+      user_id: cloud.user?.id || null,
+      session_id: sessionStorage.getItem('invoicedey-session') || null,
+      metadata
+    });
+  } catch (e) {
+    console.debug('analytics', e.message || e);
+  }
+}
+
+function ensureEditSavedForShare() {
+  if (!edit) return null;
+  normalizeLineNumbers();
+  const errors = validateInvoice(false);
+  if (errors.length) {
+    showBanner('editorErrors', errors);
+    toast(errors[0]);
+    return null;
+  }
+  const n = db.invoices.findIndex(i => i.id === edit.id);
+  const toSave = structuredClone(edit);
+  delete toSave._nextAfterSave;
+  if (n < 0) {
+    db.invoices.unshift(toSave);
+    if (edit._nextAfterSave) db.profile.nextInvoiceNumber = edit._nextAfterSave;
+    recordFreeInvoiceCreated();
+  } else {
+    db.invoices[n] = toSave;
+  }
+  save();
+  return db.invoices.find(i => i.id === edit.id) || null;
+}
+
+async function shareInvoice() {
+  const invoice = ensureEditSavedForShare();
+  if (!invoice) return;
+  if (!cloud.client || !cloud.user) {
+    showGrowthModal('Create an account to share', 'Sharing requires a free Invoicedey account so your invoice can be stored securely and opened by your client.');
+    track('share_blocked_auth', { invoice_id: invoice.id });
+    return;
+  }
+  try {
+    const organizationId = await ensureCloudOrganization();
+    await syncOrganizationProfile(organizationId);
+    await pushCloudState();
+    const token = invoice.publicShareToken || crypto.randomUUID().replace(/-/g, '');
+    const { error } = await cloud.client.from('invoices').update({
+      public_share_token: token,
+      public_share_enabled: true,
+      public_shared_at: new Date().toISOString()
+    }).eq('id', invoice.cloudId).eq('organization_id', organizationId);
+    if (error) throw error;
+    invoice.publicShareToken = token;
+    invoice.publicShareEnabled = true;
+    save();
+    const url = window.location.origin + '/invoice.html?token=' + encodeURIComponent(token);
+    try { await navigator.clipboard.writeText(url); } catch {}
+    await track('invoice_shared', { invoice_id: invoice.cloudId, invoice_number: invoice.number });
+    toast('Share link copied.');
+    return url;
+  } catch (error) {
+    console.error('SHARE FAILED:', error);
+    alert('SHARE FAILED: ' + (error?.message || JSON.stringify(error)));
+    return null;
   }
 }
 
@@ -3017,6 +3352,16 @@ function queueCloudSync() {
 
 async function hydrateFromCloud() {
   const organizationId = await ensureCloudOrganization();
+  const { data: remoteTaxProfile } = await cloud.client.from('organization_tax_profiles')
+    .select('*').eq('organization_id', organizationId).maybeSingle();
+  if (remoteTaxProfile) {
+    db.profile.taxCountry = remoteTaxProfile.country_code || db.profile.taxCountry || 'US';
+    db.profile.taxState = remoteTaxProfile.state_code || '';
+    db.profile.taxRegistered = !!remoteTaxProfile.tax_registered;
+    db.profile.taxId = remoteTaxProfile.tax_registration_number || db.profile.taxId || '';
+    db.profile.taxLabel = remoteTaxProfile.tax_label || db.profile.taxLabel || 'Tax';
+    db.profile.defaultTax = Number(remoteTaxProfile.default_tax_rate ?? db.profile.defaultTax ?? 0);
+  }
   const { data: remoteInvoices, error } = await cloud.client.from('invoices')
     .select('*, clients(*), invoice_line_items(*), payments(*)')
     .eq('organization_id', organizationId)
@@ -3032,7 +3377,9 @@ async function hydrateFromCloud() {
   }, []);
   db.invoices = remoteInvoices.map(invoice => ({
     id: invoice.id, cloudId: invoice.id, number: invoice.invoice_number, client: invoice.clients?.id || '',
-    currency: invoice.currency, issue: invoice.issue_date, due: invoice.due_date, tax: Number(invoice.tax_rate || 0),
+    publicShareToken: invoice.public_share_token || '',
+    publicShareEnabled: !!invoice.public_share_enabled,
+    currency: invoice.currency, issue: invoice.issue_date, due: invoice.due_date, tax: Number(invoice.tax_rate || 0), taxLabel: invoice.tax_label || db.profile.taxLabel || 'Tax', taxId: invoice.tax_registration_number || db.profile.taxId || '',
     status: invoice.status === 'paid' ? 'Paid' : invoice.status === 'sent' ? 'Sent' : 'Draft',
     title: '', note: 'Thank you for your business.', terms: db.profile.paymentDetails || '',
     lines: (invoice.invoice_line_items || []).sort((a, b) => a.position - b.position).map(line => ({
@@ -3061,6 +3408,15 @@ async function startCloudSync(client, user) {
   }
 }
 
+track('app_opened');
+
+const growthSignupLink = document.getElementById('growthSignup');
+if (growthSignupLink) {
+  growthSignupLink.addEventListener('click', () => {
+    track('signup_cta_clicked', { source: 'growth_modal' });
+  });
+}
+
 (async function initAccountLine() {
   const line = document.getElementById('accountLine');
   const logoutBtn = document.getElementById('appLogoutBtn');
@@ -3069,6 +3425,11 @@ async function startCloudSync(client, user) {
 
   async function render(session) {
     if (session?.user) {
+      const signupKey = 'invoicedey-signup-completed-' + session.user.id;
+      if (!localStorage.getItem(signupKey)) {
+        localStorage.setItem(signupKey, '1');
+        await track('signup_completed', { source: 'auth_session' });
+      }
       await syncProfile(client, session.user);
       await startCloudSync(client, session.user);
       line.innerHTML = 'Signed in as <b style="color:var(--text)">' + (session.user.email || '') + '</b>';
@@ -3197,6 +3558,16 @@ function getPrintCSS() {
       font-weight: 800;
       font-size: 17px;
     }
+    .viral-footer {
+      margin-top: 26px;
+      padding-top: 12px;
+      border-top: 1px solid #e2e8f0;
+      text-align: center;
+      color: #64748b;
+      font-size: 11px;
+    }
+    .viral-footer a { color: #2467E3; text-decoration: none; }
+    .viral-footer strong { color: #2467E3; }
     .terms {
       border-top: 1px solid #e2e8f0;
       padding-top: 18px;
@@ -3220,8 +3591,9 @@ function getPrintCSS() {
 }
 
 function openPrintDocument(title, bodyHtml) {
+  const viralFooter = '<div class="viral-footer">Need to create an invoice? <a href="https://inv-pukka1.vercel.app/?utm_source=invoice_pdf&utm_medium=pdf&utm_campaign=viral_invoice" target="_blank" rel="noopener noreferrer"><strong>Try Invoicedey — free.</strong></a></div>';
   const htmlDoc = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' +
-    title + '</title><style>' + getPrintCSS() + '</style></head><body>' + bodyHtml + '</body></html>';
+    title + '</title><style>' + getPrintCSS() + '</style></head><body>' + bodyHtml + viralFooter + '</body></html>';
   const w = window.open('', '_blank');
   if (!w) {
     toast('Allow pop-ups to print, or use Share → Print');
@@ -3245,6 +3617,7 @@ function printInvoice() {
     toast('Open an invoice first to print.');
     return;
   }
+  track('invoice_downloaded', { invoice_id: edit.cloudId || edit.id, invoice_number: edit.number, format: 'print_pdf' });
   try { preview(); } catch (e) {}
   const panel = document.getElementById('previewPanel');
   if (!panel) {
