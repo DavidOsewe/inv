@@ -3217,10 +3217,10 @@ async function pushCloudState() {
         sent_at: cloudStatus(invoice) === 'sent' ? new Date().toISOString() : null
       };
 
-      if (invoice.publicShareToken) {
-        payload.public_share_token = invoice.publicShareToken;
-        payload.public_share_enabled = !!invoice.publicShareEnabled;
-      }
+      // Public share tokens are globally unique. Do NOT carry a stale local
+      // token into an update/insert before we know which cloud invoice we are
+      // attaching to. Doing so can cause 23505 on invoices_public_share_token_key.
+      // We attach the correct token only after resolving the cloud invoice below.
 
       if (!payload.client_id) continue;
 
@@ -3242,6 +3242,11 @@ async function pushCloudState() {
             existingById.public_share_token || invoice.publicShareToken || '';
           invoice.publicShareEnabled =
             !!existingById.public_share_enabled;
+
+          if (invoice.publicShareToken) {
+            payload.public_share_token = invoice.publicShareToken;
+            payload.public_share_enabled = invoice.publicShareEnabled;
+          }
 
           const { error } = await cloud.client
             .from('invoices')
@@ -3273,6 +3278,11 @@ async function pushCloudState() {
           invoice.publicShareEnabled =
             !!existingInvoice.public_share_enabled;
 
+          if (invoice.publicShareToken) {
+            payload.public_share_token = invoice.publicShareToken;
+            payload.public_share_enabled = invoice.publicShareEnabled;
+          }
+
           const { error } = await cloud.client
             .from('invoices')
             .update(payload)
@@ -3281,6 +3291,16 @@ async function pushCloudState() {
 
           if (error) throw error;
         } else {
+          // This is a genuinely new cloud invoice. A local token may belong to
+          // an invoice in another organization (or another cloud record), so
+          // never reuse it blindly. Generate a fresh token only when sharing is
+          // enabled/was previously enabled locally.
+          if (invoice.publicShareEnabled || invoice.publicShareToken) {
+            invoice.publicShareToken = crypto.randomUUID().replace(/-/g, '');
+            payload.public_share_token = invoice.publicShareToken;
+            payload.public_share_enabled = !!invoice.publicShareEnabled;
+          }
+
           const { data, error } = await cloud.client
             .from('invoices')
             .insert(payload)
