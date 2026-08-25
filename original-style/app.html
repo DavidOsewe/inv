@@ -2616,10 +2616,14 @@ function persist(s) {
     db.invoices[n] = toSave;
   }
   save();
-  if (isNew) track('invoice_created', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
+  if (isNew) {
+    track('invoice_created', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
+    track('invoice_activation', { invoice_id: edit.id, invoice_number: edit.number, activation: 'first_invoice_created' });
+  }
   if (s === 'Sent') track('invoice_sent', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
   ensurePayments(edit);
   syncPaidFlag(edit);
+  if (edit.paid) track('invoice_paid', { invoice_id: edit.cloudId || edit.id, invoice_number: edit.number, currency: edit.currency });
   toast(edit.paid ? 'Invoice paid in full.' : amountPaid(edit) > 0 ? 'Invoice saved (partially paid).' : s === 'Sent' ? 'Invoice marked as sent.' : 'Draft saved.');
   switchTo('invoices');
   if (isNew) maybePromptSignup();
@@ -3305,20 +3309,170 @@ async function pushCloudState() {
   }
 }
 
+/* ---------- Growth attribution + funnel analytics ---------- */
+const ATTRIBUTION_KEY = 'invoicedey-attribution-v1';
+const ANON_ID_KEY = 'invoicedey-anonymous-id';
+const SESSION_ID_KEY = 'invoicedey-session';
+
+function uuidLike() {
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 3 | 8);
+    return v.toString(16);
+  });
+}
+
+function getAnonymousId() {
+  let id = localStorage.getItem(ANON_ID_KEY);
+  if (!id) {
+    id = uuidLike();
+    localStorage.setItem(ANON_ID_KEY, id);
+  }
+  return id;
+}
+
+function getSessionId() {
+  let id = sessionStorage.getItem(SESSION_ID_KEY);
+  if (!id) {
+    id = uuidLike();
+    sessionStorage.setItem(SESSION_ID_KEY, id);
+  }
+  return id;
+}
+
+function readAttribution() {
+  try { return JSON.parse(localStorage.getItem(ATTRIBUTION_KEY) || 'null'); }
+  catch { return null; }
+}
+
+function captureAttribution() {
+  const params = new URLSearchParams(window.location.search);
+  const keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
+  const incoming = {};
+  let hasCampaign = false;
+
+  for (const key of keys) {
+    const value = (params.get(key) || '').trim();
+    if (value) {
+      incoming[key] = value;
+      hasCampaign = true;
+    }
+  }
+
+  const existing = readAttribution();
+  const now = new Date().toISOString();
+
+  if (!existing) {
+    const first = {
+      source: incoming.utm_source || 'direct',
+      medium: incoming.utm_medium || 'none',
+      campaign: incoming.utm_campaign || '',
+      content: incoming.utm_content || '',
+      term: incoming.utm_term || '',
+      landing_page: window.location.pathname || '/',
+      referrer: document.referrer || '',
+      first_touch: true,
+      last_touch: true,
+      touched_at: now,
+      attribution_version: 'v2'
+    };
+    localStorage.setItem(ATTRIBUTION_KEY, JSON.stringify(first));
+    return first;
+  }
+
+  if (hasCampaign) {
+    const updated = {
+      ...existing,
+      source: incoming.utm_source || existing.source || 'direct',
+      medium: incoming.utm_medium || existing.medium || 'none',
+      campaign: incoming.utm_campaign ?? existing.campaign ?? '',
+      content: incoming.utm_content ?? existing.content ?? '',
+      term: incoming.utm_term ?? existing.term ?? '',
+      referrer: document.referrer || existing.referrer || '',
+      last_touch: true,
+      touched_at: now,
+      attribution_version: 'v2'
+    };
+    localStorage.setItem(ATTRIBUTION_KEY, JSON.stringify(updated));
+    return updated;
+  }
+
+  return existing;
+}
+
+function attributionPayload() {
+  const a = readAttribution() || captureAttribution();
+  return {
+    anonymous_id: getAnonymousId(),
+    source: a?.source || 'direct',
+    medium: a?.medium || 'none',
+    campaign: a?.campaign || '',
+    content: a?.content || '',
+    term: a?.term || '',
+    landing_page: a?.landing_page || window.location.pathname || '/',
+    referrer: a?.referrer || document.referrer || '',
+    first_touch: !!a?.first_touch,
+    last_touch: true,
+    touched_at: a?.touched_at || new Date().toISOString(),
+    metadata: {
+      attribution_version: 'v2',
+      landing_page: window.location.pathname || '/',
+      ...((a?.metadata && typeof a.metadata === 'object') ? a.metadata : {})
+    }
+  };
+}
+
+function withAttribution(url) {
+  try {
+    const u = new URL(url, window.location.href);
+    const a = readAttribution();
+    if (a?.source && a.source !== 'direct') {
+      u.searchParams.set('utm_source', a.source);
+      u.searchParams.set('utm_medium', a.medium || 'none');
+      if (a.campaign) u.searchParams.set('utm_campaign', a.campaign);
+      if (a.content) u.searchParams.set('utm_content', a.content);
+      if (a.term) u.searchParams.set('utm_term', a.term);
+    }
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 async function track(eventName, metadata = {}) {
   try {
     const client = cloud.client || await getSupabase();
     if (!client) return;
-    await client.from('analytics_events').insert({
+
+    const a = attributionPayload();
+    const row = {
       event_name: eventName,
+      anonymous_id: a.anonymous_id,
       user_id: cloud.user?.id || null,
-      session_id: sessionStorage.getItem('invoicedey-session') || null,
-      metadata
-    });
+      session_id: getSessionId(),
+      source: a.source,
+      medium: a.medium,
+      campaign: a.campaign,
+      content: a.content,
+      term: a.term,
+      landing_page: a.landing_page,
+      referrer: a.referrer,
+      first_touch: a.first_touch,
+      last_touch: a.last_touch,
+      touched_at: a.touched_at,
+      metadata: { ...a.metadata, ...metadata }
+    };
+
+    const { error } = await client.from('analytics_events').insert(row);
+    if (error) console.debug('analytics', error.message || error);
   } catch (e) {
     console.debug('analytics', e.message || e);
   }
 }
+
+captureAttribution();
+getAnonymousId();
+getSessionId();
 
 function ensureEditSavedForShare() {
   if (!edit) return null;
@@ -3495,11 +3649,12 @@ async function startCloudSync(client, user) {
   }
 }
 
-track('app_opened');
+track('app_opened', { funnel_stage: 'visit' });
 
 const growthSignupLink = document.getElementById('growthSignup');
 if (growthSignupLink) {
   growthSignupLink.addEventListener('click', () => {
+    growthSignupLink.href = withAttribution('index.html');
     track('signup_cta_clicked', { source: 'growth_modal' });
   });
 }
@@ -3515,7 +3670,7 @@ if (growthSignupLink) {
       const signupKey = 'invoicedey-signup-completed-' + session.user.id;
       if (!localStorage.getItem(signupKey)) {
         localStorage.setItem(signupKey, '1');
-        await track('signup_completed', { source: 'auth_session' });
+        await track('signup_completed', { source: 'auth_session', funnel_stage: 'signup' });
       }
       await syncProfile(client, session.user);
       await startCloudSync(client, session.user);
