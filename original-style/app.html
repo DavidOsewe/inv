@@ -1870,9 +1870,15 @@ function persistDb() {
 
 /* ---------- Growth foundation ---------- */
 const FREE_INVOICE_LIMIT = 3;
-const GROWTH_USAGE_KEY = 'invoicedey-growth-v2';
+const GROWTH_USAGE_KEY = 'invoicedey-growth-v3';
+const ANON_GROWTH_USAGE_KEY = 'invoicedey-growth-v3-anon';
+
 function growthUsageKey() {
-  return GROWTH_USAGE_KEY + '-' + (activeUserId || 'anon');
+  // Authenticated users always get their own independent allowance.
+  // Anonymous usage is deliberately kept in a separate browser bucket.
+  return activeUserId
+    ? GROWTH_USAGE_KEY + '-user-' + activeUserId
+    : ANON_GROWTH_USAGE_KEY;
 }
 function growthMonthKey() {
   const d = new Date();
@@ -3055,7 +3061,7 @@ switchTo('dashboard');
 
 /* Shared account status + profile sync (magic link only — no payments) */
 const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
-const SUPABASE_PUBLISHABLE_KEY = 'publishable key here';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
 
 async function getSupabase() {
   // Supabase is configured with the public URL + anon/publishable key.
@@ -3438,6 +3444,9 @@ async function startCloudSync(client, user) {
   // Never carry the previous user's db, cloud IDs, clients or invoices.
   activeUserId = user.id;
   loadUserLocalDb(user.id);
+
+  // Switch the growth meter immediately to this user's allowance.
+  // Never display the previous/anonymous account's counter.
   updateGrowthMeter();
   dashboard();
 
@@ -3505,9 +3514,17 @@ if (growthSignupLink) {
       cloud.syncing = false;
       activeUserId = null;
       loadDefaultDb();
+
+      // Anonymous growth usage uses the fresh v3 bucket. This prevents
+      // counters from older app versions from leaking into a new session.
+      localStorage.removeItem('invoicedey-growth-v1');
+      localStorage.removeItem('invoicedey-growth-v2');
+      updateGrowthMeter();
+
       // Do not copy the signed-in user's data into anonymous/global storage.
       // The next account will load its own user-scoped cache after auth.
       localStorage.removeItem(ANON_DB_KEY);
+      localStorage.removeItem('invoicedey-v2');
       dashboard();
       await client.auth.signOut();
       toast('Logged out.');
