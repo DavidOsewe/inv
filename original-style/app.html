@@ -1870,7 +1870,10 @@ function persistDb() {
 
 /* ---------- Growth foundation ---------- */
 const FREE_INVOICE_LIMIT = 3;
-const GROWTH_USAGE_KEY = 'invoicedey-growth-v1';
+const GROWTH_USAGE_KEY = 'invoicedey-growth-v2';
+function growthUsageKey() {
+  return GROWTH_USAGE_KEY + '-' + (activeUserId || 'anon');
+}
 function growthMonthKey() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
@@ -1878,11 +1881,11 @@ function growthMonthKey() {
 function getGrowthUsage() {
   const month = growthMonthKey();
   let usage = null;
-  try { usage = JSON.parse(localStorage.getItem(GROWTH_USAGE_KEY) || 'null'); } catch {}
+  try { usage = JSON.parse(localStorage.getItem(growthUsageKey()) || 'null'); } catch {}
   if (!usage || usage.month !== month) usage = { month, invoicesCreated: 0, signupPrompted: false };
   return usage;
 }
-function saveGrowthUsage(usage) { localStorage.setItem(GROWTH_USAGE_KEY, JSON.stringify(usage)); }
+function saveGrowthUsage(usage) { localStorage.setItem(growthUsageKey(), JSON.stringify(usage)); }
 function freeInvoicesRemaining() { return Math.max(0, FREE_INVOICE_LIMIT - getGrowthUsage().invoicesCreated); }
 function canCreateFreeInvoice() {
   if (freeInvoicesRemaining() > 0) return true;
@@ -3435,6 +3438,7 @@ async function startCloudSync(client, user) {
   // Never carry the previous user's db, cloud IDs, clients or invoices.
   activeUserId = user.id;
   loadUserLocalDb(user.id);
+  updateGrowthMeter();
   dashboard();
 
   try {
