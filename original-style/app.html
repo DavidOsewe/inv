@@ -3355,19 +3355,50 @@ async function shareInvoice() {
     const organizationId = await ensureCloudOrganization();
     await syncOrganizationProfile(organizationId);
     await pushCloudState();
-    const token = invoice.publicShareToken || crypto.randomUUID().replace(/-/g, '');
+
+    /*
+      pushCloudState() can reconnect a local invoice to a cloud invoice by
+      number. Re-read the invoice after sync so sharing NEVER sends an
+      undefined invoice.cloudId to PostgREST.
+    */
+    const refreshedInvoice =
+      db.invoices.find(i => i.id === invoice.id) ||
+      invoice;
+
+    if (!refreshedInvoice.cloudId) {
+      const { data: cloudInvoice, error: lookupError } = await cloud.client
+        .from('invoices')
+        .select('id, public_share_token, public_share_enabled')
+        .eq('organization_id', organizationId)
+        .eq('invoice_number', refreshedInvoice.number)
+        .maybeSingle();
+
+      if (lookupError) throw lookupError;
+      if (!cloudInvoice?.id) {
+        throw new Error('Invoice has not finished syncing to the cloud. Please save the invoice and try Share again.');
+      }
+
+      refreshedInvoice.cloudId = cloudInvoice.id;
+      refreshedInvoice.publicShareToken =
+        cloudInvoice.public_share_token || refreshedInvoice.publicShareToken || '';
+      refreshedInvoice.publicShareEnabled = !!cloudInvoice.public_share_enabled;
+      save();
+    }
+
+    const token = refreshedInvoice.publicShareToken || crypto.randomUUID().replace(/-/g, '');
     const { error } = await cloud.client.from('invoices').update({
       public_share_token: token,
       public_share_enabled: true,
       public_shared_at: new Date().toISOString()
-    }).eq('id', invoice.cloudId).eq('organization_id', organizationId);
+    }).eq('id', refreshedInvoice.cloudId).eq('organization_id', organizationId);
     if (error) throw error;
-    invoice.publicShareToken = token;
-    invoice.publicShareEnabled = true;
+
+    refreshedInvoice.publicShareToken = token;
+    refreshedInvoice.publicShareEnabled = true;
     save();
     const url = window.location.origin + '/invoice.html?token=' + encodeURIComponent(token);
     try { await navigator.clipboard.writeText(url); } catch {}
-    await track('invoice_shared', { invoice_id: invoice.cloudId, invoice_number: invoice.number });
+    await track('invoice_shared', { invoice_id: refreshedInvoice.cloudId, invoice_number: refreshedInvoice.number });
     toast('Share link copied.');
     return url;
   } catch (error) {
