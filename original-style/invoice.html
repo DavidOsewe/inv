@@ -166,19 +166,47 @@ function render(data) {
         data.invoice.id || data.invoice.invoice_id || data.invoice.invoice_number
       );
 
-      // Count one invoice view per browser session, rather than refreshing
-      // the same invoice repeatedly as multiple views.
+      // One view per invoice per browser session.
       if (!sessionStorage.getItem(viewKey)) {
         sessionStorage.setItem(viewKey, '1');
 
-        await trackPublic('public_invoice_viewed', {
+        const viewMetadata = {
           invoice_id: data.invoice.id || data.invoice.invoice_id || null,
           invoice_number: data.invoice.invoice_number,
           currency: data.invoice.currency,
           status: data.invoice.status,
           page_url: location.href,
           referrer: document.referrer || null
-        });
+        };
+
+        // Existing public analytics stream.
+        await trackPublic('public_invoice_viewed', viewMetadata);
+
+        // Unified growth funnel stream.
+        // The public invoice page is unauthenticated, so this event intentionally
+        // has no user_id/organization_id; invoice_id is the attribution bridge.
+        try {
+          const growthClient = window.supabaseClient || window.supabase ||
+            (window.supabase?.createClient ? window.supabase : null);
+
+          if (growthClient?.from) {
+            await growthClient.from('product_events').insert({
+              user_id: null,
+              organization_id: null,
+              event_name: 'invoice_viewed',
+              invoice_id: viewMetadata.invoice_id,
+              client_id: null,
+              session_id: sessionStorage.getItem('invoicedey-session') || null,
+              anonymous_id: localStorage.getItem('invoicedey-anonymous-id') || null,
+              metadata: {
+                ...viewMetadata,
+                attribution_source: 'public_invoice'
+              }
+            });
+          }
+        } catch (growthError) {
+          console.debug('growth invoice_viewed', growthError.message || growthError);
+        }
       }
     }
     const printBtn = document.getElementById('publicPrintBtn');
