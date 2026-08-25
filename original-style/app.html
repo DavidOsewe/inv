@@ -3960,19 +3960,63 @@ function openPrintDocument(title, bodyHtml) {
   return w;
 }
 
-function printInvoice() {
+async function printInvoice() {
   if (!edit) {
     toast('Open an invoice first to print.');
     return;
   }
-  track('invoice_downloaded', { invoice_id: edit.cloudId || edit.id, invoice_number: edit.number, format: 'print_pdf' });
+
+  // Resolve the canonical Supabase invoice UUID before analytics is written.
+  // A stale/local browser invoice ID must never be mixed with the cloud ID
+  // used by invoice_created / invoice_shared / invoice_sent.
+  try {
+    if (cloud.client && cloud.user) {
+      clearTimeout(cloud.timer);
+      cloud.timer = null;
+      await pushCloudState();
+    }
+  } catch (e) {
+    console.debug('invoice download sync', e.message || e);
+  }
+
+  const currentInvoice = db.invoices.find(i => i.id === edit.id) || edit;
+  let invoiceId = currentInvoice.cloudId || null;
+
+  // Defensive fallback: if the local record still has no cloudId, resolve it
+  // from the authenticated user's organization + invoice number.
+  if (!invoiceId && cloud.client && cloud.user) {
+    try {
+      const organizationId = cloud.organizationId || await ensureCloudOrganization();
+      const { data, error } = await cloud.client
+        .from('invoices')
+        .select('id')
+        .eq('organization_id', organizationId)
+        .eq('invoice_number', currentInvoice.number)
+        .maybeSingle();
+      if (error) throw error;
+      if (data?.id) {
+        currentInvoice.cloudId = data.id;
+        invoiceId = data.id;
+        save();
+      }
+    } catch (e) {
+      console.debug('invoice download cloud-id lookup', e.message || e);
+    }
+  }
+
+  await track('invoice_downloaded', {
+    invoice_id: invoiceId || currentInvoice.id,
+    invoice_number: currentInvoice.number,
+    format: 'print_pdf'
+  });
+
   try { preview(); } catch (e) {}
   const panel = document.getElementById('previewPanel');
   if (!panel) {
     toast('Invoice preview not found.');
     return;
   }
-  openPrintDocument(edit.number || 'Invoice', panel.innerHTML);
+  openPrintDocument(currentInvoice.number || 'Invoice', panel.innerHTML);
 }
 
 function buildReceiptHtml(inv, payment) {
