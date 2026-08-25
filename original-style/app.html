@@ -3445,22 +3445,36 @@ async function track(eventName, metadata = {}) {
     if (!client) return;
 
     const a = attributionPayload();
+
+    /*
+      analytics_events in the current Supabase schema has:
+      id, event_name, user_id, session_id, metadata, created_at, attribution.
+
+      Keep attribution as one JSONB object so the event writer matches the
+      actual production schema and preserves the complete funnel context.
+    */
     const row = {
       event_name: eventName,
-      anonymous_id: a.anonymous_id,
       user_id: cloud.user?.id || null,
       session_id: getSessionId(),
-      source: a.source,
-      medium: a.medium,
-      campaign: a.campaign,
-      content: a.content,
-      term: a.term,
-      landing_page: a.landing_page,
-      referrer: a.referrer,
-      first_touch: a.first_touch,
-      last_touch: a.last_touch,
-      touched_at: a.touched_at,
-      metadata: { ...a.metadata, ...metadata }
+      metadata: {
+        ...a.metadata,
+        ...metadata
+      },
+      attribution: {
+        anonymous_id: a.anonymous_id,
+        source: a.source,
+        medium: a.medium,
+        campaign: a.campaign,
+        content: a.content,
+        term: a.term,
+        landing_page: a.landing_page,
+        referrer: a.referrer,
+        first_touch: a.first_touch,
+        last_touch: a.last_touch,
+        touched_at: a.touched_at,
+        attribution_version: 'v2'
+      }
     };
 
     const { error } = await client.from('analytics_events').insert(row);
