@@ -3419,8 +3419,13 @@ function captureAttribution() {
     }
   }
 
-  // Referral is independent of UTM attribution and can coexist with it.
-  const incomingReferral = (params.get('ref') || params.get('referral') || '').trim().toUpperCase();
+  // Referral code is independent of UTM attribution and can coexist with it.
+  const incomingReferral = (
+    params.get('ref') ||
+    params.get('referral') ||
+    params.get('referral_code') ||
+    ''
+  ).trim().toUpperCase();
   const hasReferral = !!incomingReferral;
 
   const existing = readAttribution();
@@ -3428,8 +3433,8 @@ function captureAttribution() {
 
   if (!existing) {
     const first = {
-      source: incoming.utm_source || 'direct',
-      medium: incoming.utm_medium || 'none',
+      source: incoming.utm_source || (hasReferral ? 'referral' : 'direct'),
+      medium: incoming.utm_medium || (hasReferral ? 'referral' : 'none'),
       campaign: incoming.utm_campaign || '',
       content: incoming.utm_content || '',
       term: incoming.utm_term || '',
@@ -3451,8 +3456,8 @@ function captureAttribution() {
   if (hasCampaign || hasReferral) {
     const updated = {
       ...existing,
-      source: incoming.utm_source || existing.source || 'direct',
-      medium: incoming.utm_medium || existing.medium || 'none',
+      source: incoming.utm_source || (hasReferral ? 'referral' : existing.source || 'direct'),
+      medium: incoming.utm_medium || (hasReferral ? 'referral' : existing.medium || 'none'),
       campaign: incoming.utm_campaign ?? existing.campaign ?? '',
       content: incoming.utm_content ?? existing.content ?? '',
       term: incoming.utm_term ?? existing.term ?? '',
@@ -3490,10 +3495,6 @@ function attributionPayload() {
     metadata: {
       attribution_version: 'v3',
       landing_page: window.location.pathname || '/',
-      referral_code: a?.referral_code || '',
-      country_code: a?.country_code || '',
-      region: a?.region || '',
-      city: a?.city || '',
       ...((a?.metadata && typeof a.metadata === 'object') ? a.metadata : {})
     }
   };
@@ -3510,9 +3511,7 @@ function withAttribution(url) {
       if (a.content) u.searchParams.set('utm_content', a.content);
       if (a.term) u.searchParams.set('utm_term', a.term);
     }
-    if (a?.referral_code) {
-      u.searchParams.set('ref', a.referral_code);
-    }
+    if (a?.referral_code) u.searchParams.set('ref', a.referral_code);
     return u.toString();
   } catch {
     return url;
@@ -3526,6 +3525,13 @@ async function track(eventName, metadata = {}) {
 
     const a = attributionPayload();
 
+    /*
+      analytics_events in the current Supabase schema has:
+      id, event_name, user_id, session_id, metadata, created_at, attribution.
+
+      Keep attribution as one JSONB object so the event writer matches the
+      actual production schema and preserves the complete funnel context.
+    */
     const row = {
       event_name: eventName,
       user_id: cloud.user?.id || null,
@@ -3561,7 +3567,8 @@ async function track(eventName, metadata = {}) {
   }
 }
 
-// Capture attribution before authentication or funnel events.
+// Capture UTM parameters before any authentication, redirect, or funnel event.
+// The URL has already been verified to preserve the UTM query string.
 getAnonymousId();
 getSessionId();
 localStorage.removeItem('invoicedey-attribution-v1');
