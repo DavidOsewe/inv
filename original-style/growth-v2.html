@@ -23,6 +23,7 @@ button:hover{background:var(--soft)}
 h1{font-size:32px;letter-spacing:-1.2px;margin:0 0 6px}
 .sub{color:var(--muted);margin:0 0 26px}
 .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:18px}
+.revenue-grid{grid-template-columns:repeat(4,1fr)}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
 .label{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700}
 .value{font-size:32px;font-weight:800;letter-spacing:-1px;margin-top:8px}
@@ -43,7 +44,7 @@ td.num,th.num{text-align:right}
 .status{font-size:12px;color:var(--muted)}
 .error{background:#fff1f1;border:1px solid #ffd0d0;color:#9b1c1c;padding:12px;border-radius:10px;margin-bottom:16px;display:none}
 .loading{opacity:.55}
-@media(max-width:1100px){.grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:1100px){.grid,.revenue-grid{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}}
 @media(max-width:520px){.wrap{padding:20px 14px}.grid{grid-template-columns:1fr 1fr}h1{font-size:27px}.value{font-size:27px}.user{display:none}input[type=date]{width:100%}}
 </style>
@@ -60,7 +61,7 @@ td.num,th.num{text-align:right}
 </header>
 
 <h1>Growth dashboard</h1>
-<p class="sub">Acquisition → activation → invoice usage. <span id="updated">Not loaded</span></p>
+<p class="sub">Acquisition → activation → invoices → revenue. <span id="updated">Not loaded</span></p>
 <div class="card" style="margin-bottom:18px;padding:14px 16px">
   <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
     <div>
@@ -87,6 +88,13 @@ td.num,th.num{text-align:right}
   <div class="card"><div class="label">Activated</div><div class="value" id="kActivated">—</div><div class="note">created first invoice</div></div>
   <div class="card"><div class="label">Activation rate</div><div class="value" id="kRate">—</div><div class="note">signup → activation</div></div>
   <div class="card"><div class="label">Invoices</div><div class="value" id="kInvoices">—</div><div class="note">created</div></div>
+</section>
+
+<section class="grid revenue-grid" id="revenueKpis">
+  <div class="card"><div class="label">Paid users</div><div class="value" id="kPaidUsers">—</div><div class="note">active paying users</div></div>
+  <div class="card"><div class="label">Active subscriptions</div><div class="value" id="kSubscriptions">—</div><div class="note">current subscriptions</div></div>
+  <div class="card"><div class="label">MRR</div><div class="value" id="kMrr">$0</div><div class="note">monthly recurring revenue</div></div>
+  <div class="card"><div class="label">Revenue</div><div class="value" id="kRevenue">$0</div><div class="note">subscription revenue</div></div>
 </section>
 
 <section class="two">
@@ -117,6 +125,21 @@ td.num,th.num{text-align:right}
     <div class="status" id="rowStatus" style="margin-top:12px"></div>
   </div>
 </section>
+
+<section class="card" style="margin-top:18px">
+  <div class="section-title">Revenue by campaign</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Source</th><th>Campaign</th><th>Content</th>
+        <th class="num">Paid users</th><th class="num">Subscriptions</th>
+        <th class="num">MRR</th><th class="num">Revenue</th>
+      </tr></thead>
+      <tbody id="revenueRows"></tbody>
+    </table>
+  </div>
+  <div class="status" id="revenueStatus" style="margin-top:12px"></div>
+</section>
 </div>
 
 <script>
@@ -128,6 +151,18 @@ const $ = id => document.getElementById(id);
 const n = v => Number(v || 0);
 const fmt = v => n(v).toLocaleString();
 const pct = v => `${n(v).toFixed(2)}%`;
+const money = (v, currency='USD') => {
+  const amount = n(v);
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style:'currency',
+      currency: currency || 'USD',
+      maximumFractionDigits: 2
+    }).format(amount);
+  } catch {
+    return '$' + amount.toFixed(2);
+  }
+};
 
 async function requireSession(){
   const {data:{session}, error} = await client.auth.getSession();
@@ -147,6 +182,67 @@ async function requireSession(){
 
 function setBar(id, value, max){
   $(id).style.width = max > 0 ? Math.min(100, (value / max) * 100) + '%' : '0%';
+}
+
+
+let revenueRows = [];
+
+function campaignKey(r){
+  return [
+    r.source || 'direct',
+    r.medium || 'none',
+    r.campaign || '(none)',
+    r.content || '(none)'
+  ].join('|||');
+}
+
+function resetRevenue(){
+  $('kPaidUsers').textContent='0';
+  $('kSubscriptions').textContent='0';
+  $('kMrr').textContent=money(0);
+  $('kRevenue').textContent=money(0);
+  $('revenueRows').innerHTML='<tr><td colspan="7" class="empty">No paid subscriptions for this period.</td></tr>';
+  $('revenueStatus').textContent='0 revenue groups';
+}
+
+function renderRevenue(rows){
+  revenueRows = rows || [];
+
+  let paidUsers=0, subscriptions=0, mrr=0, revenue=0;
+
+  // The RPC returns distinct campaign rows. Summing here gives the dashboard totals.
+  revenueRows.forEach(r=>{
+    paidUsers += n(r.paying_users);
+    subscriptions += n(r.active_subscriptions);
+    mrr += n(r.mrr);
+    revenue += n(r.revenue);
+  });
+
+  $('kPaidUsers').textContent=fmt(paidUsers);
+  $('kSubscriptions').textContent=fmt(subscriptions);
+
+  // Revenue RPC currently defaults currency to USD. If a future provider
+  // introduces multiple currencies, we will split totals by currency then.
+  $('kMrr').textContent=money(mrr);
+  $('kRevenue').textContent=money(revenue);
+
+  if(!revenueRows.length){
+    $('revenueRows').innerHTML='<tr><td colspan="7" class="empty">No paid subscriptions for this period.</td></tr>';
+  } else {
+    $('revenueRows').innerHTML=revenueRows.map(r=>`
+      <tr>
+        <td>${esc(r.source || 'direct')}</td>
+        <td><strong>${esc(r.campaign || '(none)')}</strong></td>
+        <td>${esc(r.content || '(none)')}</td>
+        <td class="num">${fmt(r.paying_users)}</td>
+        <td class="num">${fmt(r.active_subscriptions)}</td>
+        <td class="num">${money(r.mrr)}</td>
+        <td class="num">${money(r.revenue)}</td>
+      </tr>
+    `).join('');
+  }
+
+  $('revenueStatus').textContent=`${revenueRows.length} revenue groups`;
 }
 
 function render(rows){
@@ -258,24 +354,50 @@ function setRange(start, end){
 async function load(){
   $('error').style.display='none';
   $('kpis').classList.add('loading');
-  try{
-    // The SQL RPC is date-aware. It uses signup_at for acquisition/activation
-    // and event created_at for invoice activity.
-    const start = dateRange.start ? `${dateRange.start}T00:00:00` : '1970-01-01T00:00:00';
-    const end = dateRange.end ? `${dateRange.end}T23:59:59.999` : '2999-12-31T23:59:59.999';
+  $('revenueKpis').classList.add('loading');
 
-    const {data,error}=await client.rpc('get_growth_campaign_dashboard', {
+  try{
+    const start = dateRange.start
+      ? `${dateRange.start}T00:00:00`
+      : '1970-01-01T00:00:00';
+
+    const end = dateRange.end
+      ? `${dateRange.end}T23:59:59.999`
+      : '2999-12-31T23:59:59.999';
+
+    const params = {
       p_start: start,
       p_end: end
-    });
+    };
 
-    if(error) throw error;
-    render(data || []);
+    const [growthResult, revenueResult] = await Promise.all([
+      client.rpc('get_growth_campaign_dashboard', params),
+      client.rpc('get_growth_revenue_dashboard', params)
+    ]);
+
+    if(growthResult.error) throw growthResult.error;
+    if(revenueResult.error) throw revenueResult.error;
+
+    render(growthResult.data || []);
+    renderRevenue(revenueResult.data || []);
+
   }catch(e){
+    if (e?.code === '42501' || String(e?.message || '').toLowerCase().includes('access denied')) {
+      document.body.innerHTML = `
+        <div style="max-width:520px;margin:15vh auto;padding:32px;text-align:center;font-family:system-ui">
+          <h2>Growth Dashboard</h2>
+          <p style="color:#737373">You don't have permission to access this page.</p>
+          <button onclick="location.href='/'" style="background:#111;color:#fff;border-color:#111">Back to InvoiceDey</button>
+        </div>`;
+      return;
+    }
+
     $('error').textContent='Could not load growth data: ' + (e?.message || e);
     $('error').style.display='block';
+    resetRevenue();
   }finally{
     $('kpis').classList.remove('loading');
+    $('revenueKpis').classList.remove('loading');
   }
 }
 
@@ -316,3 +438,4 @@ $('logoutBtn').onclick=async()=>{await client.auth.signOut();location.href='/'};
 })();
 </script>
 </body>
+</html>
