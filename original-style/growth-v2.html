@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>InvoiceDey Growth</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{
+  --bg:#f7f7f5; --panel:#fff; --text:#171717; --muted:#737373;
+  --line:#e8e8e5; --accent:#111; --soft:#f1f1ee; --good:#16834b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 22px 60px}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}
+.brand{font-size:22px;font-weight:800;letter-spacing:-.7px}
+.brand em{font-style:normal;font-weight:500}
+.header-right{display:flex;gap:10px;align-items:center}
+.user{font-size:13px;color:var(--muted)}
+button{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 13px;cursor:pointer;font-weight:650}
+button:hover{background:var(--soft)}
+h1{font-size:32px;letter-spacing:-1.2px;margin:0 0 6px}
+.sub{color:var(--muted);margin:0 0 26px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+.label{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700}
+.value{font-size:32px;font-weight:800;letter-spacing:-1px;margin-top:8px}
+.note{font-size:12px;color:var(--muted);margin-top:4px}
+.two{display:grid;grid-template-columns:1fr 1.45fr;gap:18px;margin-bottom:18px}
+.section-title{font-size:15px;font-weight:800;margin:0 0 16px}
+.funnel-row{margin:14px 0}
+.funnel-top{display:flex;justify-content:space-between;font-size:13px;margin-bottom:7px}
+.bar{height:10px;background:#ededeb;border-radius:99px;overflow:hidden}
+.fill{height:100%;background:#111;border-radius:99px;min-width:0}
+.table-wrap{overflow:auto}
+table{width:100%;border-collapse:collapse;min-width:760px}
+th,td{padding:13px 12px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;white-space:nowrap}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+td.num,th.num{text-align:right}
+.badge{display:inline-block;padding:4px 8px;border-radius:99px;background:#edf7f1;color:var(--good);font-size:11px;font-weight:800}
+.empty{padding:30px;text-align:center;color:var(--muted)}
+.status{font-size:12px;color:var(--muted)}
+.error{background:#fff1f1;border:1px solid #ffd0d0;color:#9b1c1c;padding:12px;border-radius:10px;margin-bottom:16px;display:none}
+.loading{opacity:.55}
+@media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}}
+@media(max-width:520px){.wrap{padding:20px 14px}.grid{grid-template-columns:1fr 1fr}h1{font-size:27px}.value{font-size:27px}.user{display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="brand">invoice<em>dey</em> <span style="font-weight:500;color:#888">/ Growth</span></div>
+  <div class="header-right">
+    <span class="user" id="userEmail"></span>
+    <button id="refreshBtn">Refresh</button>
+    <button id="logoutBtn">Log out</button>
+  </div>
+</header>
+
+<h1>Growth dashboard</h1>
+<p class="sub">Acquisition → activation → invoice usage. <span id="updated">Not loaded</span></p>
+<div id="error" class="error"></div>
+
+<section class="grid" id="kpis">
+  <div class="card"><div class="label">Signups</div><div class="value" id="kSignups">—</div><div class="note">identified users</div></div>
+  <div class="card"><div class="label">Activated</div><div class="value" id="kActivated">—</div><div class="note">created first invoice</div></div>
+  <div class="card"><div class="label">Activation rate</div><div class="value" id="kRate">—</div><div class="note">signup → activation</div></div>
+  <div class="card"><div class="label">Invoices</div><div class="value" id="kInvoices">—</div><div class="note">created</div></div>
+</section>
+
+<section class="two">
+  <div class="card">
+    <div class="section-title">Product funnel</div>
+    <div class="funnel-row"><div class="funnel-top"><span>Signups</span><b id="fSignups">—</b></div><div class="bar"><div class="fill" id="bSignups"></div></div></div>
+    <div class="funnel-row"><div class="funnel-top"><span>Activated</span><b id="fActivated">—</b></div><div class="bar"><div class="fill" id="bActivated"></div></div></div>
+    <div class="funnel-row"><div class="funnel-top"><span>Invoices created</span><b id="fCreated">—</b></div><div class="bar"><div class="fill" id="bCreated"></div></div></div>
+    <div class="funnel-row"><div class="funnel-top"><span>Invoices sent</span><b id="fSent">—</b></div><div class="bar"><div class="fill" id="bSent"></div></div></div>
+    <div class="funnel-row"><div class="funnel-top"><span>Invoices shared</span><b id="fShared">—</b></div><div class="bar"><div class="fill" id="bShared"></div></div></div>
+    <div class="funnel-row"><div class="funnel-top"><span>Invoices downloaded</span><b id="fDownloaded">—</b></div><div class="bar"><div class="fill" id="bDownloaded"></div></div></div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">Campaign performance</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Source</th><th>Campaign</th><th>Content</th>
+          <th class="num">Signups</th><th class="num">Activated</th><th class="num">Rate</th>
+          <th class="num">Created</th><th class="num">Sent</th><th class="num">Shared</th><th class="num">Downloaded</th>
+        </tr></thead>
+        <tbody id="campaignRows"></tbody>
+      </table>
+    </div>
+    <div class="status" id="rowStatus" style="margin-top:12px"></div>
+  </div>
+</section>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
+const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+const $ = id => document.getElementById(id);
+const n = v => Number(v || 0);
+const fmt = v => n(v).toLocaleString();
+const pct = v => `${n(v).toFixed(2)}%`;
+
+async function requireSession(){
+  const {data:{session}, error} = await client.auth.getSession();
+  if(error) throw error;
+  if(!session){
+    document.body.innerHTML = `
+      <div style="max-width:460px;margin:15vh auto;padding:24px;text-align:center;font-family:system-ui">
+        <h2>Growth dashboard</h2>
+        <p style="color:#737373">You need to sign in before viewing growth data.</p>
+        <a href="/" style="display:inline-block;background:#111;color:#fff;text-decoration:none;padding:11px 18px;border-radius:9px">Sign in</a>
+      </div>`;
+    return null;
+  }
+  $('userEmail').textContent = session.user.email || '';
+  return session;
+}
+
+function setBar(id, value, max){
+  $(id).style.width = max > 0 ? Math.min(100, (value / max) * 100) + '%' : '0%';
+}
+
+function render(rows){
+  let signups=0, activated=0, created=0, sent=0, shared=0, downloaded=0;
+  rows.forEach(r=>{
+    signups += n(r.signups);
+    activated += n(r.activated_users);
+    created += n(r.invoices_created);
+    sent += n(r.invoices_sent);
+    shared += n(r.invoices_shared);
+    downloaded += n(r.invoices_downloaded);
+  });
+
+  $('kSignups').textContent=fmt(signups);
+  $('kActivated').textContent=fmt(activated);
+  $('kRate').textContent=signups ? pct(activated/signups*100) : '0.00%';
+  $('kInvoices').textContent=fmt(created);
+
+  const funnelMax=Math.max(signups,activated,created,sent,shared,downloaded,1);
+  const pairs=[
+    ['fSignups','bSignups',signups],['fActivated','bActivated',activated],
+    ['fCreated','bCreated',created],['fSent','bSent',sent],
+    ['fShared','bShared',shared],['fDownloaded','bDownloaded',downloaded]
+  ];
+  pairs.forEach(([label,bar,val])=>{$(label).textContent=fmt(val);setBar(bar,val,funnelMax)});
+
+  const tbody=$('campaignRows');
+  if(!rows.length){
+    tbody.innerHTML='<tr><td colspan="10" class="empty">No campaign data yet.</td></tr>';
+  } else {
+    tbody.innerHTML=rows.map(r=>{
+      const rate=n(r.activation_rate);
+      return `<tr>
+        <td>${esc(r.source || 'direct')}</td>
+        <td><strong>${esc(r.campaign || '(none)')}</strong></td>
+        <td>${esc(r.content || '(none)')}</td>
+        <td class="num">${fmt(r.signups)}</td>
+        <td class="num">${fmt(r.activated_users)}</td>
+        <td class="num">${rate ? `<span class="badge">${rate.toFixed(2)}%</span>` : '0.00%'}</td>
+        <td class="num">${fmt(r.invoices_created)}</td>
+        <td class="num">${fmt(r.invoices_sent)}</td>
+        <td class="num">${fmt(r.invoices_shared)}</td>
+        <td class="num">${fmt(r.invoices_downloaded)}</td>
+      </tr>`;
+    }).join('');
+  }
+  $('rowStatus').textContent=`${rows.length} acquisition groups`;
+  $('updated').textContent='Updated ' + new Date().toLocaleTimeString();
+}
+
+function esc(v){
+  return String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function load(){
+  $('error').style.display='none';
+  $('kpis').classList.add('loading');
+  try{
+    const {data,error}=await client
+      .from('growth_campaign_dashboard')
+      .select('*')
+      .order('activated_users',{ascending:false})
+      .order('signups',{ascending:false});
+    if(error) throw error;
+    render(data || []);
+  }catch(e){
+    $('error').textContent='Could not load growth data: ' + (e?.message || e);
+    $('error').style.display='block';
+  }finally{
+    $('kpis').classList.remove('loading');
+  }
+}
+
+$('refreshBtn').onclick=load;
+$('logoutBtn').onclick=async()=>{await client.auth.signOut();location.href='/'};
+
+(async()=>{
+  const session=await requireSession();
+  if(session) await load();
+})();
+</script>
+</body>
+</html>
