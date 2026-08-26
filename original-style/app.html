@@ -3419,6 +3419,10 @@ function captureAttribution() {
     }
   }
 
+  // Referral is independent of UTM attribution and can coexist with it.
+  const incomingReferral = (params.get('ref') || params.get('referral') || '').trim().toUpperCase();
+  const hasReferral = !!incomingReferral;
+
   const existing = readAttribution();
   const now = new Date().toISOString();
 
@@ -3429,18 +3433,22 @@ function captureAttribution() {
       campaign: incoming.utm_campaign || '',
       content: incoming.utm_content || '',
       term: incoming.utm_term || '',
+      referral_code: incomingReferral || '',
+      country_code: '',
+      region: '',
+      city: '',
       landing_page: window.location.pathname || '/',
       referrer: document.referrer || '',
       first_touch: true,
       last_touch: true,
       touched_at: now,
-      attribution_version: 'v2'
+      attribution_version: 'v3'
     };
     localStorage.setItem(attributionStorageKey(), JSON.stringify(first));
     return first;
   }
 
-  if (hasCampaign) {
+  if (hasCampaign || hasReferral) {
     const updated = {
       ...existing,
       source: incoming.utm_source || existing.source || 'direct',
@@ -3448,10 +3456,11 @@ function captureAttribution() {
       campaign: incoming.utm_campaign ?? existing.campaign ?? '',
       content: incoming.utm_content ?? existing.content ?? '',
       term: incoming.utm_term ?? existing.term ?? '',
+      referral_code: incomingReferral || existing.referral_code || '',
       referrer: document.referrer || existing.referrer || '',
       last_touch: true,
       touched_at: now,
-      attribution_version: 'v2'
+      attribution_version: 'v3'
     };
     localStorage.setItem(attributionStorageKey(), JSON.stringify(updated));
     return updated;
@@ -3469,14 +3478,22 @@ function attributionPayload() {
     campaign: a?.campaign || '',
     content: a?.content || '',
     term: a?.term || '',
+    referral_code: a?.referral_code || '',
+    country_code: a?.country_code || '',
+    region: a?.region || '',
+    city: a?.city || '',
     landing_page: a?.landing_page || window.location.pathname || '/',
     referrer: a?.referrer || document.referrer || '',
     first_touch: !!a?.first_touch,
     last_touch: true,
     touched_at: a?.touched_at || new Date().toISOString(),
     metadata: {
-      attribution_version: 'v2',
+      attribution_version: 'v3',
       landing_page: window.location.pathname || '/',
+      referral_code: a?.referral_code || '',
+      country_code: a?.country_code || '',
+      region: a?.region || '',
+      city: a?.city || '',
       ...((a?.metadata && typeof a.metadata === 'object') ? a.metadata : {})
     }
   };
@@ -3493,6 +3510,9 @@ function withAttribution(url) {
       if (a.content) u.searchParams.set('utm_content', a.content);
       if (a.term) u.searchParams.set('utm_term', a.term);
     }
+    if (a?.referral_code) {
+      u.searchParams.set('ref', a.referral_code);
+    }
     return u.toString();
   } catch {
     return url;
@@ -3506,13 +3526,6 @@ async function track(eventName, metadata = {}) {
 
     const a = attributionPayload();
 
-    /*
-      analytics_events in the current Supabase schema has:
-      id, event_name, user_id, session_id, metadata, created_at, attribution.
-
-      Keep attribution as one JSONB object so the event writer matches the
-      actual production schema and preserves the complete funnel context.
-    */
     const row = {
       event_name: eventName,
       user_id: cloud.user?.id || null,
@@ -3528,12 +3541,16 @@ async function track(eventName, metadata = {}) {
         campaign: a.campaign,
         content: a.content,
         term: a.term,
+        referral_code: a.referral_code,
+        country_code: a.country_code,
+        region: a.region,
+        city: a.city,
         landing_page: a.landing_page,
         referrer: a.referrer,
         first_touch: a.first_touch,
         last_touch: a.last_touch,
         touched_at: a.touched_at,
-        attribution_version: 'v2'
+        attribution_version: 'v3'
       }
     };
 
@@ -3544,8 +3561,7 @@ async function track(eventName, metadata = {}) {
   }
 }
 
-// Capture UTM parameters before any authentication, redirect, or funnel event.
-// The URL has already been verified to preserve the UTM query string.
+// Capture attribution before authentication or funnel events.
 getAnonymousId();
 getSessionId();
 localStorage.removeItem('invoicedey-attribution-v1');
