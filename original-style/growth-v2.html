@@ -22,7 +22,7 @@ button{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9p
 button:hover{background:var(--soft)}
 h1{font-size:32px;letter-spacing:-1.2px;margin:0 0 6px}
 .sub{color:var(--muted);margin:0 0 26px}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:18px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
 .label{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700}
 .value{font-size:32px;font-weight:800;letter-spacing:-1px;margin-top:8px}
@@ -34,7 +34,7 @@ h1{font-size:32px;letter-spacing:-1.2px;margin:0 0 6px}
 .bar{height:10px;background:#ededeb;border-radius:99px;overflow:hidden}
 .fill{height:100%;background:#111;border-radius:99px;min-width:0}
 .table-wrap{overflow:auto}
-table{width:100%;border-collapse:collapse;min-width:760px}
+table{width:100%;border-collapse:collapse;min-width:980px}
 th,td{padding:13px 12px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;white-space:nowrap}
 th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 td.num,th.num{text-align:right}
@@ -43,6 +43,7 @@ td.num,th.num{text-align:right}
 .status{font-size:12px;color:var(--muted)}
 .error{background:#fff1f1;border:1px solid #ffd0d0;color:#9b1c1c;padding:12px;border-radius:10px;margin-bottom:16px;display:none}
 .loading{opacity:.55}
+@media(max-width:1100px){.grid{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}}
 @media(max-width:520px){.wrap{padding:20px 14px}.grid{grid-template-columns:1fr 1fr}h1{font-size:27px}.value{font-size:27px}.user{display:none}input[type=date]{width:100%}}
 </style>
@@ -81,6 +82,7 @@ td.num,th.num{text-align:right}
 <div id="error" class="error"></div>
 
 <section class="grid" id="kpis">
+  <div class="card"><div class="label">Visitors</div><div class="value" id="kVisitors">—</div><div class="note">tracked visitors</div></div>
   <div class="card"><div class="label">Signups</div><div class="value" id="kSignups">—</div><div class="note">identified users</div></div>
   <div class="card"><div class="label">Activated</div><div class="value" id="kActivated">—</div><div class="note">created first invoice</div></div>
   <div class="card"><div class="label">Activation rate</div><div class="value" id="kRate">—</div><div class="note">signup → activation</div></div>
@@ -104,7 +106,8 @@ td.num,th.num{text-align:right}
       <table>
         <thead><tr>
           <th>Source</th><th>Campaign</th><th>Content</th>
-          <th class="num">Signups</th><th class="num">Activated</th><th class="num">Rate</th>
+          <th class="num">Visitors</th><th class="num">Signups</th><th class="num">Signup rate</th>
+          <th class="num">Activated</th><th class="num">Activation rate</th>
           <th class="num">Created</th><th class="num">Sent</th><th class="num">Shared</th><th class="num">Downloaded</th>
         </tr></thead>
         <tbody id="campaignRows"></tbody>
@@ -146,8 +149,10 @@ function setBar(id, value, max){
 }
 
 function render(rows){
-  let signups=0, activated=0, created=0, sent=0, shared=0, downloaded=0;
+  let visitors=0, signups=0, activated=0, created=0, sent=0, shared=0, downloaded=0;
+
   rows.forEach(r=>{
+    visitors += n(r.visitors);
     signups += n(r.signups);
     activated += n(r.activated_users);
     created += n(r.invoices_created);
@@ -156,32 +161,56 @@ function render(rows){
     downloaded += n(r.invoices_downloaded);
   });
 
-  $('kSignups').textContent=fmt(signups);
-  $('kActivated').textContent=fmt(activated);
-  $('kRate').textContent=signups ? pct(activated/signups*100) : '0.00%';
-  $('kInvoices').textContent=fmt(created);
+  const hasVisitors = rows.some(r => r.visitors !== undefined && r.visitors !== null);
 
-  const funnelMax=Math.max(signups,activated,created,sent,shared,downloaded,1);
+  $('kVisitors').textContent = hasVisitors ? fmt(visitors) : '—';
+  $('kSignups').textContent = fmt(signups);
+  $('kActivated').textContent = fmt(activated);
+  $('kRate').textContent = signups ? pct(activated/signups*100) : '0.00%';
+  $('kInvoices').textContent = fmt(created);
+
+  const funnelMax=Math.max(
+    hasVisitors ? visitors : 0,
+    signups,activated,created,sent,shared,downloaded,1
+  );
+
   const pairs=[
-    ['fSignups','bSignups',signups],['fActivated','bActivated',activated],
-    ['fCreated','bCreated',created],['fSent','bSent',sent],
-    ['fShared','bShared',shared],['fDownloaded','bDownloaded',downloaded]
+    ['fVisitors','bVisitors',hasVisitors ? visitors : 0],
+    ['fSignups','bSignups',signups],
+    ['fActivated','bActivated',activated],
+    ['fCreated','bCreated',created],
+    ['fSent','bSent',sent],
+    ['fShared','bShared',shared],
+    ['fDownloaded','bDownloaded',downloaded]
   ];
-  pairs.forEach(([label,bar,val])=>{$(label).textContent=fmt(val);setBar(bar,val,funnelMax)});
+
+  pairs.forEach(([label,bar,val])=>{
+    $(label).textContent = label==='fVisitors' && !hasVisitors ? '—' : fmt(val);
+    setBar(bar,val,funnelMax);
+  });
 
   const tbody=$('campaignRows');
+
   if(!rows.length){
-    tbody.innerHTML='<tr><td colspan="10" class="empty">No campaign data yet.</td></tr>';
+    tbody.innerHTML='<tr><td colspan="12" class="empty">No campaign data yet.</td></tr>';
   } else {
     tbody.innerHTML=rows.map(r=>{
-      const rate=n(r.activation_rate);
+      const signupRate=n(r.signup_rate);
+      const activationRate=n(
+        r.activation_rate !== undefined
+          ? r.activation_rate
+          : (n(r.signups) ? n(r.activated_users)/n(r.signups)*100 : 0)
+      );
+
       return `<tr>
         <td>${esc(r.source || 'direct')}</td>
         <td><strong>${esc(r.campaign || '(none)')}</strong></td>
         <td>${esc(r.content || '(none)')}</td>
+        <td class="num">${r.visitors !== undefined && r.visitors !== null ? fmt(r.visitors) : '—'}</td>
         <td class="num">${fmt(r.signups)}</td>
+        <td class="num">${r.visitors ? `<span class="badge">${signupRate.toFixed(2)}%</span>` : '0.00%'}</td>
         <td class="num">${fmt(r.activated_users)}</td>
-        <td class="num">${rate ? `<span class="badge">${rate.toFixed(2)}%</span>` : '0.00%'}</td>
+        <td class="num">${activationRate ? `<span class="badge">${activationRate.toFixed(2)}%</span>` : '0.00%'}</td>
         <td class="num">${fmt(r.invoices_created)}</td>
         <td class="num">${fmt(r.invoices_sent)}</td>
         <td class="num">${fmt(r.invoices_shared)}</td>
@@ -189,6 +218,7 @@ function render(rows){
       </tr>`;
     }).join('');
   }
+
   $('rowStatus').textContent=`${rows.length} acquisition groups`;
   $('updated').textContent='Updated ' + new Date().toLocaleTimeString();
 }
