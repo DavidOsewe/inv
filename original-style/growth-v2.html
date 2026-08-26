@@ -199,11 +199,19 @@ function render(rows){
     tbody.innerHTML='<tr><td colspan="12" class="empty">No campaign data yet.</td></tr>';
   } else {
     tbody.innerHTML=rows.map(r=>{
-      const signupRate=n(r.signup_rate);
-      const activationRate=n(
+      // Calculate signup rate from the actual campaign counts.
+      // This keeps the dashboard correct even if the RPC does not return
+      // a separate signup_rate field.
+      const visitorCount = n(r.visitors);
+      const signupCount = n(r.signups);
+      const signupRate = visitorCount
+        ? (signupCount / visitorCount) * 100
+        : 0;
+
+      const activationRate = n(
         r.activation_rate !== undefined
           ? r.activation_rate
-          : (n(r.signups) ? n(r.activated_users)/n(r.signups)*100 : 0)
+          : (signupCount ? n(r.activated_users)/signupCount*100 : 0)
       );
 
       return `<tr>
@@ -212,7 +220,7 @@ function render(rows){
         <td>${esc(r.content || '(none)')}</td>
         <td class="num">${r.visitors !== undefined && r.visitors !== null ? fmt(r.visitors) : '—'}</td>
         <td class="num">${fmt(r.signups)}</td>
-        <td class="num">${r.visitors ? `<span class="badge">${signupRate.toFixed(2)}%</span>` : '0.00%'}</td>
+        <td class="num">${visitorCount ? `<span class="badge">${signupRate.toFixed(2)}%</span>` : '0.00%'}</td>
         <td class="num">${fmt(r.activated_users)}</td>
         <td class="num">${activationRate ? `<span class="badge">${activationRate.toFixed(2)}%</span>` : '0.00%'}</td>
         <td class="num">${fmt(r.invoices_created)}</td>
@@ -308,4 +316,3 @@ $('logoutBtn').onclick=async()=>{await client.auth.signOut();location.href='/'};
 })();
 </script>
 </body>
-</html>
