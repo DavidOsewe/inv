@@ -44,7 +44,7 @@ td.num,th.num{text-align:right}
 .error{background:#fff1f1;border:1px solid #ffd0d0;color:#9b1c1c;padding:12px;border-radius:10px;margin-bottom:16px;display:none}
 .loading{opacity:.55}
 @media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}}
-@media(max-width:520px){.wrap{padding:20px 14px}.grid{grid-template-columns:1fr 1fr}h1{font-size:27px}.value{font-size:27px}.user{display:none}}
+@media(max-width:520px){.wrap{padding:20px 14px}.grid{grid-template-columns:1fr 1fr}h1{font-size:27px}.value{font-size:27px}.user{display:none}input[type=date]{width:100%}}
 </style>
 </head>
 <body>
@@ -60,6 +60,24 @@ td.num,th.num{text-align:right}
 
 <h1>Growth dashboard</h1>
 <p class="sub">Acquisition → activation → invoice usage. <span id="updated">Not loaded</span></p>
+<div class="card" style="margin-bottom:18px;padding:14px 16px">
+  <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
+    <div>
+      <div class="label">From</div>
+      <input id="startDate" type="date" style="margin-top:7px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;font:inherit">
+    </div>
+    <div>
+      <div class="label">To</div>
+      <input id="endDate" type="date" style="margin-top:7px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;font:inherit">
+    </div>
+    <button id="applyDates">Apply</button>
+    <button id="todayBtn">Today</button>
+    <button id="days7Btn">7 Days</button>
+    <button id="days30Btn">30 Days</button>
+    <button id="allTimeBtn">All Time</button>
+    <span class="status" id="rangeStatus">All time</span>
+  </div>
+</div>
 <div id="error" class="error"></div>
 
 <section class="grid" id="kpis">
@@ -179,15 +197,36 @@ function esc(v){
   return String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+let dateRange = {start:null, end:null};
+
+function isoStart(dateStr){
+  return dateStr ? `${dateStr}T00:00:00` : null;
+}
+function isoEnd(dateStr){
+  return dateStr ? `${dateStr}T23:59:59.999` : null;
+}
+function setRange(start, end){
+  $('startDate').value = start || '';
+  $('endDate').value = end || '';
+  dateRange = {start:start || null, end:end || null};
+  $('rangeStatus').textContent = start && end ? `${start} → ${end}` : 'All time';
+  load();
+}
+
 async function load(){
   $('error').style.display='none';
   $('kpis').classList.add('loading');
   try{
-    const {data,error}=await client
-      .from('growth_campaign_dashboard')
-      .select('*')
-      .order('activated_users',{ascending:false})
-      .order('signups',{ascending:false});
+    // The SQL RPC is date-aware. It uses signup_at for acquisition/activation
+    // and event created_at for invoice activity.
+    const start = dateRange.start ? `${dateRange.start}T00:00:00` : '1970-01-01T00:00:00';
+    const end = dateRange.end ? `${dateRange.end}T23:59:59.999` : '2999-12-31T23:59:59.999';
+
+    const {data,error}=await client.rpc('get_growth_campaign_dashboard', {
+      p_start: start,
+      p_end: end
+    });
+
     if(error) throw error;
     render(data || []);
   }catch(e){
@@ -198,6 +237,34 @@ async function load(){
   }
 }
 
+$('applyDates').onclick=()=>{
+  const start=$('startDate').value;
+  const end=$('endDate').value;
+  if(start && end && start>end){
+    $('error').textContent='Start date cannot be after the end date.';
+    $('error').style.display='block';
+    return;
+  }
+  setRange(start,end);
+};
+$('todayBtn').onclick=()=>{
+  const d=new Date();
+  const s=d.toISOString().slice(0,10);
+  setRange(s,s);
+};
+$('days7Btn').onclick=()=>{
+  const end=new Date();
+  const start=new Date();
+  start.setDate(end.getDate()-6);
+  setRange(start.toISOString().slice(0,10),end.toISOString().slice(0,10));
+};
+$('days30Btn').onclick=()=>{
+  const end=new Date();
+  const start=new Date();
+  start.setDate(end.getDate()-29);
+  setRange(start.toISOString().slice(0,10),end.toISOString().slice(0,10));
+};
+$('allTimeBtn').onclick=()=>setRange(null,null);
 $('refreshBtn').onclick=load;
 $('logoutBtn').onclick=async()=>{await client.auth.signOut();location.href='/'};
 
