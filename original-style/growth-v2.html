@@ -92,7 +92,8 @@ td.num,th.num{text-align:right}
 <section class="two">
   <div class="card">
     <div class="section-title">Product funnel</div>
-    <div class="funnel-row"><div class="funnel-top"><span>Signups</span><b id="fSignups">—</b></div><div class="bar"><div class="fill" id="bSignups"></div></div></div>
+    <div class="funnel-row"><div class="funnel-top"><span>Visitors</span><b id="fVisitors">—</b></div><div class="bar"><div class="fill" id="bVisitors"></div></div></div>
+     <div class="funnel-row"><div class="funnel-top"><span>Signups</span><b id="fSignups">—</b></div><div class="bar"><div class="fill" id="bSignups"></div></div></div>
     <div class="funnel-row"><div class="funnel-top"><span>Activated</span><b id="fActivated">—</b></div><div class="bar"><div class="fill" id="bActivated"></div></div></div>
     <div class="funnel-row"><div class="funnel-top"><span>Invoices created</span><b id="fCreated">—</b></div><div class="bar"><div class="fill" id="bCreated"></div></div></div>
     <div class="funnel-row"><div class="funnel-top"><span>Invoices sent</span><b id="fSent">—</b></div><div class="bar"><div class="fill" id="bSent"></div></div></div>
@@ -163,7 +164,7 @@ function render(rows){
 
   const hasVisitors = rows.some(r => r.visitors !== undefined && r.visitors !== null);
 
-  $('kVisitors').textContent = hasVisitors ? fmt(visitors) : '—';
+  if($('kVisitors')) $('kVisitors').textContent = hasVisitors ? fmt(visitors) : '—';
   $('kSignups').textContent = fmt(signups);
   $('kActivated').textContent = fmt(activated);
   $('kRate').textContent = signups ? pct(activated/signups*100) : '0.00%';
@@ -185,7 +186,10 @@ function render(rows){
   ];
 
   pairs.forEach(([label,bar,val])=>{
-    $(label).textContent = label==='fVisitors' && !hasVisitors ? '—' : fmt(val);
+    const labelEl = $(label);
+    const barEl = $(bar);
+    if(!labelEl || !barEl) return;
+    labelEl.textContent = label==='fVisitors' && !hasVisitors ? '—' : fmt(val);
     setBar(bar,val,funnelMax);
   });
 
