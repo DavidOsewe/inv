@@ -76,6 +76,16 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 </div>
 
 <div class="section">
+<div class="head"><h2>Campaign performance</h2><span class="pill">Source → campaign → activation</span></div>
+<div class="panel">
+<table class="table">
+<thead><tr><th>Source</th><th>Medium</th><th>Campaign</th><th>Content</th><th class="num">Visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Sent</th><th class="num">Shares</th><th class="num">Downloads</th></tr></thead>
+<tbody id="campaigns"></tbody>
+</table>
+</div>
+</div>
+
+<div class="section">
 <div class="head"><h2>Referral performance</h2><span class="pill">Referral → signup → activation</span></div>
 <div class="panel">
 <table class="table">
@@ -148,56 +158,38 @@ const fmt=n=>Number(n||0).toLocaleString();
 const moneyMinor=n=>'$'+(Number(n||0)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 
 async function load(){
-  $('status').className='empty';
-  $('status').textContent='Loading…';
-  $('status').style.display='block';
-  $('dash').style.display='none';
-
+  setLoading(true);
   try {
-    if(!window.supabase){
-      $('status').textContent='Connecting to analytics…';
-      await loadSupabase([
-        'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2',
-        'https://unpkg.com/@supabase/supabase-js@2'
-      ]);
-    }
-    if(!sb) sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
+    const sb = await getSupabase();
+    const range = getDateRange();
+    const since = range.from ? new Date(range.from + 'T00:00:00').toISOString() : null;
+    const until = range.to ? new Date(range.to + 'T23:59:59.999').toISOString() : null;
 
-    const {data:{session},error:authError}=await sb.auth.getSession();
-    if(authError) throw authError;
-  if(!session){
-    $('status').innerHTML='Please sign in first. <a href="/index.html">Open login →</a>';
-    return;
-  }
+    const args = {};
+    if (since) args.p_since = since;
+    if (until) args.p_until = until;
 
-  const since=new Date(Date.now()-days*86400000).toISOString();
+    const calls = await Promise.all([
+      sb.rpc('growth_v2_summary', {p_since: since || new Date(0).toISOString(), p_until: until || new Date().toISOString()}),
+      sb.rpc('growth_retention', {p_since: range.from || '1970-01-01'}),
+      sb.rpc('growth_revenue_summary', {p_since: since || new Date(0).toISOString()}),
+      sb.rpc('growth_referral_summary', {p_since: since || new Date(0).toISOString(), p_until: until || new Date().toISOString()}),
+      sb.rpc('growth_geo_summary', {p_since: since || new Date(0).toISOString(), p_until: until || new Date().toISOString()}),
+      sb.rpc('growth_campaign_summary', {p_since: since || new Date(0).toISOString(), p_until: until || new Date().toISOString()})
+    ]);
 
-  const [v,r,rev,ref,geo]=await Promise.race([Promise.all([
-    sb.rpc('growth_v2_summary',{p_since:since}),
-    sb.rpc('growth_retention',{p_since:new Date(Date.now()-90*86400000).toISOString().slice(0,10)}),
-    sb.rpc('growth_revenue_summary',{p_since:new Date(Date.now()-90*86400000).toISOString()}),
-    sb.rpc('growth_referral_summary',{p_since:since}),
-    sb.rpc('growth_geo_summary',{p_since:since})
-  ]), new Promise((_,reject)=>setTimeout(()=>reject(new Error('Analytics request timed out after 15 seconds.')),15000))]);
+    const err = calls.find(x => x.error)?.error;
+    if (err) throw new Error(err.message || JSON.stringify(err));
 
-  const err=v.error||r.error||rev.error||ref.error||geo.error;
-  if(err){
-    $('status').className='error';
-    $('status').innerHTML='<b>Growth Intelligence could not load.</b><br><br>'+esc(err.message||err.details||err.hint||err.code||'Unknown Supabase error')+'<br><br>Make sure the Growth Intelligence V2/V3 SQL has been run in Supabase and your account is a growth admin.';
-    return;
-  }
-
-  render(v.data,r.data,rev.data,ref.data,geo.data);
-  $('status').style.display='none';
-  $('dash').style.display='block';
+    render(calls[0].data,calls[1].data,calls[2].data,calls[3].data,calls[4].data,calls[5].data);
+    setLoading(false);
   } catch(e) {
-    console.error('Growth Intelligence load failed', e);
-    $('status').className='error';
-    $('status').innerHTML='<b>Dashboard failed to load.</b><br><br>'+esc(e?.message||e||'Unknown error')+'<br><br>Refresh the page. If it persists, check the Supabase URL/key and SQL functions.';
+    setLoading(false);
+    showError(e);
   }
 }
 
-function render(v,r,rev,ref,geo){
+function render(v,r,rev,ref,geo,camp){
   const c=v.current||{},g=v.growth||{};
   $('signups').textContent=fmt(c.signups);
   $('invoices').textContent=fmt(c.invoices);
@@ -210,6 +202,7 @@ function render(v,r,rev,ref,geo){
   renderCohorts(r.cohorts||[]);
   renderReferrals(ref?.rows||[]);
   renderGeo(geo?.rows||[]);
+  renderCampaigns(camp?.rows||[]);
   renderRevenue(rev.monthly||[]);
   const last=(rev.monthly||[]).slice(-1)[0];
   $('payers').textContent=fmt(last?.active_payers);
@@ -241,6 +234,32 @@ function renderReferrals(rows){
   el.innerHTML = rows.map(x => '<tr><td><b>'+esc(x.referral_code || 'Unknown')+'</b></td><td class="num">'+fmt(x.visitors)+'</td><td class="num">'+fmt(x.signups)+'</td><td class="num">'+fmt(x.activated)+'</td><td class="num">'+fmt(x.invoices)+'</td><td class="num">'+fmt(x.shares)+'</td><td class="num">'+fmt(x.downloads)+'</td></tr>').join('') || '<tr><td colspan="7">No referral activity yet.</td></tr>';
 }
 
+
+function renderCampaigns(rows){
+  const el = $('campaigns');
+  if (!el) return;
+  el.innerHTML = rows.map(x => {
+    const visitors = Number(x.visitors||0);
+    const signups = Number(x.signups||0);
+    const activated = Number(x.activated||0);
+    const signupRate = visitors ? ((signups/visitors)*100).toFixed(1)+'%' : '—';
+    const activationRate = signups ? ((activated/signups)*100).toFixed(1)+'%' : '—';
+    return '<tr>' +
+      '<td><b>'+esc(x.source||'direct')+'</b></td>' +
+      '<td>'+esc(x.medium||'none')+'</td>' +
+      '<td>'+esc(x.campaign||'(none)')+'</td>' +
+      '<td>'+esc(x.content||'(none)')+'</td>' +
+      '<td class="num">'+fmt(visitors)+'</td>' +
+      '<td class="num">'+fmt(signups)+' <small>'+signupRate+'</small></td>' +
+      '<td class="num">'+fmt(activated)+' <small>'+activationRate+'</small></td>' +
+      '<td class="num">'+fmt(x.invoices)+'</td>' +
+      '<td class="num">'+fmt(x.sent)+'</td>' +
+      '<td class="num">'+fmt(x.shares)+'</td>' +
+      '<td class="num">'+fmt(x.downloads)+'</td>' +
+    '</tr>';
+  }).join('') || '<tr><td colspan="11">No campaign activity yet.</td></tr>';
+}
+
 function renderGeo(rows){
   const el = $('geo');
   if (!el) return;
@@ -269,7 +288,37 @@ document.querySelectorAll('.range button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.range button').forEach(x=>x.classList.remove('active'));
   b.classList.add('active');
   days=Number(b.dataset.days);
+  
+function fmtDate(d){ return d.toISOString().slice(0,10); }
+function getDateRange(){
+  const from = $('fromDate')?.value || '';
+  const to = $('toDate')?.value || '';
+  return {from, to};
+}
+function setDateRange(days){
+  const now = new Date();
+  const to = fmtDate(now);
+  let from = '';
+  if (days !== null) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - days + 1);
+    from = fmtDate(d);
+  }
+  if ($('fromDate')) $('fromDate').value = from;
+  if ($('toDate')) $('toDate').value = to;
   load();
+}
+function initDateFilters(){
+  setDateRange(30);
+  $('applyDates')?.addEventListener('click', load);
+  $('todayBtn')?.addEventListener('click', () => setDateRange(1));
+  $('days7Btn')?.addEventListener('click', () => setDateRange(7));
+  $('days30Btn')?.addEventListener('click', () => setDateRange(30));
+  $('days90Btn')?.addEventListener('click', () => setDateRange(90));
+  $('allTimeBtn')?.addEventListener('click', () => setDateRange(null));
+}
+
+load();
 });
 
 $('refresh').onclick=load;
