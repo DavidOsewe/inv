@@ -2590,6 +2590,54 @@ function validateInvoice(requireSent) {
   return [...new Set(errors)];
 }
 
+async function trackPersistedInvoiceEvents(localInvoiceId, options = {}) {
+  try {
+    // Flush the queued cloud sync now for authenticated users. This gives the
+    // analytics events the canonical cloud invoice UUID instead of the local
+    // browser UUID.
+    if (cloud.client && cloud.user) {
+      clearTimeout(cloud.timer);
+      cloud.timer = null;
+      await pushCloudState();
+    }
+
+    const invoice = db.invoices.find(i => i.id === localInvoiceId);
+    if (!invoice) return;
+
+    const invoiceId = invoice.cloudId || invoice.id;
+    const base = {
+      invoice_id: invoiceId,
+      invoice_number: invoice.number,
+      currency: invoice.currency
+    };
+
+    if (options.isNew) {
+      await track('invoice_created', base);
+
+      // Activation is a one-time milestone per account, not every invoice.
+      const activationOwner = activeUserId || getAnonymousId();
+      const activationKey = 'invoicedey-growth-first_invoice_created-' + activationOwner;
+      if (!localStorage.getItem(activationKey)) {
+        localStorage.setItem(activationKey, '1');
+        await track('invoice_activation', {
+          ...base,
+          activation: 'first_invoice_created'
+        });
+      }
+    }
+
+    if (options.status === 'Sent') {
+      await track('invoice_sent', base);
+    }
+
+    if (invoice.paid) {
+      await track('invoice_paid', base);
+    }
+  } catch (e) {
+    console.debug('invoice analytics', e.message || e);
+  }
+}
+
 function persist(s) {
   normalizeLineNumbers();
   const requireSent = s === 'Sent';
@@ -2616,14 +2664,20 @@ function persist(s) {
     db.invoices[n] = toSave;
   }
   save();
-  if (isNew) {
-    track('invoice_created', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
-    track('invoice_activation', { invoice_id: edit.id, invoice_number: edit.number, activation: 'first_invoice_created' });
-  }
-  if (s === 'Sent') track('invoice_sent', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
+
+  // Analytics are emitted after the invoice has had a chance to sync so every
+  // invoice event uses the canonical Supabase invoice UUID when available.
+  // This also guarantees the funnel order: created → activation → sent → paid.
+  trackPersistedInvoiceEvents(edit.id, {
+    isNew,
+    status: s,
+    currency: edit.currency,
+    invoiceNumber: edit.number
+  });
+
   ensurePayments(edit);
   syncPaidFlag(edit);
-  if (edit.paid) track('invoice_paid', { invoice_id: edit.cloudId || edit.id, invoice_number: edit.number, currency: edit.currency });
+
   toast(edit.paid ? 'Invoice paid in full.' : amountPaid(edit) > 0 ? 'Invoice saved (partially paid).' : s === 'Sent' ? 'Invoice marked as sent.' : 'Draft saved.');
   switchTo('invoices');
   if (isNew) maybePromptSignup();
@@ -3067,6 +3121,9 @@ switchTo('dashboard');
 const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
 
+let supabaseClient = null;
+let supabaseLoadPromise = null;
+
 async function getSupabase() {
   // Supabase is configured with the public URL + anon/publishable key.
   // Never use the secret/service-role key in this browser file.
@@ -3079,15 +3136,35 @@ async function getSupabase() {
     console.warn('Supabase is not configured.');
     return null;
   }
+
+  // Reuse exactly one browser Supabase client. Creating multiple GoTrue
+  // clients in the same page can produce auth-session races and warnings.
+  if (supabaseClient) return supabaseClient;
+
   if (!window.supabase) {
-    await new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
-      s.onload = resolve; s.onerror = reject;
-      document.head.appendChild(s);
-    });
+    if (!supabaseLoadPromise) {
+      supabaseLoadPromise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      }).catch(error => {
+        supabaseLoadPromise = null;
+        throw error;
+      });
+    }
+    await supabaseLoadPromise;
   }
-  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+  if (!supabaseClient) {
+    supabaseClient = window.supabase.createClient(
+      SUPABASE_URL,
+      SUPABASE_PUBLISHABLE_KEY
+    );
+  }
+
+  return supabaseClient;
 }
 
 async function syncProfile(client, user) {
@@ -3098,20 +3175,6 @@ async function syncProfile(client, user) {
     full_name: user.user_metadata?.full_name || ''
   }, { onConflict: 'id' });
   if (error) console.warn('profile sync', error.message);
-
-  // Every authenticated user gets one permanent referral code.
-  // The code is generated server-side by ensure_my_referral_code().
-  try {
-    const { data: referralCode, error: referralError } = await client.rpc('ensure_my_referral_code');
-    if (referralError) {
-      console.warn('referral code', referralError.message || referralError);
-    } else if (referralCode) {
-      cloud.referralCode = String(referralCode).toUpperCase();
-      localStorage.setItem('invoicedey-my-referral-code', cloud.referralCode);
-    }
-  } catch (e) {
-    console.warn('referral code', e.message || e);
-  }
 }
 
 /* Cloud sync keeps the existing local-first experience intact. The UI continues
@@ -3323,15 +3386,10 @@ async function pushCloudState() {
   }
 }
 
-/* =========================================================
-   Growth attribution + funnel analytics V3
-   Shared anonymous identity and attribution contract.
-   ========================================================= */
-const ATTRIBUTION_KEY = 'invoicedey-attribution-v3';
+/* ---------- Growth attribution + funnel analytics ---------- */
+const ATTRIBUTION_KEY = 'invoicedey-attribution-v2';
 const ANON_ID_KEY = 'invoicedey-anonymous-id';
 const SESSION_ID_KEY = 'invoicedey-session';
-const LEGACY_ATTRIBUTION_KEY = 'invoicedey-attribution-v1';
-const LEGACY_ATTRIBUTION_PREFIX = 'invoicedey-attribution-v2-';
 
 function uuidLike() {
   if (crypto?.randomUUID) return crypto.randomUUID();
@@ -3360,43 +3418,19 @@ function getSessionId() {
 }
 
 function attributionStorageKey() {
+  // Attribution belongs to the anonymous browser identity, not to a shared
+  // global browser bucket. This prevents campaign bleed between accounts.
   return ATTRIBUTION_KEY + '-' + getAnonymousId();
 }
 
-function readJsonStorage(key) {
-  try {
-    return JSON.parse(localStorage.getItem(key) || 'null');
-  } catch {
-    return null;
-  }
-}
-
 function readAttribution() {
-  const currentKey = attributionStorageKey();
-  const current = readJsonStorage(currentKey);
-  if (current) return current;
-
-  // Migrate the older keyed v2 bridge and unkeyed v1 storage into V3.
-  const legacyV2 = readJsonStorage(LEGACY_ATTRIBUTION_PREFIX + getAnonymousId());
-  if (legacyV2) {
-    const migrated = { ...legacyV2, attribution_version: 'v3' };
-    localStorage.setItem(currentKey, JSON.stringify(migrated));
-    return migrated;
-  }
-
-  const legacyV1 = readJsonStorage(LEGACY_ATTRIBUTION_KEY);
-  if (legacyV1) {
-    const migrated = { ...legacyV1, attribution_version: 'v3' };
-    localStorage.setItem(currentKey, JSON.stringify(migrated));
-    return migrated;
-  }
-
-  return null;
+  try { return JSON.parse(localStorage.getItem(attributionStorageKey()) || 'null'); }
+  catch { return null; }
 }
 
 function captureAttribution() {
   const params = new URLSearchParams(window.location.search);
-  const keys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'];
+  const keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
   const incoming = {};
   let hasCampaign = false;
 
@@ -3468,6 +3502,9 @@ function attributionPayload() {
     content: a?.content || '',
     term: a?.term || '',
     referral_code: a?.referral_code || '',
+    country_code: a?.country_code || '',
+    region: a?.region || '',
+    city: a?.city || '',
     landing_page: a?.landing_page || window.location.pathname || '/',
     referrer: a?.referrer || document.referrer || '',
     first_touch: !!a?.first_touch,
@@ -3491,43 +3528,35 @@ function withAttribution(url) {
       if (a.campaign) u.searchParams.set('utm_campaign', a.campaign);
       if (a.content) u.searchParams.set('utm_content', a.content);
       if (a.term) u.searchParams.set('utm_term', a.term);
+      if (a.referral_code) u.searchParams.set('ref', a.referral_code);
     }
-    if (a?.referral_code) u.searchParams.set('ref', a.referral_code);
     return u.toString();
   } catch {
     return url;
   }
 }
 
-
-// DevTools/debug API — keep attribution functions explicitly accessible on window.
-window.invoicedeyAttributionV3 = window.invoicedeyAttributionV3 || {};
-window.invoicedeyAttributionV3.getAnonymousId = getAnonymousId;
-window.invoicedeyAttributionV3.readAttribution = readAttribution;
-window.invoicedeyAttributionV3.captureAttribution = captureAttribution;
-window.invoicedeyAttributionV3.attributionPayload = attributionPayload;
-window.getAnonymousId = getAnonymousId;
-window.readAttribution = readAttribution;
-window.captureAttribution = captureAttribution;
-window.attributionPayload = attributionPayload;
-
-function referralLink(code = cloud?.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '') {
-  const u = new URL('index.html', window.location.href);
-  if (code) u.searchParams.set('ref', code);
-  return u.toString();
-}
-
-
-async function track(eventName, metadata = {}) {
+async function track(eventName, metadata = {}, context = {}) {
   try {
     const client = cloud.client || await getSupabase();
     if (!client) return;
 
     const a = attributionPayload();
+    const authenticatedUser = context?.user || cloud.user || null;
+
+    /*
+      analytics_events has dedicated attribution columns as well as the
+      complete attribution JSONB payload. Keep both populated so reporting
+      can query simple columns while the JSONB object preserves full context.
+    */
     const row = {
       event_name: eventName,
-      user_id: cloud.user?.id || null,
+      user_id: authenticatedUser?.id || null,
       session_id: getSessionId(),
+      referral_code: a.referral_code || null,
+      country_code: a.country_code || null,
+      region: a.region || null,
+      city: a.city || null,
       metadata: {
         ...a.metadata,
         ...metadata
@@ -3537,9 +3566,12 @@ async function track(eventName, metadata = {}) {
         source: a.source,
         medium: a.medium,
         campaign: a.campaign,
+        referral_code: a.referral_code,
         content: a.content,
         term: a.term,
-        referral_code: a.referral_code,
+        country_code: a.country_code,
+        region: a.region,
+        city: a.city,
         landing_page: a.landing_page,
         referrer: a.referrer,
         first_touch: a.first_touch,
@@ -3556,10 +3588,13 @@ async function track(eventName, metadata = {}) {
   }
 }
 
-// Initialize identity and capture the landing/referral context before funnel events.
+// Capture UTM parameters before any authentication, redirect, or funnel event.
+// The URL has already been verified to preserve the UTM query string.
 getAnonymousId();
 getSessionId();
+localStorage.removeItem('invoicedey-attribution-v1');
 captureAttribution();
+
 function ensureEditSavedForShare() {
   if (!edit) return null;
   normalizeLineNumbers();
@@ -3735,11 +3770,10 @@ async function startCloudSync(client, user) {
   }
 }
 
-track('app_opened', { funnel_stage: 'visit' });
+track('app_opened', { funnel_stage: 'visit', attribution_capture: true });
 
 const growthSignupLink = document.getElementById('growthSignup');
 if (growthSignupLink) {
-  growthSignupLink.href = withAttribution('index.html');
   growthSignupLink.addEventListener('click', () => {
     growthSignupLink.href = withAttribution('index.html');
     track('signup_cta_clicked', { source: 'growth_modal' });
@@ -3754,25 +3788,26 @@ if (growthSignupLink) {
 
   async function render(session) {
     if (session?.user) {
+      // Set the authenticated identity before any funnel event is emitted.
+      // Otherwise signup_completed is stored with user_id = null.
+      cloud.client = client;
+      cloud.user = session.user;
+
       const signupKey = 'invoicedey-signup-completed-' + session.user.id;
       if (!localStorage.getItem(signupKey)) {
         localStorage.setItem(signupKey, '1');
-        await track('signup_completed', { source: 'auth_session', funnel_stage: 'signup' });
+        await track(
+          'signup_completed',
+          {
+            source: 'auth_session',
+            funnel_stage: 'signup'
+          },
+          { user: session.user }
+        );
       }
       await syncProfile(client, session.user);
       await startCloudSync(client, session.user);
-      const myReferralCode = cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '';
-      line.innerHTML = 'Signed in as <b style="color:var(--text)">' + (session.user.email || '') + '</b>' +
-        (myReferralCode ? '<div style="margin-top:6px">Referral code: <b style="color:var(--blue)">' + myReferralCode + '</b> · <button id="copyReferralBtn" type="button" style="border:0;background:none;padding:0;color:var(--blue);cursor:pointer;font-weight:600">Copy link</button></div>' : '');
-      const copyReferralBtn = document.getElementById('copyReferralBtn');
-      if (copyReferralBtn) copyReferralBtn.onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(referralLink(myReferralCode));
-          toast('Referral link copied.');
-        } catch {
-          prompt('Copy your referral link:', referralLink(myReferralCode));
-        }
-      };
+      line.innerHTML = 'Signed in as <b style="color:var(--text)">' + (session.user.email || '') + '</b>';
       if (logoutBtn) {
         logoutBtn.style.display = 'block';
         line.appendChild(logoutBtn);
@@ -3973,19 +4008,63 @@ function openPrintDocument(title, bodyHtml) {
   return w;
 }
 
-function printInvoice() {
+async function printInvoice() {
   if (!edit) {
     toast('Open an invoice first to print.');
     return;
   }
-  track('invoice_downloaded', { invoice_id: edit.cloudId || edit.id, invoice_number: edit.number, format: 'print_pdf' });
+
+  // Resolve the canonical Supabase invoice UUID before analytics is written.
+  // A stale/local browser invoice ID must never be mixed with the cloud ID
+  // used by invoice_created / invoice_shared / invoice_sent.
+  try {
+    if (cloud.client && cloud.user) {
+      clearTimeout(cloud.timer);
+      cloud.timer = null;
+      await pushCloudState();
+    }
+  } catch (e) {
+    console.debug('invoice download sync', e.message || e);
+  }
+
+  const currentInvoice = db.invoices.find(i => i.id === edit.id) || edit;
+  let invoiceId = currentInvoice.cloudId || null;
+
+  // Defensive fallback: if the local record still has no cloudId, resolve it
+  // from the authenticated user's organization + invoice number.
+  if (!invoiceId && cloud.client && cloud.user) {
+    try {
+      const organizationId = cloud.organizationId || await ensureCloudOrganization();
+      const { data, error } = await cloud.client
+        .from('invoices')
+        .select('id')
+        .eq('organization_id', organizationId)
+        .eq('invoice_number', currentInvoice.number)
+        .maybeSingle();
+      if (error) throw error;
+      if (data?.id) {
+        currentInvoice.cloudId = data.id;
+        invoiceId = data.id;
+        save();
+      }
+    } catch (e) {
+      console.debug('invoice download cloud-id lookup', e.message || e);
+    }
+  }
+
+  await track('invoice_downloaded', {
+    invoice_id: invoiceId || currentInvoice.id,
+    invoice_number: currentInvoice.number,
+    format: 'print_pdf'
+  });
+
   try { preview(); } catch (e) {}
   const panel = document.getElementById('previewPanel');
   if (!panel) {
     toast('Invoice preview not found.');
     return;
   }
-  openPrintDocument(edit.number || 'Invoice', panel.innerHTML);
+  openPrintDocument(currentInvoice.number || 'Invoice', panel.innerHTML);
 }
 
 function buildReceiptHtml(inv, payment) {
@@ -4620,4 +4699,3 @@ function addPaymentToEdit(amount, date, note, method) {
 switchTo('dashboard');
 </script>
 </body>
-</html>
