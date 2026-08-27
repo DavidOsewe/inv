@@ -76,6 +76,26 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 </div>
 
 <div class="section">
+<div class="head"><h2>Referral performance</h2><span class="pill">Referral → signup → activation</span></div>
+<div class="panel">
+<table class="table">
+<thead><tr><th>Referral code</th><th class="num">Visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Shares</th><th class="num">Downloads</th></tr></thead>
+<tbody id="referrals"></tbody>
+</table>
+</div>
+</div>
+
+<div class="section">
+<div class="head"><h2>Geography</h2><span class="pill">Country performance</span></div>
+<div class="panel">
+<table class="table">
+<thead><tr><th>Country</th><th class="num">Visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Shares</th><th class="num">Downloads</th></tr></thead>
+<tbody id="geo"></tbody>
+</table>
+</div>
+</div>
+
+<div class="section">
 <div class="head"><h2>Revenue & retention</h2><span class="pill">90-day view</span></div>
 <div class="panel">
 <table class="table">
@@ -216,11 +236,15 @@ function renderCohorts(rows){
 }
 
 function renderReferrals(rows){
-  $('referrals').innerHTML = rows.map(x => '<tr><td><b>'+esc(x.referral_code || 'Unknown')+'</b></td><td class="num">'+fmt(x.visitors)+'</td><td class="num">'+fmt(x.signups)+'</td><td class="num">'+fmt(x.activated)+'</td><td class="num">'+fmt(x.invoices)+'</td><td class="num">'+fmt(x.shares)+'</td><td class="num">'+fmt(x.downloads)+'</td></tr>').join('') || '<tr><td colspan="7">No referral activity yet.</td></tr>';
+  const el = $('referrals');
+  if (!el) return;
+  el.innerHTML = rows.map(x => '<tr><td><b>'+esc(x.referral_code || 'Unknown')+'</b></td><td class="num">'+fmt(x.visitors)+'</td><td class="num">'+fmt(x.signups)+'</td><td class="num">'+fmt(x.activated)+'</td><td class="num">'+fmt(x.invoices)+'</td><td class="num">'+fmt(x.shares)+'</td><td class="num">'+fmt(x.downloads)+'</td></tr>').join('') || '<tr><td colspan="7">No referral activity yet.</td></tr>';
 }
 
 function renderGeo(rows){
-  $('geo').innerHTML = rows.map(x => '<tr><td><b>'+esc(x.country_code || 'Unknown')+'</b></td><td class="num">'+fmt(x.visitors)+'</td><td class="num">'+fmt(x.signups)+'</td><td class="num">'+fmt(x.activated)+'</td><td class="num">'+fmt(x.invoices)+'</td><td class="num">'+fmt(x.shares)+'</td><td class="num">'+fmt(x.downloads)+'</td></tr>').join('') || '<tr><td colspan="7">No geography data yet.</td></tr>';
+  const el = $('geo');
+  if (!el) return;
+  el.innerHTML = rows.map(x => '<tr><td><b>'+esc(x.country_code || 'Unknown')+'</b></td><td class="num">'+fmt(x.visitors)+'</td><td class="num">'+fmt(x.signups)+'</td><td class="num">'+fmt(x.activated)+'</td><td class="num">'+fmt(x.invoices)+'</td><td class="num">'+fmt(x.shares)+'</td><td class="num">'+fmt(x.downloads)+'</td></tr>').join('') || '<tr><td colspan="7">No geography data yet.</td></tr>';
 }
 
 function renderRevenue(a){
