@@ -252,20 +252,14 @@ input:focus {
   </section>
 </div>
 <script>
-/*
-  InvoiceDey Growth — landing attribution bridge (v3)
-
-  app.html stores attribution under:
-    invoicedey-attribution-v2-[anonymous_id]
-
-  The landing page uses the SAME anonymous_id and storage format.
-  This preserves UTM campaigns AND ?ref= referral codes through
-  the magic-link redirect into app.html.
-*/
+/* =========================================================
+   InvoiceDey Growth — attribution bridge V3
+   Shared identity/storage contract with app.html.
+   ========================================================= */
 (function () {
   try {
     const ANON_KEY = 'invoicedey-anonymous-id';
-    const ATTR_PREFIX = 'invoicedey-attribution-v2-';
+    const ATTR_PREFIX = 'invoicedey-attribution-v3-';
 
     function uuidLike() {
       if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -276,73 +270,146 @@ input:focus {
       });
     }
 
-    let anonymousId = localStorage.getItem(ANON_KEY);
-    if (!anonymousId) {
-      anonymousId = uuidLike();
-      localStorage.setItem(ANON_KEY, anonymousId);
+    function getAnonymousId() {
+      let id = localStorage.getItem(ANON_KEY);
+      if (!id) {
+        id = uuidLike();
+        localStorage.setItem(ANON_KEY, id);
+      }
+      return id;
     }
 
-    const p = new URLSearchParams(window.location.search);
-    const keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
-    const incoming = {};
-
-    for (const key of keys) {
-      const value = (p.get(key) || '').trim();
-      if (value) incoming[key] = value;
+    function storageKey() {
+      return ATTR_PREFIX + getAnonymousId();
     }
 
-    // Referral links use: ?ref=DAVID25
-    const referralCode = (p.get('ref') || p.get('referral') || '').trim().toUpperCase();
-    if (referralCode) incoming.referral_code = referralCode;
+    function readAttribution() {
+      const currentKey = storageKey();
+      try {
+        const current = JSON.parse(localStorage.getItem(currentKey) || 'null');
+        if (current) return current;
 
-    const hasCampaign = Object.keys(incoming).length > 0;
-    if (!hasCampaign) return;
+        // Migrate the previous keyed v2 bridge into the shared V3 bucket.
+        const legacyV2 = JSON.parse(localStorage.getItem('invoicedey-attribution-v2-' + getAnonymousId()) || 'null');
+        if (legacyV2) {
+          const migrated = { ...legacyV2, attribution_version: 'v3' };
+          localStorage.setItem(currentKey, JSON.stringify(migrated));
+          return migrated;
+        }
 
-    const storageKey = ATTR_PREFIX + anonymousId;
-    const now = new Date().toISOString();
+        // Also accept the old unkeyed v1 bucket if it exists.
+        const legacyV1 = JSON.parse(localStorage.getItem('invoicedey-attribution-v1') || 'null');
+        if (legacyV1) {
+          const migrated = { ...legacyV1, attribution_version: 'v3' };
+          localStorage.setItem(currentKey, JSON.stringify(migrated));
+          return migrated;
+        }
+      } catch (_) {}
+      return null;
+    }
 
-    let existing = null;
-    try {
-      existing = JSON.parse(localStorage.getItem(storageKey) || 'null');
-    } catch (_) {}
+    function captureAttribution() {
+      const params = new URLSearchParams(window.location.search);
+      const incoming = {};
+      const keys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'];
+      let hasCampaign = false;
 
-    const touch = {
-      source: incoming.utm_source || (referralCode ? 'referral' : 'direct'),
-      medium: incoming.utm_medium || (referralCode ? 'referral' : 'none'),
-      campaign: incoming.utm_campaign || '',
-      content: incoming.utm_content || '',
-      term: incoming.utm_term || '',
-      referral_code: referralCode || '',
-      landing_page: window.location.pathname || '/',
-      referrer: document.referrer || '',
-      first_touch: !existing,
-      last_touch: true,
-      touched_at: now,
-      attribution_version: 'v3'
+      for (const key of keys) {
+        const value = (params.get(key) || '').trim();
+        if (value) {
+          incoming[key] = value;
+          hasCampaign = true;
+        }
+      }
+
+      const referralCode = (params.get('ref') || '').trim();
+      if (referralCode) {
+        incoming.referral_code = referralCode;
+        hasCampaign = true;
+      }
+
+      const existing = readAttribution();
+      const now = new Date().toISOString();
+
+      if (!existing) {
+        const first = {
+          source: incoming.utm_source || (referralCode ? 'referral' : 'direct'),
+          medium: incoming.utm_medium || (referralCode ? 'referral' : 'none'),
+          campaign: incoming.utm_campaign || '',
+          content: incoming.utm_content || '',
+          term: incoming.utm_term || '',
+          referral_code: referralCode || '',
+          landing_page: window.location.pathname || '/',
+          referrer: document.referrer || '',
+          first_touch: true,
+          last_touch: true,
+          touched_at: now,
+          attribution_version: 'v3'
+        };
+        localStorage.setItem(storageKey(), JSON.stringify(first));
+        return first;
+      }
+
+      if (hasCampaign) {
+        const updated = {
+          ...existing,
+          source: incoming.utm_source || existing.source || (referralCode ? 'referral' : 'direct'),
+          medium: incoming.utm_medium || existing.medium || (referralCode ? 'referral' : 'none'),
+          campaign: incoming.utm_campaign ?? existing.campaign ?? '',
+          content: incoming.utm_content ?? existing.content ?? '',
+          term: incoming.utm_term ?? existing.term ?? '',
+          referral_code: incoming.referral_code ?? existing.referral_code ?? '',
+          referrer: document.referrer || existing.referrer || '',
+          last_touch: true,
+          touched_at: now,
+          attribution_version: 'v3'
+        };
+        localStorage.setItem(storageKey(), JSON.stringify(updated));
+        return updated;
+      }
+
+      return existing;
+    }
+
+    function withAttribution(url) {
+      try {
+        const u = new URL(url, window.location.href);
+        const a = readAttribution();
+        if (a?.source && a.source !== 'direct') {
+          u.searchParams.set('utm_source', a.source);
+          u.searchParams.set('utm_medium', a.medium || 'none');
+          if (a.campaign) u.searchParams.set('utm_campaign', a.campaign);
+          if (a.content) u.searchParams.set('utm_content', a.content);
+          if (a.term) u.searchParams.set('utm_term', a.term);
+        }
+        if (a?.referral_code) u.searchParams.set('ref', a.referral_code);
+        return u.toString();
+      } catch (_) {
+        return url;
+      }
+    }
+
+    const anonymousId = getAnonymousId();
+    const attribution = captureAttribution();
+
+    // Expose only the small bridge the rest of index.html needs.
+    window.invoicedeyAttributionV3 = {
+      getAnonymousId,
+      readAttribution,
+      captureAttribution,
+      withAttribution
     };
 
-    const attribution = existing ? {
-      ...existing,
-      source: incoming.utm_source || (referralCode ? 'referral' : (existing.source || 'direct')),
-      medium: incoming.utm_medium || (referralCode ? 'referral' : (existing.medium || 'none')),
-      campaign: incoming.utm_campaign ?? existing.campaign ?? '',
-      content: incoming.utm_content ?? existing.content ?? '',
-      term: incoming.utm_term ?? existing.term ?? '',
-      referral_code: incoming.referral_code ?? existing.referral_code ?? '',
-      referrer: document.referrer || existing.referrer || '',
-      last_touch: true,
-      touched_at: now,
-      attribution_version: 'v3'
-    } : touch;
+    // Preserve attribution when the visitor continues directly into app.html.
+    document.querySelectorAll('a[href="app.html"]').forEach(link => {
+      link.href = withAttribution('app.html');
+    });
 
-    localStorage.setItem(storageKey, JSON.stringify(attribution));
-
-    // Debug/legacy keys. The v2-per-anonymous-id key above is authoritative for app.html.
-    localStorage.setItem('invoicedey-growth-landing-v1', JSON.stringify({
-      first_touch: existing || touch,
-      last_touch: touch
-    }));
-    localStorage.setItem('invoicedey-last-utm', JSON.stringify(touch));
+    console.debug('Invoicedey attribution V3', {
+      anonymous_id: anonymousId,
+      referral_code: attribution?.referral_code || '',
+      source: attribution?.source || 'direct'
+    });
   } catch (e) {
     console.debug('landing attribution', e.message || e);
   }
@@ -464,7 +531,7 @@ document.getElementById('authForm').addEventListener('submit', async (e) => {
     const { error } = await client.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: window.location.origin + '/app.html',
+        emailRedirectTo: window.invoicedeyAttributionV3?.withAttribution('app.html') || (window.location.origin + '/app.html'),
         data: name ? { full_name: name } : undefined
       }
     });
