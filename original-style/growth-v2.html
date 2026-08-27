@@ -103,11 +103,25 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+function loadSupabase(urls){
+  return new Promise((resolve,reject)=>{
+    let i=0;
+    const next=()=>{
+      if(i>=urls.length) return reject(new Error('Supabase client library could not be loaded. Check your network/CDN access.'));
+      const s=document.createElement('script');
+      s.src=urls[i++];
+      s.onload=()=>window.supabase?resolve():next();
+      s.onerror=next;
+      document.head.appendChild(s);
+    };
+    next();
+  });
+}
+
 const SUPABASE_URL='https://spzrnnqeshejdmnocvut.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY='sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
-const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
+let sb=null;
 let days=30;
 const $=id=>document.getElementById(id);
 const fmt=n=>Number(n||0).toLocaleString();
@@ -119,7 +133,18 @@ async function load(){
   $('status').style.display='block';
   $('dash').style.display='none';
 
-  const {data:{session}}=await sb.auth.getSession();
+  try {
+    if(!window.supabase){
+      $('status').textContent='Connecting to analytics…';
+      await loadSupabase([
+        'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2',
+        'https://unpkg.com/@supabase/supabase-js@2'
+      ]);
+    }
+    if(!sb) sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
+
+    const {data:{session},error:authError}=await sb.auth.getSession();
+    if(authError) throw authError;
   if(!session){
     $('status').innerHTML='Please sign in first. <a href="/index.html">Open login →</a>';
     return;
@@ -127,24 +152,29 @@ async function load(){
 
   const since=new Date(Date.now()-days*86400000).toISOString();
 
-  const [v,r,rev,ref,geo]=await Promise.all([
+  const [v,r,rev,ref,geo]=await Promise.race([Promise.all([
     sb.rpc('growth_v2_summary',{p_since:since}),
     sb.rpc('growth_retention',{p_since:new Date(Date.now()-90*86400000).toISOString().slice(0,10)}),
     sb.rpc('growth_revenue_summary',{p_since:new Date(Date.now()-90*86400000).toISOString()}),
     sb.rpc('growth_referral_summary',{p_since:since}),
     sb.rpc('growth_geo_summary',{p_since:since})
-  ]);
+  ]), new Promise((_,reject)=>setTimeout(()=>reject(new Error('Analytics request timed out after 15 seconds.')),15000))]);
 
   const err=v.error||r.error||rev.error||ref.error||geo.error;
   if(err){
     $('status').className='error';
-    $('status').innerHTML='<b>V2 unavailable.</b><br><br>'+esc(err.message)+'<br><br>Run 005_growth_intelligence_v2.sql.';
+    $('status').innerHTML='<b>Growth Intelligence could not load.</b><br><br>'+esc(err.message||err.details||err.hint||err.code||'Unknown Supabase error')+'<br><br>Make sure the Growth Intelligence V2/V3 SQL has been run in Supabase and your account is a growth admin.';
     return;
   }
 
   render(v.data,r.data,rev.data,ref.data,geo.data);
   $('status').style.display='none';
   $('dash').style.display='block';
+  } catch(e) {
+    console.error('Growth Intelligence load failed', e);
+    $('status').className='error';
+    $('status').innerHTML='<b>Dashboard failed to load.</b><br><br>'+esc(e?.message||e||'Unknown error')+'<br><br>Refresh the page. If it persists, check the Supabase URL/key and SQL functions.';
+  }
 }
 
 function render(v,r,rev,ref,geo){
