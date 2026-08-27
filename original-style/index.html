@@ -392,13 +392,43 @@ input:focus {
     const anonymousId = getAnonymousId();
     const attribution = captureAttribution();
 
-    // Expose only the small bridge the rest of index.html needs.
+    // Expose the bridge both as a namespaced API and as console-friendly globals.
+    // This makes debugging from DevTools straightforward without changing attribution behavior.
+    function attributionPayload() {
+      const a = readAttribution() || captureAttribution();
+      return {
+        anonymous_id: getAnonymousId(),
+        source: a?.source || 'direct',
+        medium: a?.medium || 'none',
+        campaign: a?.campaign || '',
+        content: a?.content || '',
+        term: a?.term || '',
+        referral_code: a?.referral_code || '',
+        landing_page: a?.landing_page || window.location.pathname || '/',
+        referrer: a?.referrer || document.referrer || '',
+        first_touch: !!a?.first_touch,
+        last_touch: true,
+        touched_at: a?.touched_at || new Date().toISOString(),
+        metadata: {
+          attribution_version: 'v3',
+          landing_page: window.location.pathname || '/'
+        }
+      };
+    }
+
     window.invoicedeyAttributionV3 = {
       getAnonymousId,
       readAttribution,
       captureAttribution,
+      attributionPayload,
       withAttribution
     };
+
+    // DevTools compatibility: allow readAttribution(), attributionPayload(), etc.
+    window.getAnonymousId = getAnonymousId;
+    window.readAttribution = readAttribution;
+    window.captureAttribution = captureAttribution;
+    window.attributionPayload = attributionPayload;
 
     // Preserve attribution when the visitor continues directly into app.html.
     document.querySelectorAll('a[href="app.html"]').forEach(link => {

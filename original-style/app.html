@@ -3499,6 +3499,18 @@ function withAttribution(url) {
   }
 }
 
+
+// DevTools/debug API — keep attribution functions explicitly accessible on window.
+window.invoicedeyAttributionV3 = window.invoicedeyAttributionV3 || {};
+window.invoicedeyAttributionV3.getAnonymousId = getAnonymousId;
+window.invoicedeyAttributionV3.readAttribution = readAttribution;
+window.invoicedeyAttributionV3.captureAttribution = captureAttribution;
+window.invoicedeyAttributionV3.attributionPayload = attributionPayload;
+window.getAnonymousId = getAnonymousId;
+window.readAttribution = readAttribution;
+window.captureAttribution = captureAttribution;
+window.attributionPayload = attributionPayload;
+
 function referralLink(code = cloud?.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '') {
   const u = new URL('index.html', window.location.href);
   if (code) u.searchParams.set('ref', code);
