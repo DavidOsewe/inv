@@ -292,7 +292,7 @@ input:focus {
     }
 
     // Referral links use: ?ref=DAVID25
-    const referralCode = (p.get('ref') || '').trim();
+    const referralCode = (p.get('ref') || p.get('referral') || '').trim().toUpperCase();
     if (referralCode) incoming.referral_code = referralCode;
 
     const hasCampaign = Object.keys(incoming).length > 0;
@@ -323,8 +323,8 @@ input:focus {
 
     const attribution = existing ? {
       ...existing,
-      source: incoming.utm_source || existing.source || (referralCode ? 'referral' : 'direct'),
-      medium: incoming.utm_medium || existing.medium || (referralCode ? 'referral' : 'none'),
+      source: incoming.utm_source || (referralCode ? 'referral' : (existing.source || 'direct')),
+      medium: incoming.utm_medium || (referralCode ? 'referral' : (existing.medium || 'none')),
       campaign: incoming.utm_campaign ?? existing.campaign ?? '',
       content: incoming.utm_content ?? existing.content ?? '',
       term: incoming.utm_term ?? existing.term ?? '',
