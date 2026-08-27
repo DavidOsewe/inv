@@ -35,7 +35,7 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 .cohort>div{padding:10px;border-bottom:1px solid var(--l);border-right:1px solid var(--l);font-size:11px}
 .cohort .h{font-weight:800;background:#F8FAFC;color:var(--m)}.heat{font-weight:800;text-align:center}
 .empty,.error{padding:30px;text-align:center;border-radius:14px}.empty{background:var(--p);border:1px dashed var(--l);color:var(--m)}
-.error{background:#FEF2F2;color:#B91C1C;border:1px solid #FECACA}
+.error{background:#FEF2F2;color:#B91C1C;border:1px solid #FECACA}.loading{padding:30px;text-align:center;border-radius:14px;background:var(--p);border:1px dashed var(--l);color:var(--m)}
 @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:560px){.top{display:block}.actions{margin-top:12px}.actions .btn{flex:1}.cards{grid-template-columns:1fr 1fr}}
 </style>
@@ -157,172 +157,298 @@ const $=id=>document.getElementById(id);
 const fmt=n=>Number(n||0).toLocaleString();
 const moneyMinor=n=>'$'+(Number(n||0)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 
+
+function setLoading(isLoading){
+  const status = $('status');
+  const dash = $('dash');
+  if (!status || !dash) return;
+
+  if (isLoading) {
+    status.className = 'loading';
+    status.style.display = 'block';
+    status.textContent = 'Loading…';
+    dash.style.display = 'none';
+  } else {
+    status.style.display = 'none';
+    dash.style.display = 'block';
+  }
+}
+
+function showError(err){
+  const status = $('status');
+  const dash = $('dash');
+  if (!status) return;
+
+  if (dash) dash.style.display = 'none';
+  status.className = 'error';
+  status.style.display = 'block';
+  status.innerHTML =
+    '<b>Dashboard failed to load.</b><br><br>' +
+    esc(err?.message || String(err)) +
+    '<br><br><small>Refresh the page. If it persists, check the Supabase RPC functions and publishable key.</small>';
+}
+
+function dateWindow(){
+  const end = new Date();
+  const start = new Date(end);
+  start.setDate(start.getDate() - days + 1);
+
+  return {
+    from: start.toISOString(),
+    to: end.toISOString(),
+    fromDate: start.toISOString().slice(0,10),
+    toDate: end.toISOString().slice(0,10)
+  };
+}
+
+async function rpcRequired(client, name, params){
+  const result = await client.rpc(name, params);
+  if (result.error) {
+    throw new Error(name + ': ' + result.error.message);
+  }
+  return result.data;
+}
+
 async function load(){
   setLoading(true);
+
   try {
-    const sb = await getSupabase();
-    const range = getDateRange();
-    const since = range.from ? new Date(range.from + 'T00:00:00').toISOString() : null;
-    const until = range.to ? new Date(range.to + 'T23:59:59.999').toISOString() : null;
+    const client = sb || await new Promise((resolve,reject)=>{
+      if (window.supabase) return resolve(window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY));
+      loadSupabase([
+        'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2'
+      ]).then(()=>{
+        try {
+          resolve(window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY));
+        } catch(e){ reject(e); }
+      }).catch(reject);
+    });
 
-    const args = {};
-    if (since) args.p_since = since;
-    if (until) args.p_until = until;
+    sb = client;
 
-    const calls = await Promise.all([
-      sb.rpc('growth_v2_summary', {p_since: since || new Date(0).toISOString(), p_until: until || new Date().toISOString()}),
-      sb.rpc('growth_retention', {p_since: range.from || '1970-01-01'}),
-      sb.rpc('growth_revenue_summary', {p_since: since || new Date(0).toISOString()}),
-      sb.rpc('growth_referral_summary', {p_since: since || new Date(0).toISOString(), p_until: until || new Date().toISOString()}),
-      sb.rpc('growth_geo_summary', {p_since: since || new Date(0).toISOString(), p_until: until || new Date().toISOString()}),
-      sb.rpc('growth_campaign_summary', {p_since: since || new Date(0).toISOString(), p_until: until || new Date().toISOString()})
+    const w = dateWindow();
+
+    /*
+      IMPORTANT:
+      - growth_v2_summary is the existing top-level summary and uses p_days.
+      - growth_retention / growth_revenue_summary use p_since.
+      - campaign/referral/geo are the new V4 functions and use p_since + p_until.
+      Thus the visible 7/30/90 filter drives all dashboard sections.
+    */
+    const results = await Promise.all([
+      rpcRequired(client,'growth_v2_summary',{p_days:days}),
+      rpcRequired(client,'growth_retention',{p_since:w.fromDate}),
+      rpcRequired(client,'growth_revenue_summary',{p_since:w.from}),
+      rpcRequired(client,'growth_referral_summary',{p_since:w.from,p_until:w.to}),
+      rpcRequired(client,'growth_geo_summary',{p_since:w.from,p_until:w.to}),
+      rpcRequired(client,'growth_campaign_summary',{p_since:w.from,p_until:w.to})
     ]);
 
-    const err = calls.find(x => x.error)?.error;
-    if (err) throw new Error(err.message || JSON.stringify(err));
+    render(
+      results[0],
+      results[1],
+      results[2],
+      results[3],
+      results[4],
+      results[5]
+    );
 
-    render(calls[0].data,calls[1].data,calls[2].data,calls[3].data,calls[4].data,calls[5].data);
     setLoading(false);
+
   } catch(e) {
-    setLoading(false);
+    console.error('Growth Intelligence load error:',e);
     showError(e);
   }
 }
 
 function render(v,r,rev,ref,geo,camp){
-  const c=v.current||{},g=v.growth||{};
+  const c=v?.current||{},g=v?.growth||{};
+
   $('signups').textContent=fmt(c.signups);
   $('invoices').textContent=fmt(c.invoices);
   $('shares').textContent=fmt(c.shares);
-  $('sg').innerHTML=g.signups_pct==null?'No prior period':'<span class="'+(g.signups_pct>=0?'up':'down')+'">'+g.signups_pct+'%</span> vs prior';
-  $('ig').innerHTML=g.invoices_pct==null?'No prior period':'<span class="'+(g.invoices_pct>=0?'up':'down')+'">'+g.invoices_pct+'%</span> vs prior';
-  $('shg').innerHTML=g.shares_pct==null?'No prior period':'<span class="'+(g.shares_pct>=0?'up':'down')+'">'+g.shares_pct+'%</span> vs prior';
-  $('mrr').textContent=moneyMinor(rev.current_mrr_minor);
-  $('churn').textContent=fmt(rev.current_churned_users);
-  renderCohorts(r.cohorts||[]);
+
+  $('sg').innerHTML=g.signups_pct==null
+    ? 'No prior period'
+    : '<span class="'+(g.signups_pct>=0?'up':'down')+'">'+g.signups_pct+'%</span> vs prior';
+
+  $('ig').innerHTML=g.invoices_pct==null
+    ? 'No prior period'
+    : '<span class="'+(g.invoices_pct>=0?'up':'down')+'">'+g.invoices_pct+'%</span> vs prior';
+
+  $('shg').innerHTML=g.shares_pct==null
+    ? 'No prior period'
+    : '<span class="'+(g.shares_pct>=0?'up':'down')+'">'+g.shares_pct+'%</span> vs prior';
+
+  $('mrr').textContent=moneyMinor(rev?.current_mrr_minor);
+  $('churn').textContent=fmt(rev?.current_churned_users);
+
+  renderCohorts(r?.cohorts||[]);
   renderReferrals(ref?.rows||[]);
   renderGeo(geo?.rows||[]);
   renderCampaigns(camp?.rows||[]);
-  renderRevenue(rev.monthly||[]);
-  const last=(rev.monthly||[]).slice(-1)[0];
+  renderRevenue(rev?.monthly||[]);
+
+  const last=(rev?.monthly||[]).slice(-1)[0];
+
   $('payers').textContent=fmt(last?.active_payers);
   $('net').textContent=moneyMinor(last?.net_minor);
-  $('revstatus').textContent=(rev.monthly||[]).length?'Live':'Not enough data';
+  $('revstatus').textContent=(rev?.monthly||[]).length?'Live':'Not enough data';
+
   $('brief').textContent=brief(c,g,rev);
 }
 
 function renderCohorts(rows){
   let h='<div class="h">Cohort</div>';
   for(let i=0;i<=8;i++)h+='<div class="h">W'+i+'</div>';
+
   let body='';
+
   rows.forEach(x=>{
     body+='<div><b>'+x.cohort_week+'</b><br><small>'+x.cohort_users+' users</small></div>';
+
     const map={};
     (x.weeks||[]).forEach(w=>map[w.week]=w.retention_pct);
+
     for(let i=0;i<=8;i++){
       const n=map[i];
       const opacity=n?Math.min(.7,n/100):0;
-      body+='<div class="heat" style="background:rgba(36,103,227,'+opacity+');color:'+(n>55?'#fff':'#0F172A')+'">'+(n==null?'—':n+'%')+'</div>';
+
+      body+='<div class="heat" style="background:rgba(36,103,227,'+opacity+');color:'+
+        (n>55?'#fff':'#0F172A')+'">'+
+        (n==null?'—':n+'%')+
+        '</div>';
     }
   });
+
   $('cohort').innerHTML=body||'<div>No cohorts yet.</div>';
 }
 
 function renderReferrals(rows){
-  const el = $('referrals');
-  if (!el) return;
-  el.innerHTML = rows.map(x => '<tr><td><b>'+esc(x.referral_code || 'Unknown')+'</b></td><td class="num">'+fmt(x.visitors)+'</td><td class="num">'+fmt(x.signups)+'</td><td class="num">'+fmt(x.activated)+'</td><td class="num">'+fmt(x.invoices)+'</td><td class="num">'+fmt(x.shares)+'</td><td class="num">'+fmt(x.downloads)+'</td></tr>').join('') || '<tr><td colspan="7">No referral activity yet.</td></tr>';
+  const el=$('referrals');
+  if(!el)return;
+
+  el.innerHTML=rows.map(x=>
+    '<tr><td><b>'+esc(x.referral_code||'Unknown')+
+    '</b></td><td class="num">'+fmt(x.visitors)+
+    '</td><td class="num">'+fmt(x.signups)+
+    '</td><td class="num">'+fmt(x.activated)+
+    '</td><td class="num">'+fmt(x.invoices)+
+    '</td><td class="num">'+fmt(x.shares)+
+    '</td><td class="num">'+fmt(x.downloads)+
+    '</td></tr>'
+  ).join('')||
+  '<tr><td colspan="7">No referral activity in this period.</td></tr>';
 }
 
-
 function renderCampaigns(rows){
-  const el = $('campaigns');
-  if (!el) return;
-  el.innerHTML = rows.map(x => {
-    const visitors = Number(x.visitors||0);
-    const signups = Number(x.signups||0);
-    const activated = Number(x.activated||0);
-    const signupRate = visitors ? ((signups/visitors)*100).toFixed(1)+'%' : '—';
-    const activationRate = signups ? ((activated/signups)*100).toFixed(1)+'%' : '—';
-    return '<tr>' +
-      '<td><b>'+esc(x.source||'direct')+'</b></td>' +
-      '<td>'+esc(x.medium||'none')+'</td>' +
-      '<td>'+esc(x.campaign||'(none)')+'</td>' +
-      '<td>'+esc(x.content||'(none)')+'</td>' +
-      '<td class="num">'+fmt(visitors)+'</td>' +
-      '<td class="num">'+fmt(signups)+' <small>'+signupRate+'</small></td>' +
-      '<td class="num">'+fmt(activated)+' <small>'+activationRate+'</small></td>' +
-      '<td class="num">'+fmt(x.invoices)+'</td>' +
-      '<td class="num">'+fmt(x.sent)+'</td>' +
-      '<td class="num">'+fmt(x.shares)+'</td>' +
-      '<td class="num">'+fmt(x.downloads)+'</td>' +
+  const el=$('campaigns');
+  if(!el)return;
+
+  el.innerHTML=rows.map(x=>{
+    const visitors=Number(x.visitors||0);
+    const signups=Number(x.signups||0);
+    const activated=Number(x.activated||0);
+
+    const signupRate=visitors
+      ? ((signups/visitors)*100).toFixed(1)+'%'
+      : '—';
+
+    const activationRate=signups
+      ? ((activated/signups)*100).toFixed(1)+'%'
+      : '—';
+
+    return '<tr>'+
+      '<td><b>'+esc(x.source||'direct')+'</b></td>'+
+      '<td>'+esc(x.medium||'none')+'</td>'+
+      '<td>'+esc(x.campaign||'(none)')+'</td>'+
+      '<td>'+esc(x.content||'(none)')+'</td>'+
+      '<td class="num">'+fmt(visitors)+'</td>'+
+      '<td class="num">'+fmt(signups)+' <small>'+signupRate+'</small></td>'+
+      '<td class="num">'+fmt(activated)+' <small>'+activationRate+'</small></td>'+
+      '<td class="num">'+fmt(x.invoices)+'</td>'+
+      '<td class="num">'+fmt(x.sent)+'</td>'+
+      '<td class="num">'+fmt(x.shares)+'</td>'+
+      '<td class="num">'+fmt(x.downloads)+'</td>'+
     '</tr>';
-  }).join('') || '<tr><td colspan="11">No campaign activity yet.</td></tr>';
+  }).join('')||
+  '<tr><td colspan="11">No campaign activity in this period.</td></tr>';
 }
 
 function renderGeo(rows){
-  const el = $('geo');
-  if (!el) return;
-  el.innerHTML = rows.map(x => '<tr><td><b>'+esc(x.country_code || 'Unknown')+'</b></td><td class="num">'+fmt(x.visitors)+'</td><td class="num">'+fmt(x.signups)+'</td><td class="num">'+fmt(x.activated)+'</td><td class="num">'+fmt(x.invoices)+'</td><td class="num">'+fmt(x.shares)+'</td><td class="num">'+fmt(x.downloads)+'</td></tr>').join('') || '<tr><td colspan="7">No geography data yet.</td></tr>';
+  const el=$('geo');
+  if(!el)return;
+
+  el.innerHTML=rows.map(x=>
+    '<tr><td><b>'+esc(x.country_code||'Unknown')+
+    '</b></td><td class="num">'+fmt(x.visitors)+
+    '</td><td class="num">'+fmt(x.signups)+
+    '</td><td class="num">'+fmt(x.activated)+
+    '</td><td class="num">'+fmt(x.invoices)+
+    '</td><td class="num">'+fmt(x.shares)+
+    '</td><td class="num">'+fmt(x.downloads)+
+    '</td></tr>'
+  ).join('')||
+  '<tr><td colspan="7">No geography data in this period.</td></tr>';
 }
 
 function renderRevenue(a){
-  $('revenue').innerHTML=a.map(x=>'<tr><td><b>'+x.month+'</b></td><td class="num">'+moneyMinor(x.gross_minor)+'</td><td class="num">'+moneyMinor(x.refunds_minor)+'</td><td class="num">'+moneyMinor(x.net_minor)+'</td><td class="num">'+fmt(x.active_payers)+'</td><td class="num">'+fmt(x.new_paid)+'</td></tr>').join('')
-  ||'<tr><td colspan="6">No revenue events yet.</td></tr>';
+  $('revenue').innerHTML=(a||[]).map(x=>
+    '<tr><td><b>'+esc(x.month)+'</b></td>'+
+    '<td class="num">'+moneyMinor(x.gross_minor)+'</td>'+
+    '<td class="num">'+moneyMinor(x.refunds_minor)+'</td>'+
+    '<td class="num">'+moneyMinor(x.net_minor)+'</td>'+
+    '<td class="num">'+fmt(x.active_payers)+'</td>'+
+    '<td class="num">'+fmt(x.new_paid)+'</td></tr>'
+  ).join('')||
+  '<tr><td colspan="6">No revenue events yet.</td></tr>';
 }
 
 function brief(c,g,rev){
-  if(!c.signups&&!c.invoices)return'Not enough data yet. Let real users accumulate before making growth decisions.';
+  if(!c.signups&&!c.invoices)
+    return 'Not enough data yet. Let real users accumulate before making growth decisions.';
+
   let s='The last '+days+' days produced '+fmt(c.signups)+' signups and '+fmt(c.invoices)+' invoices. ';
-  if(g.signups_pct!=null)s+='Signups changed '+(g.signups_pct>=0?'+':'')+g.signups_pct+'% versus the prior period. ';
-  if(rev.current_mrr_minor>0)s+='Current MRR is '+moneyMinor(rev.current_mrr_minor)+'. ';
-  else s+='Revenue analytics is ready but needs billing events. ';
-  return s+'Use the cohort table to judge whether acquisition is producing users who keep using InvoiceDey.';
+
+  if(g.signups_pct!=null)
+    s+='Signups changed '+(g.signups_pct>=0?'+':'')+g.signups_pct+'% versus the prior period. ';
+
+  if(rev.current_mrr_minor>0)
+    s+='Current MRR is '+moneyMinor(rev.current_mrr_minor)+'. ';
+  else
+    s+='Revenue analytics is ready but needs billing events. ';
+
+  return s+'Use the campaign, referral and cohort tables to judge whether acquisition is producing users who keep using InvoiceDey.';
 }
 
 function esc(s){
-  return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  return String(s??'').replace(/[&<>"']/g,c=>({
+    '&':'&amp;',
+    '<':'&lt;',
+    '>':'&gt;',
+    '"':'&quot;',
+    "'":'&#039;'
+  }[c]));
 }
 
-document.querySelectorAll('.range button').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('.range button').forEach(x=>x.classList.remove('active'));
-  b.classList.add('active');
-  days=Number(b.dataset.days);
-  
-function fmtDate(d){ return d.toISOString().slice(0,10); }
-function getDateRange(){
-  const from = $('fromDate')?.value || '';
-  const to = $('toDate')?.value || '';
-  return {from, to};
-}
-function setDateRange(days){
-  const now = new Date();
-  const to = fmtDate(now);
-  let from = '';
-  if (days !== null) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - days + 1);
-    from = fmtDate(d);
-  }
-  if ($('fromDate')) $('fromDate').value = from;
-  if ($('toDate')) $('toDate').value = to;
-  load();
-}
-function initDateFilters(){
-  setDateRange(30);
-  $('applyDates')?.addEventListener('click', load);
-  $('todayBtn')?.addEventListener('click', () => setDateRange(1));
-  $('days7Btn')?.addEventListener('click', () => setDateRange(7));
-  $('days30Btn')?.addEventListener('click', () => setDateRange(30));
-  $('days90Btn')?.addEventListener('click', () => setDateRange(90));
-  $('allTimeBtn')?.addEventListener('click', () => setDateRange(null));
-}
+/* ---------- Date filter ---------- */
+document.querySelectorAll('.range button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('.range button')
+      .forEach(x=>x.classList.remove('active'));
 
-load();
+    b.classList.add('active');
+    days=Number(b.dataset.days);
+
+    load();
+  };
 });
 
 $('refresh').onclick=load;
+
+/* Initial load */
 load();
+
 </script>
 </body>
 </html>
