@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>InvoiceDey — Growth Intelligence V3</title>
+<title>InvoiceDey — Growth Intelligence V2</title>
 <style>
 :root{--b:#2467E3;--bg:#F8FAFC;--p:#fff;--l:#E2E8F0;--t:#0F172A;--m:#64748B;--g:#10B981;--r:#EF4444;--s:#EEF5FF}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font:14px/1.5 Inter,system-ui,sans-serif}
@@ -45,11 +45,11 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 <div class="top">
 <div>
 <div class="brand">invoice<em>dey</em></div>
-<h1>Growth Intelligence</h1>
-<p class="sub">Acquisition → referral → activation → retention → revenue.</p>
+<h1>Growth Intelligence V2</h1>
+<p class="sub">Acquisition → activation → retention → revenue.</p>
 </div>
 <div class="actions">
-
+<button class="btn" onclick="location.href='/growth-intelligence.html'">← V1</button>
 <button class="btn primary" id="refresh">Refresh</button>
 </div>
 </div>
@@ -127,27 +127,25 @@ async function load(){
 
   const since=new Date(Date.now()-days*86400000).toISOString();
 
-  const [v,r,rev,ref,geo]=await Promise.all([
+  const [v,r,rev]=await Promise.all([
     sb.rpc('growth_v2_summary',{p_since:since}),
     sb.rpc('growth_retention',{p_since:new Date(Date.now()-90*86400000).toISOString().slice(0,10)}),
-    sb.rpc('growth_revenue_summary',{p_since:new Date(Date.now()-90*86400000).toISOString()}),
-    sb.rpc('growth_referral_summary',{p_since:since}),
-    sb.rpc('growth_geo_summary',{p_since:since})
+    sb.rpc('growth_revenue_summary',{p_since:new Date(Date.now()-90*86400000).toISOString()})
   ]);
 
-  const err=v.error||r.error||rev.error||ref.error||geo.error;
+  const err=v.error||r.error||rev.error;
   if(err){
     $('status').className='error';
     $('status').innerHTML='<b>V2 unavailable.</b><br><br>'+esc(err.message)+'<br><br>Run 005_growth_intelligence_v2.sql.';
     return;
   }
 
-  render(v.data,r.data,rev.data,ref.data,geo.data);
+  render(v.data,r.data,rev.data);
   $('status').style.display='none';
   $('dash').style.display='block';
 }
 
-function render(v,r,rev,ref,geo){
+function render(v,r,rev){
   const c=v.current||{},g=v.growth||{};
   $('signups').textContent=fmt(c.signups);
   $('invoices').textContent=fmt(c.invoices);
@@ -158,8 +156,6 @@ function render(v,r,rev,ref,geo){
   $('mrr').textContent=moneyMinor(rev.current_mrr_minor);
   $('churn').textContent=fmt(rev.current_churned_users);
   renderCohorts(r.cohorts||[]);
-  renderReferrals(ref?.rows||[]);
-  renderGeo(geo?.rows||[]);
   renderRevenue(rev.monthly||[]);
   const last=(rev.monthly||[]).slice(-1)[0];
   $('payers').textContent=fmt(last?.active_payers);
@@ -183,14 +179,6 @@ function renderCohorts(rows){
     }
   });
   $('cohort').innerHTML=body||'<div>No cohorts yet.</div>';
-}
-
-function renderReferrals(rows){
-  $('referrals').innerHTML = rows.map(x => '<tr><td><b>'+esc(x.referral_code || 'Unknown')+'</b></td><td class="num">'+fmt(x.visitors)+'</td><td class="num">'+fmt(x.signups)+'</td><td class="num">'+fmt(x.activated)+'</td><td class="num">'+fmt(x.invoices)+'</td><td class="num">'+fmt(x.shares)+'</td><td class="num">'+fmt(x.downloads)+'</td></tr>').join('') || '<tr><td colspan="7">No referral activity yet.</td></tr>';
-}
-
-function renderGeo(rows){
-  $('geo').innerHTML = rows.map(x => '<tr><td><b>'+esc(x.country_code || 'Unknown')+'</b></td><td class="num">'+fmt(x.visitors)+'</td><td class="num">'+fmt(x.signups)+'</td><td class="num">'+fmt(x.activated)+'</td><td class="num">'+fmt(x.invoices)+'</td><td class="num">'+fmt(x.shares)+'</td><td class="num">'+fmt(x.downloads)+'</td></tr>').join('') || '<tr><td colspan="7">No geography data yet.</td></tr>';
 }
 
 function renderRevenue(a){
