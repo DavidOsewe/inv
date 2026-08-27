@@ -38,6 +38,14 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 .error{background:#FEF2F2;color:#B91C1C;border:1px solid #FECACA}.loading{padding:30px;text-align:center;border-radius:14px;background:var(--p);border:1px dashed var(--l);color:var(--m)}
 @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:560px){.top{display:block}.actions{margin-top:12px}.actions .btn{flex:1}.cards{grid-template-columns:1fr 1fr}}
+
+.datebar{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin:0 0 20px;padding:14px 16px;background:#fff;border:1px solid var(--l);border-radius:12px}
+.datebar-title{width:100%;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--m);margin-bottom:1px}
+.date-field{display:flex;flex-direction:column;gap:5px;font-size:11px;font-weight:700;color:var(--m)}
+.date-field input{height:36px;border:1px solid var(--l);border-radius:8px;padding:0 10px;font:inherit;color:#0F172A;background:#fff}
+.datebar .apply{height:36px}
+.date-note{font-size:11px;color:var(--m);margin-left:auto;padding-bottom:9px}
+@media(max-width:700px){.date-note{width:100%;margin-left:0;padding-bottom:0}}
 </style>
 </head>
 <body>
@@ -54,10 +62,22 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 </div>
 </div>
 
+<div class="datebar">
+<div class="datebar-title">Date range</div>
 <div class="range">
 <button data-days="7">7 days</button>
 <button data-days="30" class="active">30 days</button>
 <button data-days="90">90 days</button>
+</div>
+<label class="date-field">From
+<input id="fromDate" type="date">
+</label>
+<label class="date-field">To
+<input id="toDate" type="date">
+</label>
+<button class="btn primary apply" id="applyDates">Apply</button>
+<button class="btn apply" id="allTime">All time</button>
+<div class="date-note" id="dateNote">30-day window</div>
 </div>
 
 <div id="status" class="empty">Loading…</div>
@@ -189,6 +209,23 @@ function showError(err){
 }
 
 function dateWindow(){
+  const fromInput = $('fromDate')?.value || '';
+  const toInput = $('toDate')?.value || '';
+
+  if (fromInput && toInput) {
+    const from = new Date(fromInput + 'T00:00:00');
+    const to = new Date(toInput + 'T23:59:59.999');
+
+    if (from > to) throw new Error('The From date cannot be after the To date.');
+
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      fromDate: fromInput,
+      toDate: toInput
+    };
+  }
+
   const end = new Date();
   const start = new Date(end);
   start.setDate(start.getDate() - days + 1);
@@ -230,13 +267,13 @@ async function load(){
 
     /*
       IMPORTANT:
-      - growth_v2_summary is the existing top-level summary and uses p_days.
+      - growth_v2_summary is the existing top-level summary and uses p_since.
       - growth_retention / growth_revenue_summary use p_since.
       - campaign/referral/geo are the new V4 functions and use p_since + p_until.
       Thus the visible 7/30/90 filter drives all dashboard sections.
     */
     const results = await Promise.all([
-      rpcRequired(client,'growth_v2_summary',{p_days:days}),
+      rpcRequired(client,'growth_v2_summary',{p_since:w.from}),
       rpcRequired(client,'growth_retention',{p_since:w.fromDate}),
       rpcRequired(client,'growth_revenue_summary',{p_since:w.from}),
       rpcRequired(client,'growth_referral_summary',{p_since:w.from,p_until:w.to}),
@@ -432,6 +469,20 @@ function esc(s){
 }
 
 /* ---------- Date filter ---------- */
+function pad2(n){ return String(n).padStart(2,'0'); }
+function localDateValue(d){
+  return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
+}
+function setPresetDateInputs(n){
+  const to = new Date();
+  const from = new Date(to);
+  from.setDate(from.getDate() - n + 1);
+
+  $('fromDate').value = localDateValue(from);
+  $('toDate').value = localDateValue(to);
+  $('dateNote').textContent = n + '-day window';
+}
+
 document.querySelectorAll('.range button').forEach(b=>{
   b.onclick=()=>{
     document.querySelectorAll('.range button')
@@ -439,12 +490,37 @@ document.querySelectorAll('.range button').forEach(b=>{
 
     b.classList.add('active');
     days=Number(b.dataset.days);
-
+    setPresetDateInputs(days);
     load();
   };
 });
 
+$('applyDates').onclick=()=>{
+  document.querySelectorAll('.range button')
+    .forEach(x=>x.classList.remove('active'));
+
+  $('dateNote').textContent =
+    ($('fromDate').value && $('toDate').value)
+      ? $('fromDate').value + ' → ' + $('toDate').value
+      : 'Custom date range';
+
+  load();
+};
+
+$('allTime').onclick=()=>{
+  document.querySelectorAll('.range button')
+    .forEach(x=>x.classList.remove('active'));
+
+  $('fromDate').value='';
+  $('toDate').value='';
+  $('dateNote').textContent='All available data';
+  load();
+};
+
 $('refresh').onclick=load;
+
+/* Start with the visible 30-day filter actually populated. */
+setPresetDateInputs(30);
 
 /* Initial load */
 load();
