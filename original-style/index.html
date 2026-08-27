@@ -253,13 +253,14 @@ input:focus {
 </div>
 <script>
 /*
-  InvoiceDey Growth — landing attribution bridge
+  InvoiceDey Growth — landing attribution bridge (v3)
 
   app.html stores attribution under:
     invoicedey-attribution-v2-[anonymous_id]
 
-  The landing page now uses the SAME anonymous_id and storage format,
-  so campaign data survives the magic-link redirect into app.html.
+  The landing page uses the SAME anonymous_id and storage format.
+  This preserves UTM campaigns AND ?ref= referral codes through
+  the magic-link redirect into app.html.
 */
 (function () {
   try {
@@ -283,8 +284,18 @@ input:focus {
 
     const p = new URLSearchParams(window.location.search);
     const keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
-    const hasCampaign = keys.some(k => (p.get(k) || '').trim());
+    const incoming = {};
 
+    for (const key of keys) {
+      const value = (p.get(key) || '').trim();
+      if (value) incoming[key] = value;
+    }
+
+    // Referral links use: ?ref=DAVID25
+    const referralCode = (p.get('ref') || '').trim();
+    if (referralCode) incoming.referral_code = referralCode;
+
+    const hasCampaign = Object.keys(incoming).length > 0;
     if (!hasCampaign) return;
 
     const storageKey = ATTR_PREFIX + anonymousId;
@@ -296,35 +307,37 @@ input:focus {
     } catch (_) {}
 
     const touch = {
-      source: (p.get('utm_source') || 'direct').trim(),
-      medium: (p.get('utm_medium') || 'none').trim(),
-      campaign: (p.get('utm_campaign') || '').trim(),
-      content: (p.get('utm_content') || '').trim(),
-      term: (p.get('utm_term') || '').trim(),
+      source: incoming.utm_source || (referralCode ? 'referral' : 'direct'),
+      medium: incoming.utm_medium || (referralCode ? 'referral' : 'none'),
+      campaign: incoming.utm_campaign || '',
+      content: incoming.utm_content || '',
+      term: incoming.utm_term || '',
+      referral_code: referralCode || '',
       landing_page: window.location.pathname || '/',
       referrer: document.referrer || '',
       first_touch: !existing,
       last_touch: true,
       touched_at: now,
-      attribution_version: 'v2'
+      attribution_version: 'v3'
     };
 
     const attribution = existing ? {
       ...existing,
-      source: touch.source || existing.source || 'direct',
-      medium: touch.medium || existing.medium || 'none',
-      campaign: touch.campaign || existing.campaign || '',
-      content: touch.content || existing.content || '',
-      term: touch.term || existing.term || '',
-      referrer: touch.referrer || existing.referrer || '',
+      source: incoming.utm_source || existing.source || (referralCode ? 'referral' : 'direct'),
+      medium: incoming.utm_medium || existing.medium || (referralCode ? 'referral' : 'none'),
+      campaign: incoming.utm_campaign ?? existing.campaign ?? '',
+      content: incoming.utm_content ?? existing.content ?? '',
+      term: incoming.utm_term ?? existing.term ?? '',
+      referral_code: incoming.referral_code ?? existing.referral_code ?? '',
+      referrer: document.referrer || existing.referrer || '',
       last_touch: true,
       touched_at: now,
-      attribution_version: 'v2'
+      attribution_version: 'v3'
     } : touch;
 
     localStorage.setItem(storageKey, JSON.stringify(attribution));
 
-    // Legacy/debug keys; v2 above is authoritative for app.html.
+    // Debug/legacy keys. The v2-per-anonymous-id key above is authoritative for app.html.
     localStorage.setItem('invoicedey-growth-landing-v1', JSON.stringify({
       first_touch: existing || touch,
       last_touch: touch
@@ -481,5 +494,4 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
 init();
 </script>
 </body>
-</html>< ! - -   t e s t   u p d a t e   - - >  
- 
+</html>
