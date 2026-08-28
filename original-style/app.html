@@ -2710,6 +2710,72 @@ document.addEventListener('click', e => {
   }
 });
 
+function openClientModal(client) {
+  editingClientId = client ? client.id : null;
+  $('#clientModalTitle').textContent = client ? 'Edit client' : 'Add a client';
+  $('#clientModalSub').textContent = client
+    ? 'Update this client’s details. Existing invoices keep the same link.'
+    : 'Save a client once and invoice them in seconds.';
+  $('#mName').value = client?.name || '';
+  $('#mEmail').value = client?.email || '';
+  $('#mTaxId').value = client?.taxId || '';
+  $('#mAddress').value = client?.address || '';
+  $('#confirm').textContent = client ? 'Update client' : 'Save client';
+  clearInvalid(document.getElementById('modal'));
+  showBanner('clientErrors', []);
+  $('#modal').classList.add('show');
+  $('#mName').focus();
+}
+
+$('#addClient').onclick = () => openClientModal(null);
+$('#cancel').onclick = () => {
+  $('#modal').classList.remove('show');
+  editingClientId = null;
+};
+$('#confirm').onclick = () => {
+  clearInvalid(document.getElementById('modal'));
+  showBanner('clientErrors', []);
+  const n = $('#mName').value.trim();
+  const email = $('#mEmail').value.trim();
+  const taxId = $('#mTaxId').value.trim();
+  const errors = [];
+  if (!n) {
+    errors.push('Client name is required.');
+    $('#mName')?.classList.add('invalid');
+  }
+  if (email && !isValidEmail(email)) {
+    errors.push('Enter a valid email address.');
+    $('#mEmail')?.classList.add('invalid');
+  }
+  if (errors.length) {
+    showBanner('clientErrors', errors);
+    toast(errors[0]);
+    return;
+  }
+  const address = ($('#mAddress')?.value || '').trim();
+  const payload = { name: n, email, address, taxId };
+  if (editingClientId) {
+    const c = db.clients.find(x => x.id === editingClientId);
+    if (c) Object.assign(c, payload);
+    toast('Client updated.');
+  } else {
+    db.clients.push({ id: crypto.randomUUID(), ...payload });
+    toast('Client saved.');
+  }
+  save();
+  editingClientId = null;
+  $('#mName').value = $('#mEmail').value = $('#mTaxId').value = '';
+  if ($('#mAddress')) $('#mAddress').value = '';
+  $('#modal').classList.remove('show');
+  clients();
+  if (edit && $('#client')) {
+    const prev = edit.client;
+    $('#client').innerHTML = '<option value="">Select client…</option>' +
+      db.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    $('#client').value = prev || '';
+  }
+};
+
 document.addEventListener('input', e => {
   if (e.target.dataset.n !== undefined && edit) {
     const n = e.target.dataset.n;
