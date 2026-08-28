@@ -1805,6 +1805,48 @@ function goToSignup() {
     window.location.href = 'signup.html';
   }
 }
+/* ==== Supabase client + account state ==== */
+const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
+let supabaseClientPromise = null;
+
+async function getSupabase() {
+  if (supabaseClientPromise) return supabaseClientPromise;
+  supabaseClientPromise = (async () => {
+    if (!window.supabase) {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+    return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  })();
+  return supabaseClientPromise;
+}
+
+async function syncProfile(client, user) {
+  if (!client || !user) return;
+  const { error } = await client.from('profiles').upsert({
+    id: user.id,
+    email: user.email || null,
+    full_name: user.user_metadata?.full_name || ''
+  }, { onConflict: 'id' });
+  if (error) console.warn('profile sync', error.message);
+}
+
+let cloud = {
+  client: null,
+  user: null,
+  organizationId: null,
+  syncing: false,
+  timer: null,
+  hydrated: false,
+  referralCode: null
+};
+
 const today = new Date().toISOString().slice(0, 10);
 const defaultDB = {
   profile: {
