@@ -1463,6 +1463,11 @@ input:focus:not(:focus-visible) {
           <p style="font-size:12px;color:var(--muted);margin-top:14px">Billing is coming soon. Your current plan remains active.</p>
         </div>
       </div>
+      <div class="insight" style="margin-top:18px">
+        <h3>Feature access</h3>
+        <p style="color:var(--muted);margin:4px 0 14px;line-height:1.5">Premium features stay visible so you know exactly what your plan unlocks.</p>
+        <div id="featureAccessList" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px"></div>
+      </div>
     </section>
 
     <section class="view" id="profile">
@@ -1474,9 +1479,10 @@ input:focus:not(:focus-visible) {
         <div class="logo-upload">
           <img class="logo-preview" id="logoPreview" alt="Logo">
           <div>
-            <label class="button" style="display:inline-block">
+            <label class="button" id="logoUploadLabel" style="display:inline-block">
               <input type="file" id="logoFile" accept="image/*" hidden>Upload company logo
             </label>
+            <div id="logoFeatureHint" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
             <div style="font-size:12px;color:var(--muted);margin-top:6px">PNG or JPG. Stored in this browser for V1.</div>
           </div>
         </div>
@@ -2696,6 +2702,69 @@ function showUpgradeModal(title, message) {
   modal.classList.add('show');
 }
 
+const FEATURE_REQUIREMENTS = {
+  custom_logo: { label: 'Custom company logo', plan: 'starter' },
+  advanced_tax: { label: 'Advanced tax tools', plan: 'starter' },
+  advanced_reports: { label: 'Advanced reports', plan: 'pro' },
+  recurring_invoices: { label: 'Recurring invoices', plan: 'pro' },
+  team_collaboration: { label: 'Team collaboration', plan: 'pro' },
+  api_access: { label: 'API access', plan: 'pro' },
+  priority_support: { label: 'Priority support', plan: 'pro' }
+};
+
+function hasFeature(feature) {
+  return !!entitlements?.features?.[feature];
+}
+
+function requiredPlanLabel(plan) {
+  return plan === 'starter' ? 'Starter' : 'Pro';
+}
+
+function requireFeature(feature, source = 'feature_gate') {
+  if (hasFeature(feature)) return true;
+  const meta = FEATURE_REQUIREMENTS[feature] || { label: feature.replace(/_/g, ' '), plan: 'starter' };
+  const planName = requiredPlanLabel(meta.plan);
+  showUpgradeModal(`${meta.label} is a ${planName} feature`, `Upgrade to ${planName} to unlock ${meta.label.toLowerCase()}. Your current plan remains active until billing is enabled.`);
+  track('feature_gate_hit', { feature, required_plan: meta.plan, current_plan: entitlements?.plan || 'free', source });
+  return false;
+}
+
+function renderFeatureAccess() {
+  const el = document.getElementById('featureAccessList');
+  if (!el) return;
+  const plan = String(entitlements?.plan || 'free').toLowerCase();
+  const items = Object.entries(FEATURE_REQUIREMENTS);
+  el.innerHTML = items.map(([key, meta]) => {
+    const enabled = hasFeature(key);
+    const required = requiredPlanLabel(meta.plan);
+    const available = enabled || (plan === 'pro') || (plan === 'starter' && meta.plan === 'starter');
+    return `<div style="border:1px solid var(--border);border-radius:12px;padding:12px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div><b>${meta.label}</b><div style="font-size:12px;color:var(--muted);margin-top:3px">${enabled ? 'Included in your plan' : 'Requires ' + required}</div></div>
+      ${enabled ? '<span class="badge">Included</span>' : `<button class="button small" type="button" data-feature-gate="${key}">Unlock</button>`}
+    </div>`;
+  }).join('');
+  el.querySelectorAll('[data-feature-gate]').forEach(btn => {
+    btn.onclick = () => requireFeature(btn.dataset.featureGate, 'plan_page');
+  });
+}
+
+function applyFeatureGates() {
+  const logoLabel = document.getElementById('logoUploadLabel');
+  const logoInput = document.getElementById('logoFile');
+  const hint = document.getElementById('logoFeatureHint');
+  const logoEnabled = hasFeature('custom_logo');
+  if (logoLabel) {
+    logoLabel.style.opacity = logoEnabled ? '1' : '.65';
+    logoLabel.title = logoEnabled ? 'Upload your company logo' : 'Custom logo requires Starter';
+  }
+  if (logoInput) logoInput.disabled = !logoEnabled;
+  if (hint) hint.textContent = logoEnabled ? 'Custom logo is included in your plan.' : 'Custom company logo requires Starter ($3/month).';
+
+  document.querySelectorAll('[data-feature-gate]').forEach(btn => {
+    btn.disabled = false;
+  });
+}
+
 function showGrowthModal(title, message) {
   const modal = document.getElementById('growthModal');
   if (!modal) return;
@@ -3160,6 +3229,8 @@ async function planView() {
     const on = key === 'invoices' || key === 'clients' ? true : !!e?.features?.[key];
     return `<div>${on ? '✓' : '—'} <span style="color:${on ? 'var(--text)' : 'var(--muted)'}">${label}</span></div>`;
   }).join('');
+  renderFeatureAccess();
+  applyFeatureGates();
 }
 
 function profile() {
@@ -3175,6 +3246,7 @@ function profile() {
     );
   if ($('#taxRegistered')) $('#taxRegistered').value = String(!!db.profile.taxRegistered);
   applyTaxCountrySuggestion(db.profile.taxCountry || 'US', false);
+  applyFeatureGates();
 }
 
 function nextInvoiceNumber() {
@@ -3700,6 +3772,25 @@ $('#send').onclick = () => persist('Sent');
 
 document.getElementById('growthLater')?.addEventListener('click', () => {
   document.getElementById('growthModal')?.classList.remove('show');
+});
+
+document.getElementById('logoFile')?.addEventListener('change', async (e) => {
+  if (!requireFeature('custom_logo', 'profile_logo')) {
+    e.target.value = '';
+    return;
+  }
+  const file = e.target.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { toast('Please choose an image file.'); e.target.value = ''; return; }
+  if (file.size > 2 * 1024 * 1024) { toast('Logo must be 2 MB or smaller.'); e.target.value = ''; return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    db.profile.logo = String(reader.result || '');
+    save();
+    profile();
+    toast('Company logo saved.');
+  };
+  reader.readAsDataURL(file);
 });
 
 (async function initAccountLine() {
