@@ -1333,6 +1333,7 @@ input:focus:not(:focus-visible) {
       <button data-view="invoices"><span>▤</span> Invoices</button>
       <button data-view="clients"><span>♙</span> Clients</button>
       <button data-view="profile"><span>⚙</span> Business profile</button>
+      <button data-view="plan"><span>◆</span> Plan & billing</button>
     </nav>
     <button class="theme-toggle" id="themeToggle" type="button" title="Toggle theme">
       <span id="themeIcon">◐</span>
@@ -1423,6 +1424,45 @@ input:focus:not(:focus-visible) {
         <button class="button primary" id="addClient">+ Add client</button>
       </div>
       <div id="clientList"></div>
+    </section>
+
+    <section class="view" id="plan">
+      <div class="section-head">
+        <div>
+          <h2>Plan & billing</h2>
+          <p style="color:var(--muted);margin:4px 0 0">Manage your InvoiceDey plan, usage and feature access.</p>
+        </div>
+        <span class="badge" id="planStatusBadge">Active</span>
+      </div>
+      <div class="cards" style="margin-top:18px">
+        <div class="card"><small>Current plan</small><b id="planCurrent">Free</b><span class="mini" id="planPrice">$0/month</span></div>
+        <div class="card"><small>Invoices / 30 days</small><b id="planInvoiceUsage">0 / 3</b><span class="mini" id="planInvoiceUsageSub">Current billing window</span></div>
+        <div class="card"><small>Clients</small><b id="planClientUsage">0 / 5</b><span class="mini">Saved clients</span></div>
+        <div class="card"><small>User segment</small><b id="planSegment">New</b><span class="mini" id="planSegmentScore">Growth segment</span></div>
+      </div>
+      <div class="insights" style="margin-top:18px">
+        <div class="insight">
+          <h3>Your plan</h3>
+          <p id="planDescription" style="color:var(--muted);line-height:1.6">Free plan for getting started.</p>
+          <div id="planFeatureList" style="line-height:1.9"></div>
+        </div>
+        <div class="insight">
+          <h3>Available plans</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+            <div style="border:1px solid var(--border);border-radius:14px;padding:16px">
+              <b style="font-size:18px">Starter</b><div style="font-size:24px;font-weight:800;margin:5px 0">$3<span style="font-size:13px;font-weight:600;color:var(--muted)">/month</span></div>
+              <div style="color:var(--muted);font-size:13px;line-height:1.6">50 invoices · 50 clients · custom logo · advanced tax</div>
+              <button class="button primary" style="margin-top:12px" data-plan-page-upgrade="starter">Upgrade to Starter</button>
+            </div>
+            <div style="border:1px solid var(--blue);border-radius:14px;padding:16px">
+              <b style="font-size:18px">Pro</b><div style="font-size:24px;font-weight:800;margin:5px 0">$8<span style="font-size:13px;font-weight:600;color:var(--muted)">/month</span></div>
+              <div style="color:var(--muted);font-size:13px;line-height:1.6">Unlimited invoices & clients · recurring invoices · reports · API · team</div>
+              <button class="button" style="margin-top:12px" data-plan-page-upgrade="pro">Upgrade to Pro</button>
+            </div>
+          </div>
+          <p style="font-size:12px;color:var(--muted);margin-top:14px">Billing is coming soon. Your current plan remains active.</p>
+        </div>
+      </div>
     </section>
 
     <section class="view" id="profile">
@@ -1746,6 +1786,7 @@ input:focus:not(:focus-visible) {
   <button data-view="invoices"><span>▤</span>Invoices</button>
   <button data-view="clients"><span>♙</span>Clients</button>
   <button data-view="profile"><span>⚙</span>Profile</button>
+  <button data-view="plan"><span>◆</span>Plan</button>
 </nav>
 
 <div class="modalback" id="modal">
@@ -2673,6 +2714,12 @@ function maybePromptSignup() {
 }
 
 document.getElementById('upgradeLater')?.addEventListener('click', () => document.getElementById('upgradeModal')?.classList.remove('show'));
+document.querySelectorAll('[data-plan-page-upgrade]').forEach(btn => btn.addEventListener('click', () => {
+  const plan = btn.dataset.planPageUpgrade;
+  track('upgrade_cta_clicked', { plan, source: 'plan_page' });
+  alert(`${plan === 'starter' ? 'Starter — $3/month' : 'Pro — $8/month'} billing is coming soon. Your current plan remains active.`);
+}));
+
 document.querySelectorAll('[data-upgrade-plan]').forEach(btn => btn.addEventListener('click', () => {
   const plan = btn.dataset.upgradePlan;
   document.getElementById('upgradeModal')?.classList.remove('show');
@@ -2848,6 +2895,7 @@ function switchTo(v) {
     invoices: ['Invoices', 'Simple invoicing. Nothing you do not need.'],
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
+    plan: ['Plan & billing', 'Manage your plan, usage and feature access.'],
     editor: ['Invoice editor', 'Create a clear invoice your client can pay.']
   }[v];
   $('#heading').textContent = h[0];
@@ -2867,6 +2915,7 @@ function switchTo(v) {
   if (v === 'invoices') invoices();
   if (v === 'clients') clients();
   if (v === 'profile') profile();
+  if (v === 'plan') planView();
 }
 
 function confirmAction(title, message, onConfirm) {
@@ -3058,6 +3107,59 @@ function clients() {
       }).join('')}
     </tbody>
   </table>`;
+}
+
+async function planView() {
+  const e = await getEntitlements(true);
+  const plan = String(e?.plan || 'free').toLowerCase();
+  const name = e?.plan_name || (plan === 'pro' ? 'Pro' : plan === 'starter' ? 'Starter' : 'Free');
+  const price = Number(e?.price_monthly_cents || 0);
+  const invoiceLimitRaw = e?.limits?.invoices;
+  const clientLimitRaw = e?.limits?.clients;
+  const invoiceLimit = Number(invoiceLimitRaw);
+  const clientLimit = Number(clientLimitRaw);
+  const invoiceUsed = cloud.user ? await cloudInvoiceUsage30d() : getGrowthUsage().invoicesCreated;
+  const used = invoiceUsed == null ? getGrowthUsage().invoicesCreated : invoiceUsed;
+  const fmtLimit = (v) => Number.isFinite(v) && v > 0 ? String(v) : 'Unlimited';
+
+  $('#planCurrent').textContent = name;
+  $('#planPrice').textContent = price > 0 ? `$${(price/100).toFixed(0)}/month` : '$0/month';
+  $('#planInvoiceUsage').textContent = `${used} / ${fmtLimit(invoiceLimit)}`;
+  $('#planInvoiceUsageSub').textContent = plan === 'free' ? 'Current billing window' : 'Plan allowance';
+  $('#planClientUsage').textContent = `${db.clients.length} / ${fmtLimit(clientLimit)}`;
+  $('#planStatusBadge').textContent = e?.status === 'active' ? 'Active' : (e?.status || 'Inactive');
+
+  let segment = 'New', score = 0;
+  if (cloud.user && cloud.client) {
+    try {
+      const { data, error } = await cloud.client.rpc('refresh_my_segment');
+      if (!error && data) { segment = data.segment || segment; score = Number(data.score || 0); }
+    } catch {}
+  }
+  $('#planSegment').textContent = String(segment).replace(/_/g,' ').replace(/\b\w/g, m => m.toUpperCase());
+  $('#planSegmentScore').textContent = `Score ${score} · Growth segment`;
+
+  const descriptions = {
+    free: 'A simple starting plan for freelancers and small businesses.',
+    starter: 'More capacity for businesses sending invoices regularly.',
+    pro: 'Full InvoiceDey capacity for growing teams and advanced workflows.'
+  };
+  $('#planDescription').textContent = descriptions[plan] || descriptions.free;
+
+  const featureLabels = [
+    ['invoices', `${fmtLimit(invoiceLimit)} invoices / month`],
+    ['clients', `${fmtLimit(clientLimit)} clients`],
+    ['custom_logo', 'Custom company logo'],
+    ['advanced_tax', 'Advanced tax tools'],
+    ['advanced_reports', 'Advanced reports'],
+    ['recurring_invoices', 'Recurring invoices'],
+    ['team_collaboration', 'Team collaboration'],
+    ['api_access', 'API access']
+  ];
+  $('#planFeatureList').innerHTML = featureLabels.map(([key,label]) => {
+    const on = key === 'invoices' || key === 'clients' ? true : !!e?.features?.[key];
+    return `<div>${on ? '✓' : '—'} <span style="color:${on ? 'var(--text)' : 'var(--muted)'}">${label}</span></div>`;
+  }).join('');
 }
 
 function profile() {
@@ -3638,6 +3740,15 @@ document.getElementById('growthLater')?.addEventListener('click', () => {
   }
 
   const { data: { session } } = await client.auth.getSession();
+
+  // A previously opened/expired magic link can leave Supabase auth errors in
+  // the URL hash (for example #error=access_denied&error_code=otp_expired).
+  // If the user already has a valid session, the stale error is irrelevant
+  // and should not remain in the app URL or confuse the tiering UI.
+  if (session?.user && window.location.hash && /(?:^#|&)error(?:=|%3D)/i.test(window.location.hash)) {
+    history.replaceState(null, document.title, window.location.pathname + window.location.search);
+  }
+
   await render(session);
   client.auth.onAuthStateChange((_e, session) => { render(session); });
 
