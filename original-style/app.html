@@ -1847,6 +1847,587 @@ let cloud = {
   referralCode: null
 };
 
+function currencyExponent(currency) {
+  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).resolvedOptions().maximumFractionDigits; }
+  catch { return 2; }
+}
+function toMinor(value, currency) {
+  return Math.round((Number(value) || 0) * Math.pow(10, currencyExponent(currency)));
+}
+function fromMinor(value, currency) {
+  return (Number(value) || 0) / Math.pow(10, currencyExponent(currency));
+}
+function cloudStatus(invoice) {
+  if (balanceDue(invoice) <= 0.001 && amountPaid(invoice) > 0) return 'paid';
+  if (amountPaid(invoice) > 0) return 'partially_paid';
+  const value = String(invoice.status || 'Draft').toLowerCase();
+  return ['draft', 'sent', 'viewed', 'partially_paid', 'paid', 'overdue', 'void'].includes(value) ? value : 'draft';
+}
+
+async function ensureCloudOrganization() {
+  if (cloud.organizationId) return cloud.organizationId;
+  const { data: memberships, error } = await cloud.client
+    .from('organization_members')
+    .select('organization_id')
+    .limit(1);
+  if (error) throw error;
+  if (memberships?.[0]?.organization_id) {
+    cloud.organizationId = memberships[0].organization_id;
+    return cloud.organizationId;
+  }
+  const { data, error: createError } = await cloud.client.rpc('create_organization', {
+    org_name: db.profile.name || 'My business',
+    org_currency: db.profile.reporting || 'USD'
+  });
+  if (createError) throw createError;
+  cloud.organizationId = data.id;
+  return cloud.organizationId;
+}
+
+async function syncOrganizationProfile(organizationId) {
+  if (!cloud.client || !organizationId) return;
+  const { error } = await cloud.client.from('organizations').update({
+    name: db.profile.name || 'My business',
+    currency: db.profile.reporting || 'USD',
+    contact_email: db.profile.email || null,
+    phone: db.profile.phone || null,
+    tax_registration_number: db.profile.taxId || null,
+    address: { text: db.profile.address || '' },
+    payment_details: db.profile.paymentDetails || '',
+    tax_label: db.profile.taxLabel || 'Tax'
+  }).eq('id', organizationId);
+  if (error) throw error;
+}
+
+async function pushCloudState() {
+  if (!cloud.client || !cloud.user || cloud.syncing) return;
+  cloud.syncing = true;
+  try {
+    const organizationId = await ensureCloudOrganization();
+    await syncOrganizationProfile(organizationId);
+    if (cloud.client && cloud.user && db.profile.taxCountry) {
+      const { error: taxProfileError } = await cloud.client.rpc('create_or_update_tax_profile', {
+        p_country_code: db.profile.taxCountry,
+        p_state_code: db.profile.taxState || null,
+        p_tax_registered: !!db.profile.taxRegistered,
+        p_tax_registration_number: db.profile.taxId || null,
+        p_default_tax_rate: Number(db.profile.defaultTax || 0),
+        p_tax_label: db.profile.taxLabel || 'Tax',
+        p_tax_settings: { source: 'invoicedey-tax-v1' }
+      });
+      if (taxProfileError) throw taxProfileError;
+    }
+    for (const localClient of db.clients) {
+      if (!localClient.cloudId) {
+        const { data, error } = await cloud.client.from('clients').insert({
+          organization_id: organizationId,
+          name: localClient.name || 'Unnamed client',
+          email: localClient.email || null,
+          billing_address: { address: localClient.address || '' },
+          tax_id: localClient.taxId || null
+        }).select('id').single();
+        if (error) throw error;
+        localClient.cloudId = data.id;
+      } else {
+        const { error } = await cloud.client.from('clients').update({
+          name: localClient.name || 'Unnamed client', email: localClient.email || null,
+          billing_address: { address: localClient.address || '' }, tax_id: localClient.taxId || null
+        }).eq('id', localClient.cloudId);
+        if (error) throw error;
+      }
+    }
+    for (const invoice of db.invoices) {
+      const currency = invoice.currency || db.profile.reporting || 'USD';
+      const payload = {
+        organization_id: organizationId,
+        client_id: client(invoice.client)?.cloudId,
+        invoice_number: invoice.number,
+        status: cloudStatus(invoice),
+        currency,
+        issue_date: invoice.issue || today,
+        due_date: invoice.due || invoice.issue || today,
+        tax_rate: Number(invoice.tax || 0),
+        subtotal_minor: toMinor(sub(invoice), currency),
+        tax_minor: toMinor(tax(invoice), currency),
+        total_minor: toMinor(total(invoice), currency),
+        tax_label: db.profile.taxLabel || 'Tax',
+        tax_jurisdiction: db.profile.taxState || db.profile.taxCountry || null,
+        tax_registration_number: db.profile.taxId || null,
+        tax_details: {
+          country_code: db.profile.taxCountry || null,
+          state_code: db.profile.taxState || null,
+          tax_registered: !!db.profile.taxRegistered,
+          tax_label: db.profile.taxLabel || 'Tax',
+          tax_rate: Number(invoice.tax || 0),
+          source: 'invoicedey-tax-v1'
+        },
+        sent_at: cloudStatus(invoice) === 'sent' ? new Date().toISOString() : null
+      };
+      if (invoice.publicShareToken) {
+        payload.public_share_token = invoice.publicShareToken;
+        payload.public_share_enabled = !!invoice.publicShareEnabled;
+      }
+      if (!payload.client_id) continue;
+      if (invoice.cloudId) {
+        // Existing local-to-cloud link: update the cloud invoice.
+        const { error } = await cloud.client
+          .from('invoices')
+          .update(payload)
+          .eq('id', invoice.cloudId);
+        if (error) throw error;
+      } else {
+        // No cloudId yet. The invoice may already exist in Supabase
+        // (for example, after a browser reset or an earlier sync).
+        // Look it up by the database's unique key before inserting.
+        const { data: existingInvoice, error: lookupError } = await cloud.client
+          .from('invoices')
+          .select('id, public_share_token, public_share_enabled')
+          .eq('organization_id', organizationId)
+          .eq('invoice_number', invoice.number)
+          .maybeSingle();
+
+        if (lookupError) throw lookupError;
+
+        if (existingInvoice) {
+          // Reconnect the local invoice to the existing cloud record.
+          invoice.cloudId = existingInvoice.id;
+          invoice.publicShareToken = existingInvoice.public_share_token || invoice.publicShareToken || '';
+          invoice.publicShareEnabled = !!existingInvoice.public_share_enabled;
+
+          const { error } = await cloud.client
+            .from('invoices')
+            .update(payload)
+            .eq('id', existingInvoice.id);
+          if (error) throw error;
+        } else {
+          // Truly new invoice: create it in Supabase.
+          const { data, error } = await cloud.client
+            .from('invoices')
+            .insert(payload)
+            .select('id')
+            .single();
+          if (error) throw error;
+          invoice.cloudId = data.id;
+        }
+      }
+      const { error: deleteError } = await cloud.client.from('invoice_line_items').delete().eq('invoice_id', invoice.cloudId);
+      if (deleteError) throw deleteError;
+      const lines = (invoice.lines || []).map((line, position) => ({
+        invoice_id: invoice.cloudId,
+        position,
+        description: line.desc || 'Line item',
+        quantity: Number(line.qty || 0),
+        unit_amount_minor: toMinor(line.rate, currency),
+        line_total_minor: toMinor(lineAmount(line), currency),
+        tax_rate: Number(invoice.tax || 0),
+        tax_minor: toMinor(lineAmount(line) * Number(invoice.tax || 0) / 100, currency),
+        tax_type: db.profile.taxLabel || 'Tax',
+        tax_jurisdiction: db.profile.taxState || db.profile.taxCountry || null,
+        tax_details: { country_code: db.profile.taxCountry || null, state_code: db.profile.taxState || null }
+      })).filter(line => line.quantity > 0);
+      if (lines.length) {
+        const { error } = await cloud.client.from('invoice_line_items').insert(lines);
+        if (error) throw error;
+      }
+      for (const payment of ensurePayments(invoice)) {
+        if (payment.cloudId) continue;
+        const { data, error } = await cloud.client.from('payments').insert({
+          invoice_id: invoice.cloudId,
+          amount_minor: toMinor(payment.amount, currency),
+          currency,
+          status: 'succeeded',
+          provider: 'manual',
+          paid_at: payment.date ? new Date(payment.date).toISOString() : new Date().toISOString()
+        }).select('id').single();
+        if (error) throw error;
+        payment.cloudId = data.id;
+      }
+    }
+    persistDb();
+  } catch (error) {
+    console.error('CLOUD SYNC FAILED:', error);
+    alert('CLOUD SYNC FAILED: ' + (error?.message || JSON.stringify(error)));
+  } finally {
+    cloud.syncing = false;
+  }
+}
+
+/* ---------- Growth attribution + funnel analytics ---------- */
+const ATTRIBUTION_KEY = 'invoicedey-attribution-v2';
+const ANON_ID_KEY = 'invoicedey-anonymous-id';
+const SESSION_ID_KEY = 'invoicedey-session';
+
+function uuidLike() {
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 3 | 8);
+    return v.toString(16);
+  });
+}
+
+function getAnonymousId() {
+  let id = localStorage.getItem(ANON_ID_KEY);
+  if (!id) {
+    id = uuidLike();
+    localStorage.setItem(ANON_ID_KEY, id);
+  }
+  return id;
+}
+
+function getSessionId() {
+  let id = sessionStorage.getItem(SESSION_ID_KEY);
+  if (!id) {
+    id = uuidLike();
+    sessionStorage.setItem(SESSION_ID_KEY, id);
+  }
+  return id;
+}
+
+function attributionStorageKey() {
+  // Attribution belongs to the anonymous browser identity, not to a shared
+  // global browser bucket. This prevents campaign bleed between accounts.
+  return ATTRIBUTION_KEY + '-' + getAnonymousId();
+}
+
+function readAttribution() {
+  try { return JSON.parse(localStorage.getItem(attributionStorageKey()) || 'null'); }
+  catch { return null; }
+}
+
+function captureAttribution() {
+  const params = new URLSearchParams(window.location.search);
+  const keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
+  const incoming = {};
+  let hasCampaign = false;
+
+  for (const key of keys) {
+    const value = (params.get(key) || '').trim();
+    if (value) {
+      incoming[key] = value;
+      hasCampaign = true;
+    }
+  }
+
+  // Referral code: ?ref=DAVID25
+  const referralCode = (params.get('ref') || '').trim();
+  if (referralCode) {
+    incoming.referral_code = referralCode;
+    hasCampaign = true;
+  }
+
+  const existing = readAttribution();
+  const now = new Date().toISOString();
+
+  if (!existing) {
+    const first = {
+      source: incoming.utm_source || (referralCode ? 'referral' : 'direct'),
+      medium: incoming.utm_medium || (referralCode ? 'referral' : 'none'),
+      campaign: incoming.utm_campaign || '',
+      content: incoming.utm_content || '',
+      term: incoming.utm_term || '',
+      referral_code: referralCode || '',
+      landing_page: window.location.pathname || '/',
+      referrer: document.referrer || '',
+      first_touch: true,
+      last_touch: true,
+      touched_at: now,
+      attribution_version: 'v3'
+    };
+    localStorage.setItem(attributionStorageKey(), JSON.stringify(first));
+    return first;
+  }
+
+  if (hasCampaign) {
+    const updated = {
+      ...existing,
+      source: incoming.utm_source || existing.source || (referralCode ? 'referral' : 'direct'),
+      medium: incoming.utm_medium || existing.medium || (referralCode ? 'referral' : 'none'),
+      campaign: incoming.utm_campaign ?? existing.campaign ?? '',
+      content: incoming.utm_content ?? existing.content ?? '',
+      term: incoming.utm_term ?? existing.term ?? '',
+      referral_code: incoming.referral_code ?? existing.referral_code ?? '',
+      referrer: document.referrer || existing.referrer || '',
+      last_touch: true,
+      touched_at: now,
+      attribution_version: 'v3'
+    };
+    localStorage.setItem(attributionStorageKey(), JSON.stringify(updated));
+    return updated;
+  }
+
+  return existing;
+}
+
+function attributionPayload() {
+  const a = readAttribution() || captureAttribution();
+  return {
+    anonymous_id: getAnonymousId(),
+    source: a?.source || 'direct',
+    medium: a?.medium || 'none',
+    campaign: a?.campaign || '',
+    content: a?.content || '',
+    term: a?.term || '',
+    referral_code: a?.referral_code || '',
+    landing_page: a?.landing_page || window.location.pathname || '/',
+    referrer: a?.referrer || document.referrer || '',
+    first_touch: !!a?.first_touch,
+    last_touch: true,
+    touched_at: a?.touched_at || new Date().toISOString(),
+    metadata: {
+      attribution_version: 'v3',
+      landing_page: window.location.pathname || '/',
+      ...((a?.metadata && typeof a.metadata === 'object') ? a.metadata : {})
+    }
+  };
+}
+
+function withAttribution(url) {
+  try {
+    const u = new URL(url, window.location.href);
+    const a = readAttribution();
+    if (a?.source && a.source !== 'direct') {
+      u.searchParams.set('utm_source', a.source);
+      u.searchParams.set('utm_medium', a.medium || 'none');
+      if (a.campaign) u.searchParams.set('utm_campaign', a.campaign);
+      if (a.content) u.searchParams.set('utm_content', a.content);
+      if (a.term) u.searchParams.set('utm_term', a.term);
+      if (a.referral_code) u.searchParams.set('ref', a.referral_code);
+    }
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+async function track(eventName, metadata = {}) {
+  try {
+    const client = cloud.client || await getSupabase();
+    if (!client) return;
+
+    const a = attributionPayload();
+
+    /*
+      analytics_events in the current Supabase schema has:
+      id, event_name, user_id, session_id, metadata, created_at, attribution.
+
+      Keep attribution as one JSONB object so the event writer matches the
+      actual production schema and preserves the complete funnel context.
+    */
+    const row = {
+      event_name: eventName,
+      user_id: cloud.user?.id || null,
+      session_id: getSessionId(),
+      metadata: {
+        ...a.metadata,
+        ...metadata
+      },
+      attribution: {
+        anonymous_id: a.anonymous_id,
+        source: a.source,
+        medium: a.medium,
+        campaign: a.campaign,
+        referral_code: a.referral_code,
+        content: a.content,
+        term: a.term,
+        landing_page: a.landing_page,
+        referrer: a.referrer,
+        first_touch: a.first_touch,
+        last_touch: a.last_touch,
+        touched_at: a.touched_at,
+        attribution_version: 'v3'
+      }
+    };
+
+    const { error } = await client.from('analytics_events').insert(row);
+    if (error) console.debug('analytics', error.message || error);
+  } catch (e) {
+    console.debug('analytics', e.message || e);
+  }
+}
+
+// Capture UTM parameters before any authentication, redirect, or funnel event.
+// The URL has already been verified to preserve the UTM query string.
+getAnonymousId();
+getSessionId();
+localStorage.removeItem('invoicedey-attribution-v1');
+captureAttribution();
+
+function ensureEditSavedForShare() {
+  if (!edit) return null;
+  normalizeLineNumbers();
+  const errors = validateInvoice(false);
+  if (errors.length) {
+    showBanner('editorErrors', errors);
+    toast(errors[0]);
+    return null;
+  }
+  const n = db.invoices.findIndex(i => i.id === edit.id);
+  const toSave = structuredClone(edit);
+  delete toSave._nextAfterSave;
+  if (n < 0) {
+    db.invoices.unshift(toSave);
+    if (edit._nextAfterSave) db.profile.nextInvoiceNumber = edit._nextAfterSave;
+    recordFreeInvoiceCreated();
+  } else {
+    db.invoices[n] = toSave;
+  }
+  save();
+  return db.invoices.find(i => i.id === edit.id) || null;
+}
+
+async function shareInvoice() {
+  const invoice = ensureEditSavedForShare();
+  if (!invoice) return;
+  if (!cloud.client || !cloud.user) {
+    showGrowthModal('Create an account to share', 'Sharing requires a free Invoicedey account so your invoice can be stored securely and opened by your client.');
+    track('share_blocked_auth', { invoice_id: invoice.id });
+    return;
+  }
+  try {
+    const organizationId = await ensureCloudOrganization();
+    await syncOrganizationProfile(organizationId);
+    await pushCloudState();
+
+    /*
+      pushCloudState() can reconnect a local invoice to a cloud invoice by
+      number. Re-read the invoice after sync so sharing NEVER sends an
+      undefined invoice.cloudId to PostgREST.
+    */
+    const refreshedInvoice =
+      db.invoices.find(i => i.id === invoice.id) ||
+      invoice;
+
+    if (!refreshedInvoice.cloudId) {
+      const { data: cloudInvoice, error: lookupError } = await cloud.client
+        .from('invoices')
+        .select('id, public_share_token, public_share_enabled')
+        .eq('organization_id', organizationId)
+        .eq('invoice_number', refreshedInvoice.number)
+        .maybeSingle();
+
+      if (lookupError) throw lookupError;
+      if (!cloudInvoice?.id) {
+        throw new Error('Invoice has not finished syncing to the cloud. Please save the invoice and try Share again.');
+      }
+
+      refreshedInvoice.cloudId = cloudInvoice.id;
+      refreshedInvoice.publicShareToken =
+        cloudInvoice.public_share_token || refreshedInvoice.publicShareToken || '';
+      refreshedInvoice.publicShareEnabled = !!cloudInvoice.public_share_enabled;
+      save();
+    }
+
+    const token = refreshedInvoice.publicShareToken || crypto.randomUUID().replace(/-/g, '');
+    const { error } = await cloud.client.from('invoices').update({
+      public_share_token: token,
+      public_share_enabled: true,
+      public_shared_at: new Date().toISOString()
+    }).eq('id', refreshedInvoice.cloudId).eq('organization_id', organizationId);
+    if (error) throw error;
+
+    refreshedInvoice.publicShareToken = token;
+    refreshedInvoice.publicShareEnabled = true;
+    save();
+    const url = window.location.origin + '/invoice.html?token=' + encodeURIComponent(token);
+    try { await navigator.clipboard.writeText(url); } catch {}
+    await track('invoice_shared', { invoice_id: refreshedInvoice.cloudId, invoice_number: refreshedInvoice.number });
+    toast('Share link copied.');
+    return url;
+  } catch (error) {
+    console.error('SHARE FAILED:', error);
+    alert('SHARE FAILED: ' + (error?.message || JSON.stringify(error)));
+    return null;
+  }
+}
+
+function queueCloudSync() {
+  if (!cloud.client || !cloud.user) return;
+  clearTimeout(cloud.timer);
+  cloud.timer = setTimeout(pushCloudState, 500);
+}
+
+async function hydrateFromCloud() {
+  const organizationId = await ensureCloudOrganization();
+  const { data: remoteTaxProfile } = await cloud.client.from('organization_tax_profiles')
+    .select('*').eq('organization_id', organizationId).maybeSingle();
+  if (remoteTaxProfile) {
+    db.profile.taxCountry = remoteTaxProfile.country_code || db.profile.taxCountry || 'US';
+    db.profile.taxState = remoteTaxProfile.state_code || '';
+    db.profile.taxRegistered = !!remoteTaxProfile.tax_registered;
+    db.profile.taxId = remoteTaxProfile.tax_registration_number || db.profile.taxId || '';
+    db.profile.taxLabel = remoteTaxProfile.tax_label || db.profile.taxLabel || 'Tax';
+    db.profile.defaultTax = Number(remoteTaxProfile.default_tax_rate ?? db.profile.defaultTax ?? 0);
+  }
+  const { data: remoteInvoices, error } = await cloud.client.from('invoices')
+    .select('*, clients(*), invoice_line_items(*), payments(*)')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  if (!remoteInvoices?.length) return false;
+  db.clients = remoteInvoices.reduce((list, invoice) => {
+    if (invoice.clients && !list.some(client => client.cloudId === invoice.clients.id)) list.push({
+      id: invoice.clients.id, cloudId: invoice.clients.id, name: invoice.clients.name,
+      email: invoice.clients.email || '', address: invoice.clients.billing_address?.address || '', taxId: invoice.clients.tax_id || ''
+    });
+    return list;
+  }, []);
+  db.invoices = remoteInvoices.map(invoice => ({
+    id: invoice.id, cloudId: invoice.id, number: invoice.invoice_number, client: invoice.clients?.id || '',
+    publicShareToken: invoice.public_share_token || '',
+    publicShareEnabled: !!invoice.public_share_enabled,
+    currency: invoice.currency, issue: invoice.issue_date, due: invoice.due_date, tax: Number(invoice.tax_rate || 0), taxLabel: invoice.tax_label || db.profile.taxLabel || 'Tax', taxId: invoice.tax_registration_number || db.profile.taxId || '',
+    status: invoice.status === 'paid' ? 'Paid' : invoice.status === 'sent' ? 'Sent' : 'Draft',
+    title: '', note: 'Thank you for your business.', terms: db.profile.paymentDetails || '',
+    lines: (invoice.invoice_line_items || []).sort((a, b) => a.position - b.position).map(line => ({
+      desc: line.description, qty: Number(line.quantity), unit: '', rate: fromMinor(line.unit_amount_minor, invoice.currency)
+    })),
+    payments: (invoice.payments || []).filter(payment => payment.status === 'succeeded').map(payment => ({
+      id: payment.id, cloudId: payment.id, amount: fromMinor(payment.amount_minor, invoice.currency),
+      date: payment.paid_at?.slice(0, 10) || invoice.issue_date, note: 'Payment received'
+    }))
+  }));
+  persistDb();
+  return true;
+}
+
+async function startCloudSync(client, user) {
+  if (cloud.hydrated && cloud.user?.id === user.id) return;
+
+  // Stop anything queued for the previous account before switching users.
+  clearTimeout(cloud.timer);
+  cloud.timer = null;
+  cloud.syncing = false;
+
+  cloud.client = client;
+  cloud.user = user;
+  cloud.organizationId = null;
+  cloud.hydrated = false;
+
+  // Hard account boundary: load ONLY this user's local cache.
+  // Never carry the previous user's db, cloud IDs, clients or invoices.
+  activeUserId = user.id;
+  loadUserLocalDb(user.id);
+
+  // Switch the growth meter immediately to this user's allowance.
+  // Never display the previous/anonymous account's counter.
+  updateGrowthMeter();
+  dashboard();
+
+  try {
+    const loaded = await hydrateFromCloud();
+    cloud.hydrated = true;
+    if (!loaded) {
+      // New account: db is the clean user-scoped database, so this cannot
+      // push records belonging to another disposable email/account.
+      await pushCloudState();
+    }
+    dashboard();
+  } catch (error) {
+    console.warn('cloud sync setup', error.message || error);
+  }
+}
+
+
 const today = new Date().toISOString().slice(0, 10);
 const defaultDB = {
   profile: {
