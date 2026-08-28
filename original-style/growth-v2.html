@@ -96,10 +96,20 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 </div>
 
 <div class="section">
+<div class="section">
+<div class="head"><h2>Campaign Insights</h2><span class="pill">Quality over traffic</span></div>
+<div class="grid">
+<div class="card"><div class="label">Best campaign</div><div class="value" id="campaignBest">—</div><div class="sub" id="campaignBestSub">Waiting for data</div></div>
+<div class="card"><div class="label">Best signup rate</div><div class="value" id="campaignSignupRate">—</div><div class="sub" id="campaignSignupRateSub">Visitors → signups</div></div>
+<div class="card"><div class="label">Best activation rate</div><div class="value" id="campaignActivationRate">—</div><div class="sub" id="campaignActivationRateSub">Signups → activated</div></div>
+<div class="card"><div class="label">Top acquisition source</div><div class="value" id="campaignTopSource">—</div><div class="sub" id="campaignTopSourceSub">By activated users</div></div>
+</div>
+</div>
+
 <div class="head"><h2>Campaign performance</h2><span class="pill">Source → campaign → activation</span></div>
 <div class="panel">
 <table class="table">
-<thead><tr><th>Source</th><th>Medium</th><th>Campaign</th><th>Content</th><th class="num">Visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Sent</th><th class="num">Shares</th><th class="num">Downloads</th></tr></thead>
+<thead><tr><th>Source</th><th>Medium</th><th>Campaign</th><th>Content</th><th class="num">Visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Sent</th><th class="num">Shares</th><th class="num">Downloads</th><th class="num">Quality</th></tr></thead>
 <tbody id="campaigns"></tbody>
 </table>
 </div>
@@ -112,6 +122,16 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 <thead><tr><th>Referral code</th><th class="num">Visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Shares</th><th class="num">Downloads</th></tr></thead>
 <tbody id="referrals"></tbody>
 </table>
+</div>
+</div>
+
+<div class="section">
+<div class="head"><h2>Referral Intelligence</h2><span class="pill">Referral → signup → activation</span></div>
+<div class="grid">
+<div class="card"><div class="label">Top referral</div><div class="value" id="refBest">—</div><div class="sub" id="refBestSub">Waiting for data</div></div>
+<div class="card"><div class="label">Best signup rate</div><div class="value" id="refSignupRate">—</div><div class="sub" id="refSignupRateSub">Visitors → signups</div></div>
+<div class="card"><div class="label">Best activation rate</div><div class="value" id="refActivationRate">—</div><div class="sub" id="refActivationRateSub">Signups → activated</div></div>
+<div class="card"><div class="label">Referred activated users</div><div class="value" id="refActivated">—</div><div class="sub" id="refActivatedSub">Across tracked referrals</div></div>
 </div>
 </div>
 
@@ -365,40 +385,127 @@ function renderReferrals(rows){
   const el=$('referrals');
   if(!el)return;
 
-  el.innerHTML=rows.map(x=>
-    '<tr><td><b>'+esc(x.referral_code||'Unknown')+
-    '</b></td><td class="num">'+fmt(x.visitors)+
-    '</td><td class="num">'+fmt(x.signups)+
-    '</td><td class="num">'+fmt(x.activated)+
-    '</td><td class="num">'+fmt(x.invoices)+
-    '</td><td class="num">'+fmt(x.shares)+
-    '</td><td class="num">'+fmt(x.downloads)+
-    '</td></tr>'
-  ).join('')||
-  '<tr><td colspan="7">No referral activity in this period.</td></tr>';
-}
+  const clean=(rows||[]).filter(x=>x);
+  let best=null, bestSignup=null, bestActivation=null;
+  let totalActivated=0;
 
-function renderCampaigns(rows){
-  const el=$('campaigns');
-  if(!el)return;
-
-  el.innerHTML=rows.map(x=>{
+  clean.forEach(x=>{
     const visitors=Number(x.visitors||0);
     const signups=Number(x.signups||0);
     const activated=Number(x.activated||0);
 
-    const signupRate=visitors
-      ? ((signups/visitors)*100).toFixed(1)+'%'
-      : '—';
+    const signupRate=visitors ? signups/visitors : 0;
+    const activationRate=signups ? activated/signups : 0;
 
-    const activationRate=signups
-      ? ((activated/signups)*100).toFixed(1)+'%'
-      : '—';
+    // Referral quality prioritizes activation, then signup conversion, then volume.
+    const quality=(activationRate*0.55)+(signupRate*0.30)+(Math.min(activated/20,1)*0.15);
+
+    x.__signupRate=signupRate;
+    x.__activationRate=activationRate;
+    x.__quality=quality;
+
+    totalActivated+=activated;
+
+    if(!best || quality>best.__quality)best=x;
+    if(visitors>=5 && (!bestSignup || signupRate>bestSignup.__signupRate))bestSignup=x;
+    if(signups>=2 && (!bestActivation || activationRate>bestActivation.__activationRate))bestActivation=x;
+  });
+
+  if(best){
+    $('refBest').textContent=best.referral_code||'(none)';
+    $('refBestSub').textContent=fmt(best.activated)+' activated · '+fmt(best.signups)+' signups';
+  }
+
+  if(bestSignup){
+    $('refSignupRate').textContent=(bestSignup.__signupRate*100).toFixed(1)+'%';
+    $('refSignupRateSub').textContent=(bestSignup.referral_code||'(none)')+' · '+fmt(bestSignup.visitors)+' visitors';
+  }
+
+  if(bestActivation){
+    $('refActivationRate').textContent=(bestActivation.__activationRate*100).toFixed(1)+'%';
+    $('refActivationRateSub').textContent=(bestActivation.referral_code||'(none)')+' · '+fmt(bestActivation.signups)+' signups';
+  }
+
+  $('refActivated').textContent=fmt(totalActivated);
+  $('refActivatedSub').textContent=clean.length+' tracked referral sources';
+
+  el.innerHTML=clean.map(x=>{
+    const visitors=Number(x.visitors||0);
+    const signups=Number(x.signups||0);
+    const activated=Number(x.activated||0);
+    const signupRate=visitors ? ((signups/visitors)*100).toFixed(1)+'%' : '—';
+    const activationRate=signups ? ((activated/signups)*100).toFixed(1)+'%' : '—';
+    const quality=Math.round(Number(x.__quality||0)*100);
+
+    return '<tr>'+
+      '<td><b>'+esc(x.referral_code||'(none)')+'</b></td>'+
+      '<td class="num">'+fmt(visitors)+'</td>'+
+      '<td class="num">'+fmt(signups)+' <small>'+signupRate+'</small></td>'+
+      '<td class="num">'+fmt(activated)+' <small>'+activationRate+'</small></td>'+
+      '<td class="num">'+fmt(x.invoices)+'</td>'+
+      '<td class="num">'+fmt(x.shares)+'</td>'+
+      '<td class="num">'+fmt(x.downloads)+'</td>'+
+      '<td class="num"><b>'+quality+'</b></td>'+
+    '</tr>';
+  }).join('')||
+  '<tr><td colspan="8">No referral activity in this period.</td></tr>';
+}
+function renderCampaigns(rows){
+  const el=$('campaigns');
+  if(!el)return;
+
+  const clean=(rows||[]).filter(x=>x);
+  let best=null, bestSignup=null, bestActivation=null, topSource=null;
+
+  clean.forEach(x=>{
+    const visitors=Number(x.visitors||0);
+    const signups=Number(x.signups||0);
+    const activated=Number(x.activated||0);
+    const signupRate=visitors ? signups/visitors : 0;
+    const activationRate=signups ? activated/signups : 0;
+
+    // Quality prioritizes activation, then signup conversion, then volume.
+    const quality=(activationRate*0.55)+(signupRate*0.30)+(Math.min(activated/50,1)*0.15);
+
+    x.__signupRate=signupRate;
+    x.__activationRate=activationRate;
+    x.__quality=quality;
+
+    if(!best || quality>best.__quality)best=x;
+    if(visitors>=10 && (!bestSignup || signupRate>bestSignup.__signupRate))bestSignup=x;
+    if(signups>=3 && (!bestActivation || activationRate>bestActivation.__activationRate))bestActivation=x;
+    if(!topSource || activated>Number(topSource.activated||0))topSource=x;
+  });
+
+  if(best){
+    $('campaignBest').textContent=(best.campaign||'(none)');
+    $('campaignBestSub').textContent=(best.source||'direct')+' · '+fmt(best.activated)+' activated';
+  }
+  if(bestSignup){
+    $('campaignSignupRate').textContent=(bestSignup.__signupRate*100).toFixed(1)+'%';
+    $('campaignSignupRateSub').textContent=(bestSignup.campaign||'(none)')+' · '+fmt(bestSignup.visitors)+' visitors';
+  }
+  if(bestActivation){
+    $('campaignActivationRate').textContent=(bestActivation.__activationRate*100).toFixed(1)+'%';
+    $('campaignActivationRateSub').textContent=(bestActivation.campaign||'(none)')+' · '+fmt(bestActivation.signups)+' signups';
+  }
+  if(topSource){
+    $('campaignTopSource').textContent=(topSource.source||'direct');
+    $('campaignTopSourceSub').textContent=fmt(topSource.activated)+' activated users';
+  }
+
+  el.innerHTML=clean.map(x=>{
+    const visitors=Number(x.visitors||0);
+    const signups=Number(x.signups||0);
+    const activated=Number(x.activated||0);
+    const signupRate=visitors ? ((signups/visitors)*100).toFixed(1)+'%' : '—';
+    const activationRate=signups ? ((activated/signups)*100).toFixed(1)+'%' : '—';
+    const quality=Math.round(Number(x.__quality||0)*100);
 
     return '<tr>'+
       '<td><b>'+esc(x.source||'direct')+'</b></td>'+
       '<td>'+esc(x.medium||'none')+'</td>'+
-      '<td>'+esc(x.campaign||'(none)')+'</td>'+
+      '<td><b>'+esc(x.campaign||'(none)')+'</b></td>'+
       '<td>'+esc(x.content||'(none)')+'</td>'+
       '<td class="num">'+fmt(visitors)+'</td>'+
       '<td class="num">'+fmt(signups)+' <small>'+signupRate+'</small></td>'+
@@ -407,11 +514,11 @@ function renderCampaigns(rows){
       '<td class="num">'+fmt(x.sent)+'</td>'+
       '<td class="num">'+fmt(x.shares)+'</td>'+
       '<td class="num">'+fmt(x.downloads)+'</td>'+
+      '<td class="num"><b>'+quality+'</b></td>'+
     '</tr>';
   }).join('')||
-  '<tr><td colspan="11">No campaign activity in this period.</td></tr>';
+  '<tr><td colspan="12">No campaign activity in this period.</td></tr>';
 }
-
 function renderGeo(rows){
   const el=$('geo');
   if(!el)return;
