@@ -1781,7 +1781,7 @@ input:focus:not(:focus-visible) {
     <p id="growthModalMessage">Create a free account to save invoices in the cloud, access them on any device, and share professional invoice links.</p>
     <div class="buttons" style="justify-content:flex-end;margin-top:20px;gap:10px;flex-wrap:wrap">
       <button class="button" id="growthLater">Not now</button>
-      <button class="button primary" id="growthSignup" type="button">Create free account</button>
+      <a class="button primary" id="growthSignup" href="/signup.html?source=growth_limit">Create free account</a>
     </div>
   </div>
 </div>
@@ -1791,6 +1791,20 @@ input:focus:not(:focus-visible) {
 
 <script>
 const $ = s => document.querySelector(s);
+
+// Global signup navigation so the Free-limit button still works even if a later
+// initialization block throws an unrelated runtime error.
+function goToSignup() {
+  try {
+    const current = new URLSearchParams(window.location.search);
+    current.set('source', 'growth_limit');
+    const url = new URL('signup.html', window.location.href);
+    current.forEach((value, key) => url.searchParams.set(key, value));
+    window.location.assign(url.toString());
+  } catch (err) {
+    window.location.href = 'signup.html';
+  }
+}
 const today = new Date().toISOString().slice(0, 10);
 const defaultDB = {
   profile: {
@@ -2836,17 +2850,6 @@ $('#send').onclick = () => persist('Sent');
 
 document.getElementById('growthLater')?.addEventListener('click', () => {
   document.getElementById('growthModal')?.classList.remove('show');
-});
-
-// Keep the Free-limit signup flow on a dedicated signup page.
-document.getElementById('growthSignup')?.addEventListener('click', () => {
-  document.getElementById('growthModal')?.classList.remove('show');
-  track('signup_cta_clicked', { source: 'growth_limit_modal' });
-  const url = new URL('signup.html', window.location.href);
-  const current = new URLSearchParams(window.location.search);
-  current.forEach((value, key) => url.searchParams.set(key, value));
-  url.searchParams.set('source', 'growth_limit');
-  window.location.href = url.toString();
 });
 
 (async function initAccountLine() {
