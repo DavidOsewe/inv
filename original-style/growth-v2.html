@@ -48,7 +48,14 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 @media(max-width:700px){.date-note{width:100%;margin-left:0;padding-bottom:0}}
 </style>
 </head>
-<body>
+<body><div id="tierFoundationPanel" style="max-width:1180px;margin:20px auto;padding:18px 20px;border:1px solid #E5E7EB;border-radius:14px;background:#fff">
+<div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#64748B">InvoiceDey Tiering</div>
+<h2 style="margin:4px 0 12px;font-size:20px">Plan &amp; Segmentation</h2>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
+<div style="padding:14px;border:1px solid #E5E7EB;border-radius:10px"><small>Current plan</small><div id="tierPlan" style="font-size:20px;font-weight:800">—</div></div>
+<div style="padding:14px;border:1px solid #E5E7EB;border-radius:10px"><small>User segment</small><div id="tierSegment" style="font-size:20px;font-weight:800">—</div></div>
+<div style="padding:14px;border:1px solid #E5E7EB;border-radius:10px"><small>Invoices / 30 days</small><div id="tierInvoices30" style="font-size:20px;font-weight:800">—</div></div>
+</div><div id="tierStatus" style="margin-top:10px;font-size:12px;color:#64748B">Tiering foundation</div></div>
 <div class="wrap">
 <div class="top">
 <div>
@@ -632,6 +639,19 @@ setPresetDateInputs(30);
 /* Initial load */
 load();
 
+
+async function loadTierFoundation(){
+ try{
+  if(!window.supabase||!window.supabase.createClient)return;
+  const client=sb||window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY); sb=client;
+  const {data,error}=await client.rpc('my_entitlements'); if(error)throw error;
+  $('tierPlan').textContent=data?.plan_name||'Free';
+  $('tierStatus').textContent=(data?.status||'active')+' · Tiering foundation active';
+  const {data:s}=await client.rpc('refresh_my_segment');
+  if(s){$('tierSegment').textContent=String(s.segment||'new').replace('_',' ');$('tierInvoices30').textContent=String(s.invoices_30d??0);}
+ }catch(e){console.warn('Tiering foundation:',e);$('tierStatus').textContent='Run tiering SQL in Supabase to activate';}
+}
+document.addEventListener('DOMContentLoaded',()=>setTimeout(loadTierFoundation,1000));
 </script>
 </body>
 </html>
