@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>InvoiceDey — Growth Intelligence V10</title>
+<title>InvoiceDey — Growth Intelligence V11</title>
 <style>
 :root{--b:#2467E3;--bg:#F8FAFC;--p:#fff;--l:#E2E8F0;--t:#0F172A;--m:#64748B;--g:#10B981;--r:#EF4444;--s:#EEF5FF}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font:14px/1.5 Inter,system-ui,sans-serif}
@@ -136,20 +136,32 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 </div>
 
 <div class="section">
-<div class="head"><h2>Monetization Intelligence</h2><span class="pill">Usage → intent → upgrade</span></div>
+<div class="head"><h2>Monetization Intelligence</h2><span class="pill">Usage → intent → upgrade → revenue</span></div>
 <div class="grid">
 <div class="card"><div class="label">Users at a limit</div><div class="value" id="monLimitUsers">0</div><div class="hint" id="monLimitHits">0 limit events</div></div>
 <div class="card"><div class="label">Upgrade intent</div><div class="value" id="monUpgradeUsers">0</div><div class="hint" id="monUpgradeClicks">0 upgrade clicks</div></div>
-<div class="card"><div class="label">Starter interest</div><div class="value" id="monStarter">0</div><div class="hint">Starter upgrade clicks</div></div>
-<div class="card"><div class="label">Pro interest</div><div class="value" id="monPro">0</div><div class="hint">Pro upgrade clicks</div></div>
+<div class="card"><div class="label">Starter interest</div><div class="value" id="monStarter">0</div><div class="hint" id="monStarterSub">Unique users · 0 clicks</div></div>
+<div class="card"><div class="label">Pro interest</div><div class="value" id="monPro">0</div><div class="hint" id="monProSub">Unique users · 0 clicks</div></div>
 </div>
 
 <div class="grid" style="margin-top:13px">
 <div class="card"><div class="label">Feature-gate users</div><div class="value" id="monFeatureUsers">0</div><div class="hint" id="monFeatureHits">0 feature-gate events</div></div>
 <div class="card"><div class="label">Top requested feature</div><div class="value" id="monTopFeature">—</div><div class="hint" id="monTopFeatureSub">Waiting for data</div></div>
 <div class="card"><div class="label">Top upgrade channel</div><div class="value" id="monTopChannel">—</div><div class="hint" id="monTopChannelSub">By upgrade intent</div></div>
-<div class="card"><div class="label">Intent rate</div><div class="value" id="monIntentRate">—</div><div class="hint">Upgrade-intent users ÷ limit users</div></div>
+<div class="card"><div class="label">Limit → intent</div><div class="value" id="monIntentRate">—</div><div class="hint">Users who hit a limit and then showed intent</div></div>
 </div>
+
+<div class="grid" style="margin-top:13px">
+<div class="card"><div class="label">Checkout started</div><div class="value" id="monCheckoutUsers">0</div><div class="hint" id="monCheckoutHits">0 checkout events · Billing not live</div></div>
+<div class="card"><div class="label">Payment success</div><div class="value" id="monPaidUsers">0</div><div class="hint" id="monPaidHits">0 successful payments</div></div>
+<div class="card"><div class="label">Intent → checkout</div><div class="value" id="monCheckoutRate">—</div><div class="hint">Unique intent users reaching checkout</div></div>
+<div class="card"><div class="label">Paid conversion</div><div class="value" id="monPaidRate">—</div><div class="hint">Intent users → successful payment</div></div>
+</div>
+</div>
+
+<div class="section">
+<div class="head"><h2>Commercial funnel</h2><span class="pill">Measured stages</span></div>
+<div class="panel"><table class="table mono-table"><thead><tr><th>Stage</th><th>Meaning</th><th class="num">Unique users</th><th class="num">Events</th></tr></thead><tbody id="monFunnel"></tbody></table></div>
 </div>
 
 <div class="section">
@@ -158,8 +170,8 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 </div>
 
 <div class="section">
-<div class="head"><h2>Upgrade intent by acquisition</h2><span class="pill">Channel → monetization</span></div>
-<div class="panel"><table class="table mono-table"><thead><tr><th>Source</th><th>Medium</th><th>Campaign</th><th class="num">Upgrade users</th><th class="num">Clicks</th><th class="num">Feature users</th></tr></thead><tbody id="monChannels"></tbody></table></div>
+<div class="head"><h2>Monetization by acquisition</h2><span class="pill">Channel → intent → checkout → payment</span></div>
+<div class="panel"><table class="table mono-table"><thead><tr><th>Source</th><th>Medium</th><th>Campaign</th><th class="num">Intent users</th><th class="num">Clicks</th><th class="num">Feature users</th><th class="num">Checkout users</th><th class="num">Paid users</th></tr></thead><tbody id="monChannels"></tbody></table></div>
 </div>
 
 <div class="section">
@@ -560,13 +572,21 @@ function renderMonetization(mon){
 
   const limitUsers=Number(t.limit_users||0);
   const upgradeUsers=Number(t.upgrade_users||0);
+  const starterUsers=Number(t.starter_users||0);
+  const proUsers=Number(t.pro_users||0);
+  const featureUsers=Number(t.feature_gate_users||0);
+  const checkoutUsers=Number(t.checkout_users||0);
+  const paidUsers=Number(t.paid_users||0);
+
   $('monLimitUsers').textContent=fmt(limitUsers);
   $('monLimitHits').textContent=fmt(t.limit_hits)+' limit events';
   $('monUpgradeUsers').textContent=fmt(upgradeUsers);
   $('monUpgradeClicks').textContent=fmt(t.upgrade_clicks)+' upgrade clicks';
-  $('monStarter').textContent=fmt(t.starter_clicks);
-  $('monPro').textContent=fmt(t.pro_clicks);
-  $('monFeatureUsers').textContent=fmt(t.feature_gate_users);
+  $('monStarter').textContent=fmt(starterUsers);
+  $('monStarterSub').textContent=fmt(starterUsers)+' unique users · '+fmt(t.starter_clicks)+' clicks';
+  $('monPro').textContent=fmt(proUsers);
+  $('monProSub').textContent=fmt(proUsers)+' unique users · '+fmt(t.pro_clicks)+' clicks';
+  $('monFeatureUsers').textContent=fmt(featureUsers);
   $('monFeatureHits').textContent=fmt(t.feature_gate_hits)+' feature-gate events';
 
   const topFeature=features[0];
@@ -578,39 +598,64 @@ function renderMonetization(mon){
     $('monTopFeatureSub').textContent='No feature demand yet';
   }
 
-  const topChannel=channels.find(x=>Number(x.upgrade_users||0)>0)||channels[0];
+  const topChannel=channels.find(x=>Number(x.intent_users||0)>0)||channels[0];
   if(topChannel){
     $('monTopChannel').textContent=topChannel.source||'direct';
-    $('monTopChannelSub').textContent=fmt(topChannel.upgrade_users)+' users · '+fmt(topChannel.upgrade_clicks)+' clicks';
+    $('monTopChannelSub').textContent=fmt(topChannel.intent_users)+' users · '+fmt(topChannel.intent_clicks)+' clicks';
   } else {
     $('monTopChannel').textContent='—';
     $('monTopChannelSub').textContent='No upgrade intent yet';
   }
 
-  const rate=limitUsers>0 ? (upgradeUsers/limitUsers*100) : null;
-  $('monIntentRate').textContent=rate==null ? '—' : rate.toFixed(1)+'%';
+  const limitToIntentUsers=Number(t.limit_to_intent_users||0);
+  const intentRate=limitUsers>0 ? (limitToIntentUsers/limitUsers*100) : null;
+  $('monIntentRate').textContent=intentRate==null ? '—' : intentRate.toFixed(1)+'%';
+
+  $('monCheckoutUsers').textContent=fmt(checkoutUsers);
+  $('monCheckoutHits').textContent=fmt(t.checkout_hits)+' checkout events · '+(Number(t.checkout_hits||0)?'Billing flow detected':'Billing not live');
+  $('monPaidUsers').textContent=fmt(paidUsers);
+  $('monPaidHits').textContent=fmt(t.paid_hits)+' successful payments';
+  $('monCheckoutRate').textContent=upgradeUsers>0 ? ((checkoutUsers/upgradeUsers)*100).toFixed(1)+'%' : '—';
+  $('monPaidRate').textContent=upgradeUsers>0 ? ((paidUsers/upgradeUsers)*100).toFixed(1)+'%' : '—';
+
+  const funnel=[
+    ['Limit hit','User reached a plan limit',limitUsers,Number(t.limit_hits||0)],
+    ['Upgrade intent','User clicked an upgrade CTA',upgradeUsers,Number(t.upgrade_clicks||0)],
+    ['Checkout started','User entered the billing flow',checkoutUsers,Number(t.checkout_hits||0)],
+    ['Payment success','User completed a payment',paidUsers,Number(t.paid_hits||0)]
+  ];
+  $('monFunnel').innerHTML=funnel.map(x=>
+    '<tr><td><b>'+esc(x[0])+'</b></td><td>'+esc(x[1])+'</td><td class="num">'+fmt(x[2])+'</td><td class="num">'+fmt(x[3])+'</td></tr>'
+  ).join('');
 
   $('monFeatures').innerHTML=features.map(x=>
     '<tr><td><b>'+esc(x.feature||'unknown')+'</b></td>'+
     '<td>'+esc(x.required_plan||'unknown')+'</td>'+
-    '<td class="num">'+fmt(x.hits)+'</td>'+ 
+    '<td class="num">'+fmt(x.hits)+'</td>'+
     '<td class="num">'+fmt(x.users)+'</td></tr>'
   ).join('') || '<tr><td colspan="4">No feature-gate activity in this period.</td></tr>';
 
   $('monChannels').innerHTML=channels.map(x=>
     '<tr><td><b>'+esc(x.source||'direct')+'</b></td>'+
-    '<td>'+esc(x.medium||'none')+'</td>'+ 
-    '<td>'+esc(x.campaign||'(none)')+'</td>'+ 
-    '<td class="num">'+fmt(x.upgrade_users)+'</td>'+ 
-    '<td class="num">'+fmt(x.upgrade_clicks)+'</td>'+ 
-    '<td class="num">'+fmt(x.feature_gate_users)+'</td></tr>'
-  ).join('') || '<tr><td colspan="6">No monetization intent in this period.</td></tr>';
+    '<td>'+esc(x.medium||'none')+'</td>'+
+    '<td>'+esc(x.campaign||'(none)')+'</td>'+
+    '<td class="num">'+fmt(x.intent_users)+'</td>'+
+    '<td class="num">'+fmt(x.intent_clicks)+'</td>'+
+    '<td class="num">'+fmt(x.feature_gate_users)+'</td>'+
+    '<td class="num">'+fmt(x.checkout_users)+'</td>'+
+    '<td class="num">'+fmt(x.paid_users)+'</td></tr>'
+  ).join('') || '<tr><td colspan="8">No monetization activity in this period.</td></tr>';
 
   let brief='No monetization signals yet.';
-  if(limitUsers||upgradeUsers||Number(t.feature_gate_users||0)){
-    brief=fmt(limitUsers)+' users hit a plan limit, '+fmt(upgradeUsers)+' showed upgrade intent, and '+fmt(t.feature_gate_users)+' encountered a locked feature.';
-    if(topFeature) brief+=' The strongest feature demand is '+(topFeature.feature||'unknown')+'.';
-    if(topChannel && Number(topChannel.upgrade_users||0)) brief+=' '+(topChannel.source||'Direct')+' is currently the strongest acquisition source for upgrade intent.';
+  if(limitUsers||upgradeUsers||featureUsers||checkoutUsers||paidUsers){
+    brief=fmt(limitUsers)+' users hit a plan limit and '+fmt(upgradeUsers)+' showed upgrade intent.';
+    if(starterUsers||proUsers) brief+=' Starter interest: '+fmt(starterUsers)+' users; Pro interest: '+fmt(proUsers)+' users.';
+    if(featureUsers) brief+=' '+fmt(featureUsers)+' users encountered a locked feature.';
+    if(checkoutUsers) brief+=' '+fmt(checkoutUsers)+' users reached checkout.';
+    if(paidUsers) brief+=' '+fmt(paidUsers)+' users completed payment.';
+    else brief+=' Payment conversion is not live yet.';
+    if(topFeature) brief+=' Strongest feature demand: '+(topFeature.feature||'unknown')+'.';
+    if(topChannel && Number(topChannel.intent_users||0)) brief+=' Strongest acquisition source for upgrade intent: '+(topChannel.source||'Direct')+'.';
   }
   $('monBrief').textContent=brief;
 }
