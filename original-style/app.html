@@ -1775,6 +1775,28 @@ input:focus:not(:focus-visible) {
   </div>
 </div>
 
+<div class="modalback" id="upgradeModal">
+  <div class="modal" style="max-width:620px">
+    <h2 id="upgradeModalTitle">You’ve reached your plan limit</h2>
+    <p id="upgradeModalMessage">Upgrade to keep creating invoices and unlock more features.</p>
+    <div id="upgradePlans" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:18px">
+      <div style="border:1px solid var(--border);border-radius:14px;padding:16px">
+        <div style="font-weight:800;font-size:18px">Starter</div>
+        <div style="color:var(--muted);margin:4px 0 12px">$3/month · 50 invoices · 50 clients</div>
+        <button class="button primary" type="button" data-upgrade-plan="starter">Upgrade to Starter</button>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:14px;padding:16px">
+        <div style="font-weight:800;font-size:18px">Pro</div>
+        <div style="color:var(--muted);margin:4px 0 12px">$8/month · Unlimited invoices & clients</div>
+        <button class="button" type="button" data-upgrade-plan="pro">Upgrade to Pro</button>
+      </div>
+    </div>
+    <div class="buttons" style="justify-content:flex-end;margin-top:18px;gap:10px">
+      <button class="button" id="upgradeLater">Not now</button>
+    </div>
+  </div>
+</div>
+
 <div class="modalback" id="growthModal">
   <div class="modal">
     <h2 id="growthModalTitle">Save your invoice</h2>
@@ -2400,6 +2422,11 @@ async function startCloudSync(client, user) {
 
   cloud.client = client;
   cloud.user = user;
+  entitlementPromise = null;
+  entitlements = structuredClone(DEFAULT_ENTITLEMENTS);
+  loadTierCache();
+  await getEntitlements(true);
+  updateGrowthMeter();
   cloud.organizationId = null;
   cloud.hydrated = false;
 
@@ -2505,17 +2532,30 @@ function persistDb() {
   }
 }
 
-/* ---------- Growth foundation ---------- */
+/* ---------- Growth + tiering foundation ---------- */
 const FREE_INVOICE_LIMIT = 3;
 const GROWTH_USAGE_KEY = 'invoicedey-growth-v3';
 const ANON_GROWTH_USAGE_KEY = 'invoicedey-growth-v3-anon';
+const TIER_CACHE_KEY = 'invoicedey-tier-v1';
+
+const DEFAULT_ENTITLEMENTS = {
+  plan: 'free',
+  plan_name: 'Free',
+  status: 'active',
+  limits: { clients: 5, invoices: 3, team_members: 1, invoice_history_days: 30 },
+  features: {
+    api_access: false, custom_logo: false, advanced_tax: false, advanced_reports: false,
+    priority_support: false, recurring_invoices: false, team_collaboration: false
+  },
+  anonymous: true,
+  price_monthly_cents: 0
+};
+
+let entitlements = structuredClone(DEFAULT_ENTITLEMENTS);
+let entitlementPromise = null;
 
 function growthUsageKey() {
-  // Authenticated users always get their own independent allowance.
-  // Anonymous usage is deliberately kept in a separate browser bucket.
-  return activeUserId
-    ? GROWTH_USAGE_KEY + '-user-' + activeUserId
-    : ANON_GROWTH_USAGE_KEY;
+  return activeUserId ? GROWTH_USAGE_KEY + '-user-' + activeUserId : ANON_GROWTH_USAGE_KEY;
 }
 function growthMonthKey() {
   const d = new Date();
@@ -2529,12 +2569,67 @@ function getGrowthUsage() {
   return usage;
 }
 function saveGrowthUsage(usage) { localStorage.setItem(growthUsageKey(), JSON.stringify(usage)); }
-function freeInvoicesRemaining() { return Math.max(0, FREE_INVOICE_LIMIT - getGrowthUsage().invoicesCreated); }
-function canCreateFreeInvoice() {
-  if (freeInvoicesRemaining() > 0) return true;
-  showGrowthModal('You’ve reached the free limit', 'The Free plan includes 3 invoices per month. Create a free account to keep your invoices safely in the cloud. Paid plans can be added when billing is enabled.');
+function freeInvoicesRemaining() { return Math.max(0, Number(entitlements?.limits?.invoices ?? FREE_INVOICE_LIMIT) - getGrowthUsage().invoicesCreated); }
+function saveTierCache() { try { localStorage.setItem(TIER_CACHE_KEY + (activeUserId ? '-' + activeUserId : '-anon'), JSON.stringify(entitlements)); } catch {} }
+function loadTierCache() {
+  try {
+    const raw = localStorage.getItem(TIER_CACHE_KEY + (activeUserId ? '-' + activeUserId : '-anon'));
+    if (raw) entitlements = { ...structuredClone(DEFAULT_ENTITLEMENTS), ...JSON.parse(raw) };
+  } catch {}
+}
+
+async function getEntitlements(force = false) {
+  if (entitlementPromise && !force) return entitlementPromise;
+  entitlementPromise = (async () => {
+    if (!cloud.user) { entitlements = structuredClone(DEFAULT_ENTITLEMENTS); loadTierCache(); return entitlements; }
+    const client = cloud.client || await getSupabase();
+    if (!client) return entitlements;
+    const { data, error } = await client.rpc('my_entitlements');
+    if (error) {
+      console.warn('entitlements', error.message || error);
+      loadTierCache();
+      return entitlements;
+    }
+    if (data) { entitlements = data; saveTierCache(); }
+    return entitlements;
+  })();
+  try { return await entitlementPromise; } finally { entitlementPromise = null; }
+}
+
+async function cloudInvoiceUsage30d() {
+  if (!cloud.client || !cloud.user) return null;
+  try {
+    const orgId = await ensureCloudOrganization();
+    const since = new Date();
+    since.setMonth(since.getMonth() - 1);
+    const { count, error } = await cloud.client.from('invoices')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', orgId)
+      .gte('created_at', since.toISOString());
+    if (error) throw error;
+    return Number(count || 0);
+  } catch (e) {
+    console.debug('invoice usage', e.message || e);
+    return null;
+  }
+}
+
+async function canCreateFreeInvoice() {
+  const e = await getEntitlements();
+  const limit = Number(e?.limits?.invoices ?? FREE_INVOICE_LIMIT);
+  if (!Number.isFinite(limit) || limit <= 0) return true;
+
+  let used = null;
+  if (cloud.user) used = await cloudInvoiceUsage30d();
+  if (used === null) used = getGrowthUsage().invoicesCreated;
+
+  if (used < limit) return true;
+  showUpgradeModal('You’ve reached your ' + (e.plan_name || 'Free') + ' plan limit',
+    `You’ve used ${used} of ${limit} invoices in the current billing window. Upgrade to keep creating invoices.`);
+  track('tier_limit_hit', { resource: 'invoices', plan: e.plan || 'free', used, limit });
   return false;
 }
+
 function recordFreeInvoiceCreated() {
   const usage = getGrowthUsage();
   usage.invoicesCreated += 1;
@@ -2544,9 +2639,22 @@ function recordFreeInvoiceCreated() {
 function updateGrowthMeter() {
   const el = document.getElementById('growthMeter');
   if (!el) return;
-  const remaining = freeInvoicesRemaining();
+  const limit = Number(entitlements?.limits?.invoices ?? FREE_INVOICE_LIMIT);
+  if (entitlements?.plan && entitlements.plan !== 'free') {
+    el.textContent = (entitlements.plan_name || entitlements.plan) + ' plan';
+    return;
+  }
+  const remaining = Math.max(0, limit - getGrowthUsage().invoicesCreated);
   el.textContent = remaining + ' free invoice' + (remaining === 1 ? '' : 's') + ' remaining this month';
 }
+function showUpgradeModal(title, message) {
+  const modal = document.getElementById('upgradeModal');
+  if (!modal) return;
+  document.getElementById('upgradeModalTitle').textContent = title;
+  document.getElementById('upgradeModalMessage').textContent = message;
+  modal.classList.add('show');
+}
+
 function showGrowthModal(title, message) {
   const modal = document.getElementById('growthModal');
   if (!modal) return;
@@ -2563,6 +2671,14 @@ function maybePromptSignup() {
   saveGrowthUsage(usage);
   setTimeout(() => showGrowthModal('Keep your invoice safe', 'Your invoice is saved on this device. Create a free account to sync it to the cloud, access it anywhere, and share it with your client.'), 450);
 }
+
+document.getElementById('upgradeLater')?.addEventListener('click', () => document.getElementById('upgradeModal')?.classList.remove('show'));
+document.querySelectorAll('[data-upgrade-plan]').forEach(btn => btn.addEventListener('click', () => {
+  const plan = btn.dataset.upgradePlan;
+  document.getElementById('upgradeModal')?.classList.remove('show');
+  track('upgrade_cta_clicked', { plan });
+  alert(`${plan === 'starter' ? 'Starter — $3/month' : 'Pro — $8/month'} billing is coming soon. Your current plan remains active.`);
+}));
 
 let edit = null;
 let editingClientId = null;
@@ -2972,8 +3088,8 @@ function nextInvoiceNumber() {
   return { number: candidate, next: n + 1 };
 }
 
-function newInvoice() {
-  if (!canCreateFreeInvoice()) return;
+async function newInvoice() {
+  if (!(await canCreateFreeInvoice())) return;
   const num = nextInvoiceNumber();
   edit = {
     id: crypto.randomUUID(),
@@ -3347,7 +3463,16 @@ document.addEventListener('click', e => {
   }
 });
 
-function openClientModal(client) {
+async function openClientModal(client) {
+  if (!client) {
+    const e = await getEntitlements();
+    const limit = Number(e?.limits?.clients ?? 5);
+    if (Number.isFinite(limit) && limit > 0 && db.clients.length >= limit) {
+      showUpgradeModal(`You’ve reached your ${e.plan_name || 'Free'} client limit`, `Your plan allows ${limit} clients. Upgrade to add more.`);
+      track('tier_limit_hit', { resource: 'clients', plan: e.plan || 'free', used: db.clients.length, limit });
+      return;
+    }
+  }
   editingClientId = client ? client.id : null;
   $('#clientModalTitle').textContent = client ? 'Edit client' : 'Add a client';
   $('#clientModalSub').textContent = client
