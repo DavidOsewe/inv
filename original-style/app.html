@@ -2084,10 +2084,31 @@ async function syncProfile(client, user) {
     } else if (referralCode) {
       cloud.referralCode = String(referralCode).toUpperCase();
       localStorage.setItem('invoicedey-my-referral-code', cloud.referralCode);
+      document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
     }
   } catch (e) {
     console.warn('referral code', e.message || e);
   }
+}
+
+async function getMyReferralCode() {
+  const cached = cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '';
+  if (cached) return String(cached).toUpperCase();
+  if (!cloud.user) return '';
+  try {
+    const client = cloud.client || await getSupabase();
+    const { data, error } = await client.rpc('ensure_my_referral_code');
+    if (error) throw error;
+    if (data) {
+      cloud.referralCode = String(data).toUpperCase();
+      localStorage.setItem('invoicedey-my-referral-code', cloud.referralCode);
+      document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
+      return cloud.referralCode;
+    }
+  } catch (e) {
+    console.warn('get referral code', e.message || e);
+  }
+  return '';
 }
 
 let cloud = {
@@ -3441,27 +3462,43 @@ function profile() {
   applyTaxCountrySuggestion(db.profile.taxCountry || 'US', false);
   applyFeatureGates();
 
-  const referralCode = cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '';
   const referralCodeEl = document.getElementById('profileReferralCode');
   const referralUrlEl = document.getElementById('profileReferralUrl');
   const copyReferralBtn = document.getElementById('copyProfileReferral');
-  if (referralCodeEl) referralCodeEl.textContent = referralCode || (cloud.user ? 'Generating referral code…' : 'Sign in to generate a referral code');
-  if (referralUrlEl) referralUrlEl.textContent = referralCode ? referralLink(referralCode) : 'Sign in to generate your referral link.';
-  if (copyReferralBtn) {
-    copyReferralBtn.disabled = !referralCode;
-    copyReferralBtn.onclick = async () => {
-      if (!referralCode) return;
-      const url = referralLink(referralCode);
-      try {
-        await navigator.clipboard.writeText(url);
-        await track('referral_link_copied', { referral_code: referralCode });
-        toast('Referral link copied.');
-      } catch {
-        prompt('Copy your referral link:', url);
-      }
-    };
+
+  const paintReferral = (code) => {
+    const hasCode = !!code;
+    if (referralCodeEl) referralCodeEl.textContent = code || (cloud.user ? 'Loading referral code…' : 'Sign in to generate a referral code');
+    if (referralUrlEl) referralUrlEl.textContent = code ? referralLink(code) : (cloud.user ? 'Loading your referral link…' : 'Sign in to generate your referral link.');
+    if (copyReferralBtn) {
+      copyReferralBtn.disabled = false;
+      copyReferralBtn.onclick = async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const liveCode = await getMyReferralCode();
+        if (!liveCode) { toast('Referral link is not available yet.'); return; }
+        const url = referralLink(liveCode);
+        try {
+          await navigator.clipboard.writeText(url);
+          await track('referral_link_copied', { referral_code: liveCode });
+          toast('Referral link copied.');
+        } catch {
+          window.prompt('Copy your referral link:', url);
+        }
+      };
+    }
+    return hasCode;
+  };
+
+  paintReferral(cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '');
+  if (cloud.user && !cloud.referralCode) {
+    getMyReferralCode().then(paintReferral);
   }
 }
+
+document.addEventListener('invoicedey:referral-ready', () => {
+  if (document.getElementById('profile')?.classList.contains('active')) profile();
+});
 
 function nextInvoiceNumber() {
   const prefix = (db.profile.invoicePrefix || 'INV').trim() || 'INV';
@@ -3840,9 +3877,8 @@ document.addEventListener('click', e => {
       const msg = count
         ? `"${c.name}" has ${count} invoice(s). Deleting will leave those invoices without a client name. Continue?`
         : `Delete client "${c.name}"? This cannot be undone.`;
-      confirmAction('Delete client', msg, () => {
-        db.clients = db.clients.filter(x => x.id !== c.id);
-        save();
+      confirmAction('Delete client', msg, async () => {
+        await deleteClientById(c.id);
         toast('Client deleted.');
         clients();
       });
@@ -3890,16 +3926,10 @@ $('#modalDeleteClient').onclick = () => {
   const msg = count
     ? `“${c.name}” has ${count} invoice(s). Deleting the client will keep those invoices but remove the client link. Continue?`
     : `Delete “${c.name}”? This cannot be undone.`;
-  confirmAction('Delete client', msg, () => {
-    db.clients = db.clients.filter(x => x.id !== c.id);
-    save();
+  confirmAction('Delete client', msg, async () => {
+    await deleteClientById(c.id);
     $('#modal').classList.remove('show');
     editingClientId = null;
-    if (edit && $('#client')) {
-      const prev = edit.client;
-      $('#client').innerHTML = '<option value="">Select client…</option>' + db.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-      $('#client').value = prev || '';
-    }
     toast('Client deleted.');
     clients();
   });
@@ -4062,11 +4092,11 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     const copyReferral = e.target.closest('#copyAccountReferral');
     if (copyReferral) {
       e.stopPropagation();
-      const code = cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '';
-      if (!code) { toast('Referral link is not ready yet.'); return; }
+      const code = await getMyReferralCode();
+      if (!code) { toast(cloud.user ? 'Referral link is not available yet.' : 'Sign in to use your referral link.'); return; }
       const url = referralLink(code);
       try { await navigator.clipboard.writeText(url); toast('Referral link copied.'); }
-      catch { prompt('Copy your referral link:', url); }
+      catch { window.prompt('Copy your referral link:', url); }
       return;
     }
     const action = e.target.closest('[data-account-action]')?.dataset.accountAction;
@@ -4913,6 +4943,77 @@ function addPaymentToEdit(amount, date, note, method) {
     }
   });
 })();
+
+/* Confirmation modal wiring */
+(function wireConfirmModal() {
+  const cancel = document.getElementById('confirmCancel');
+  const ok = document.getElementById('confirmOk');
+  const modal = document.getElementById('confirmModal');
+
+  function close() {
+    if (modal) modal.classList.remove('show');
+    pendingConfirm = null;
+  }
+
+  if (cancel) cancel.onclick = close;
+  if (ok) ok.onclick = async () => {
+    const action = pendingConfirm;
+    if (!action) return close();
+    ok.disabled = true;
+    try {
+      await action();
+    } catch (error) {
+      console.error('CONFIRM ACTION FAILED:', error);
+      toast(error?.message || 'Action failed. Please try again.');
+    } finally {
+      ok.disabled = false;
+      close();
+    }
+  };
+
+  if (modal) {
+    modal.addEventListener('click', e => {
+      if (e.target === modal) close();
+    });
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && modal?.classList.contains('show')) close();
+  });
+})();
+
+/* Delete a client locally and in the cloud. Existing invoices are retained
+   but their client link is cleared first so the client can be removed safely. */
+async function deleteClientById(clientId) {
+  const c = db.clients.find(x => x.id === clientId);
+  if (!c) return;
+
+  if (cloud.client && cloud.user && c.cloudId) {
+    const organizationId = await ensureCloudOrganization();
+    const linkedInvoices = db.invoices.filter(i => i.client === c.id);
+    for (const inv of linkedInvoices) {
+      if (!inv.cloudId) continue;
+      const { error } = await cloud.client.from('invoices').update({ client_id: null })
+        .eq('id', inv.cloudId).eq('organization_id', organizationId);
+      if (error) throw error;
+    }
+    const { error: deleteError } = await cloud.client.from('clients').delete()
+      .eq('id', c.cloudId).eq('organization_id', organizationId);
+    if (deleteError) throw deleteError;
+  }
+
+  db.invoices.forEach(i => {
+    if (i.client === c.id) i.client = '';
+  });
+  db.clients = db.clients.filter(x => x.id !== c.id);
+  save();
+
+  if (edit && $('#client')) {
+    const previous = edit.client;
+    $('#client').innerHTML = '<option value="">Select client…</option>' +
+      db.clients.map(x => `<option value="${x.id}">${x.name}</option>`).join('');
+    $('#client').value = previous || '';
+  }
+}
 
 /* Init */
 switchTo('dashboard');
