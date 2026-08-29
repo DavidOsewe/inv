@@ -1083,6 +1083,13 @@ input:focus:not(:focus-visible) {
 .account-menu-header { border-radius: 10px; background: var(--panel-2); }
 .account-menu-header strong { font-size: 13px; }
 .account-menu-header span { max-width: 100%; }
+
+.referral-card { margin: 28px 0 18px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2); }
+.referral-card h3 { margin: 0 0 6px; font-size: 15px; font-weight: 700; }
+.referral-card p { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.referral-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.referral-code-box { flex: 1 1 190px; min-width: 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; font-weight: 700; letter-spacing: .4px; color: var(--text); }
+.referral-link-box { margin-top: 8px; padding: 9px 11px; background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 11px; line-height: 1.35; word-break: break-all; }
 @media(max-width: 1000px){ .account-email { display:none; } .account-card { padding: 9px; } }
 .client-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
 .client-count { color:var(--muted); font-size:12px; }
@@ -1475,6 +1482,7 @@ input:focus:not(:focus-visible) {
         <div class="account-menu-header"><strong id="accountMenuName">Account</strong><span id="accountMenuEmail">Not signed in</span></div>
         <button type="button" data-account-action="profile">Profile &amp; settings</button>
         <button type="button" data-account-action="plan">Plan &amp; billing</button>
+        <button type="button" id="copyAccountReferral">Copy referral link</button>
         <button type="button" class="danger-link" id="appLogoutBtn">Log out</button>
       </div>
     </div>
@@ -1736,6 +1744,16 @@ input:focus:not(:focus-visible) {
             <label>Next number</label>
             <input data-p="nextInvoiceNumber" type="number" min="1" step="1">
           </div>
+        </div>
+
+        <div class="referral-card">
+          <h3>Referral link</h3>
+          <p>Share InvoiceDey with another business. Your referral link keeps the referral attached when they sign up.</p>
+          <div class="referral-row">
+            <div class="referral-code-box" id="profileReferralCode">Loading referral code…</div>
+            <button class="button" type="button" id="copyProfileReferral">Copy referral link</button>
+          </div>
+          <div class="referral-link-box" id="profileReferralUrl">Sign in to generate your referral link.</div>
         </div>
 
         <button class="button primary" id="saveProfile">Save profile</button>
@@ -2056,6 +2074,20 @@ async function syncProfile(client, user) {
     full_name: user.user_metadata?.full_name || ''
   }, { onConflict: 'id' });
   if (error) console.warn('profile sync', error.message);
+
+  // Every authenticated user gets one permanent referral code.
+  // The code is generated server-side by ensure_my_referral_code().
+  try {
+    const { data: referralCode, error: referralError } = await client.rpc('ensure_my_referral_code');
+    if (referralError) {
+      console.warn('referral code', referralError.message || referralError);
+    } else if (referralCode) {
+      cloud.referralCode = String(referralCode).toUpperCase();
+      localStorage.setItem('invoicedey-my-referral-code', cloud.referralCode);
+    }
+  } catch (e) {
+    console.warn('referral code', e.message || e);
+  }
 }
 
 let cloud = {
@@ -2418,6 +2450,12 @@ function withAttribution(url) {
   } catch {
     return url;
   }
+}
+
+function referralLink(code = cloud?.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '') {
+  const u = new URL('index.html', window.location.href);
+  if (code) u.searchParams.set('ref', code);
+  return u.toString();
 }
 
 async function track(eventName, metadata = {}) {
@@ -3402,6 +3440,27 @@ function profile() {
   if ($('#taxRegistered')) $('#taxRegistered').value = String(!!db.profile.taxRegistered);
   applyTaxCountrySuggestion(db.profile.taxCountry || 'US', false);
   applyFeatureGates();
+
+  const referralCode = cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '';
+  const referralCodeEl = document.getElementById('profileReferralCode');
+  const referralUrlEl = document.getElementById('profileReferralUrl');
+  const copyReferralBtn = document.getElementById('copyProfileReferral');
+  if (referralCodeEl) referralCodeEl.textContent = referralCode || (cloud.user ? 'Generating referral code…' : 'Sign in to generate a referral code');
+  if (referralUrlEl) referralUrlEl.textContent = referralCode ? referralLink(referralCode) : 'Sign in to generate your referral link.';
+  if (copyReferralBtn) {
+    copyReferralBtn.disabled = !referralCode;
+    copyReferralBtn.onclick = async () => {
+      if (!referralCode) return;
+      const url = referralLink(referralCode);
+      try {
+        await navigator.clipboard.writeText(url);
+        await track('referral_link_copied', { referral_code: referralCode });
+        toast('Referral link copied.');
+      } catch {
+        prompt('Copy your referral link:', url);
+      }
+    };
+  }
 }
 
 function nextInvoiceNumber() {
@@ -3999,7 +4058,17 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
   document.addEventListener('click', e => {
     if (!e.target.closest('.account-area')) closeMenu();
   });
-  menu.addEventListener('click', e => {
+  menu.addEventListener('click', async e => {
+    const copyReferral = e.target.closest('#copyAccountReferral');
+    if (copyReferral) {
+      e.stopPropagation();
+      const code = cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '';
+      if (!code) { toast('Referral link is not ready yet.'); return; }
+      const url = referralLink(code);
+      try { await navigator.clipboard.writeText(url); toast('Referral link copied.'); }
+      catch { prompt('Copy your referral link:', url); }
+      return;
+    }
     const action = e.target.closest('[data-account-action]')?.dataset.accountAction;
     if (!action) return;
     closeMenu();
@@ -4016,6 +4085,7 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
       }
       await syncProfile(client, session.user);
       await startCloudSync(client, session.user);
+      if (document.getElementById('profile')?.classList.contains('active')) profile();
     }
   }
 
@@ -4035,6 +4105,8 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     loadDefaultDb();
     localStorage.removeItem(ANON_DB_KEY);
     localStorage.removeItem('invoicedey-v2');
+    localStorage.removeItem('invoicedey-my-referral-code');
+    cloud.referralCode = null;
     updateGrowthMeter();
     await client.auth.signOut();
     paintAccount(null);
