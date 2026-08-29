@@ -953,27 +953,40 @@ input:focus:not(:focus-visible) {
 .pitems th:nth-child(5),
 .pitems td:nth-child(5) { width: 18%; text-align: right; font-weight: 600; }
 .pitems .right { text-align: right; }
-.total {
-  width: 260px;
-  margin: 20px 0 28px auto;
-  padding-top: 4px;
+ .total {
+  width: 300px;
+  margin: 20px 0 30px auto;
 }
 .total div {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  color: #64748b;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  align-items: baseline;
+  column-gap: 18px;
   padding: 6px 0;
+  color: #64748b;
   font-size: 13px;
+  line-height: 1.4;
+}
+.total div > span:last-child {
+  text-align: right;
+  color: #334155;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .total .grand {
-  border-top: 2px solid #0f172a;
+  margin-top: 10px;
+  padding: 12px 12px;
+  border-top: 1px solid #cbd5e1;
+  background: #f8fafc;
+  border-radius: 8px;
   color: #0f172a;
-  margin-top: 8px;
-  padding-top: 12px;
-  font-weight: 800;
   font-size: 17px;
-  letter-spacing: -0.2px;
+  font-weight: 800;
+  letter-spacing: -0.15px;
+}
+.total .grand > span:last-child {
+  color: #0f172a;
+  font-weight: 800;
 }
 .terms {
   border-top: 1px solid #e2e8f0;
@@ -993,12 +1006,13 @@ input:focus:not(:focus-visible) {
 }
 
 /* =========================================================
-   V15 REFINEMENTS — account session, clients, invoice output
+   V16 REFINEMENTS — ChatGPT-style account session, clients, invoice output
    ========================================================= */
 .account-area {
   margin-top: auto;
   position: relative;
-  padding-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 .account-card {
   width: 100%;
@@ -1025,14 +1039,14 @@ input:focus:not(:focus-visible) {
   font-size: 12px; font-weight: 800;
   letter-spacing: .2px;
 }
-.account-copy { min-width: 0; flex: 1; }
-.account-name { font-weight: 700; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.account-email { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
-.account-chevron { color: var(--muted-2); font-size: 13px; }
+.account-copy { min-width: 0; flex: 1; overflow: hidden; }
+.account-name { display:block; font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.25; }
+.account-email { display:block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; line-height: 1.2; }
+.account-chevron { color: var(--muted-2); font-size: 14px; flex: 0 0 auto; }
 .account-menu {
-  position: absolute; left: 0; right: 0; bottom: calc(100% + 8px);
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 10px);
   background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
-  box-shadow: var(--shadow-lg); padding: 6px; display: none; z-index: 80;
+  box-shadow: var(--shadow-lg); padding: 7px; display: none; z-index: 80;
 }
 .account-menu.show { display: block; }
 .account-menu-header { padding: 10px 10px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
@@ -1041,9 +1055,15 @@ input:focus:not(:focus-visible) {
 .account-menu button { width: 100%; text-align: left; border-radius: 9px; padding: 9px 10px; color: var(--text); font-size: 12px; font-weight: 600; }
 .account-menu button:hover { background: var(--panel-2); }
 .account-menu .danger-link { color: var(--red-text); }
+.account-menu button { min-height: 38px; }
+.account-menu-header { border-radius: 10px; background: var(--panel-2); }
+.account-menu-header strong { font-size: 13px; }
+.account-menu-header span { max-width: 100%; }
+@media(max-width: 1000px){ .account-email { display:none; } .account-card { padding: 9px; } }
 .client-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
 .client-count { color:var(--muted); font-size:12px; }
-.client-actions { display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap; }
+.client-actions { display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap; align-items:center; }
+.client-actions .button { min-height:32px; }
 .icon-button {
   width: 34px; height: 34px; padding:0; border:1px solid var(--line); border-radius:9px;
   display:inline-grid; place-items:center; color:var(--muted); background:var(--panel); box-shadow:var(--shadow);
@@ -1064,7 +1084,9 @@ input:focus:not(:focus-visible) {
 .invoice-meta-box { border:1px solid #E2E8F0; border-radius:10px; padding:11px 12px; background:#F8FAFC; }
 .invoice-meta-box .cap { margin-bottom:3px; }
 .invoice-meta-box strong { font-size:13px; color:#0F172A; }
-@media(max-width:640px){ .account-area{display:none;} .client-toolbar{align-items:flex-start;flex-direction:column;} .client-actions{justify-content:flex-start;} .client-modal-actions{align-items:flex-end;} .invoice-meta-grid{grid-template-columns:1fr;} }
+@media(max-width:640px){
+    .total { width: 100%; }
+ .account-area{display:none;} .client-toolbar{align-items:flex-start;flex-direction:column;} .client-actions{justify-content:flex-start;} .client-modal-actions{align-items:flex-end;} .invoice-meta-grid{grid-template-columns:1fr;} }
 
 /* =========================================================
    COMPONENTS — Profile, search, modals, toast
@@ -3270,8 +3292,8 @@ function clients() {
         <td style="max-width:220px;white-space:pre-line;font-size:12px;color:var(--muted)">${c.address || '—'}</td>
         <td class="right">${count}</td>
         <td><div class="client-actions">
-          <button class="icon-button" type="button" data-edit-client="${c.id}" title="Edit client" aria-label="Edit ${c.name}">✎</button>
-          <button class="icon-button danger" type="button" data-delete-client="${c.id}" title="Delete client" aria-label="Delete ${c.name}">⌫</button>
+          <button class="button" type="button" data-edit-client="${c.id}" title="Edit client" aria-label="Edit ${c.name}" style="padding:7px 10px;font-size:12px">Edit</button>
+          <button class="button danger" type="button" data-delete-client="${c.id}" title="Delete client" aria-label="Delete ${c.name}" style="padding:7px 10px;font-size:12px">Delete</button>
         </div></td>
       </tr>`;
     }).join('')}</tbody>
