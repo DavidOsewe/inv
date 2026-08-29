@@ -924,6 +924,7 @@ input:focus:not(:focus-visible) {
   font-size: 13px;
   table-layout: fixed;
   margin-bottom: 8px;
+  box-sizing: border-box;
   background: #fff;
 }
 .pitems th {
@@ -954,16 +955,23 @@ input:focus:not(:focus-visible) {
 .pitems tbody tr:last-child td {
   border-bottom: 0;
 }
-.pitems th:nth-child(1),
-.pitems td:nth-child(1) { width: 40%; text-align: left; }
-.pitems th:nth-child(2),
-.pitems td:nth-child(2) { width: 12%; text-align: right; }
-.pitems th:nth-child(3),
-.pitems td:nth-child(3) { width: 12%; text-align: right; }
-.pitems th:nth-child(4),
-.pitems td:nth-child(4) { width: 18%; text-align: right; }
-.pitems th:nth-child(5),
-.pitems td:nth-child(5) { width: 18%; text-align: right; font-weight: 600; }
+.pitems .col-desc { width: 46%; }
+.pitems .col-qty { width: 10%; }
+.pitems .col-unit { width: 12%; }
+.pitems .col-rate { width: 16%; }
+.pitems .col-amount { width: 16%; }
+.pitems th,
+.pitems td {
+  text-align: left;
+}
+.pitems th:not(:first-child),
+.pitems td:not(:first-child) {
+  text-align: right;
+}
+.pitems th:last-child,
+.pitems td:last-child {
+  font-weight: 600;
+}
 .pitems .right { text-align: right; }
  .total {
   width: 320px;
@@ -1101,6 +1109,11 @@ input:focus:not(:focus-visible) {
 .invoice-meta-box .cap { margin-bottom:3px; }
 .invoice-meta-box strong { font-size:13px; color:#0F172A; }
 @media(max-width:640px){
+    .pitems .col-desc { width: 52%; }
+    .pitems .col-qty { width: 14%; }
+    .pitems .col-unit { width: 17%; }
+    .pitems .col-rate { width: 17%; }
+    .pitems .col-amount { width: 20%; }
     .total { width: 100%; }
  .account-area{display:none;} .client-toolbar{align-items:flex-start;flex-direction:column;} .client-actions{justify-content:flex-start;} .client-modal-actions{align-items:flex-end;} .invoice-meta-grid{grid-template-columns:1fr;} }
 
@@ -1416,16 +1429,13 @@ input:focus:not(:focus-visible) {
   .pitems td:nth-child(4) {
     display: table-cell !important;
   }
-  .pitems th:nth-child(1),
-  .pitems td:nth-child(1) { width: 36%; text-align: left !important; }
-  .pitems th:nth-child(2),
-  .pitems td:nth-child(2) { width: 10%; text-align: right !important; }
-  .pitems th:nth-child(3),
-  .pitems td:nth-child(3) { width: 12%; text-align: right !important; }
-  .pitems th:nth-child(4),
-  .pitems td:nth-child(4) { width: 20%; text-align: right !important; }
-  .pitems th:nth-child(5),
-  .pitems td:nth-child(5) { width: 22%; text-align: right !important; }
+  .pitems .col-desc { width: 46%; }
+  .pitems .col-qty { width: 10%; }
+  .pitems .col-unit { width: 12%; }
+  .pitems .col-rate { width: 16%; }
+  .pitems .col-amount { width: 16%; }
+  .pitems th:first-child, .pitems td:first-child { text-align: left !important; }
+  .pitems th:not(:first-child), .pitems td:not(:first-child) { text-align: right !important; }
   .pitems th, .pitems td {
     padding: 8px 6px !important;
     color: #111 !important;
@@ -1893,6 +1903,13 @@ input:focus:not(:focus-visible) {
           </div>
           <p class="note" id="pNote" style="margin-top:10px"></p>
           <table class="pitems">
+            <colgroup>
+              <col class="col-desc">
+              <col class="col-qty">
+              <col class="col-unit">
+              <col class="col-rate">
+              <col class="col-amount">
+            </colgroup>
             <thead>
               <tr>
                 <th>Description</th>
@@ -4098,18 +4115,21 @@ function getPrintCSS() {
     td {
       padding: 14px 8px;
       border-bottom: 1px solid #f1f5f9;
+      border-right: 1px solid #e2e8f0;
       vertical-align: top;
       color: #0f172a;
     }
-    th:nth-child(1), td:nth-child(1) { width: 40%; }
-    th:nth-child(2), td:nth-child(2),
-    th:nth-child(3), td:nth-child(3),
-    th:nth-child(4), td:nth-child(4),
-    th:nth-child(5), td:nth-child(5) { text-align: right; }
-    th:nth-child(2), td:nth-child(2) { width: 10%; }
-    th:nth-child(3), td:nth-child(3) { width: 12%; }
-    th:nth-child(4), td:nth-child(4) { width: 18%; }
-    th:nth-child(5), td:nth-child(5) { width: 20%; font-weight: 600; }
+    th { border-right: 1px solid #e2e8f0; }
+    th:last-child, td:last-child { border-right: 0; }
+    table { table-layout: fixed; }
+    table .col-desc { width: 46%; }
+    table .col-qty { width: 10%; }
+    table .col-unit { width: 12%; }
+    table .col-rate { width: 16%; }
+    table .col-amount { width: 16%; }
+    th:first-child, td:first-child { text-align: left; }
+    th:not(:first-child), td:not(:first-child) { text-align: right; }
+    th:last-child, td:last-child { font-weight: 600; }
     .right { text-align: right; }
     .total { width: 260px; margin: 20px 0 28px auto; }
     .total div {
