@@ -91,6 +91,26 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 </div>
 
 <div class="section">
+<div class="head"><h2>Growth Score</h2><span class="pill">Acquisition → activation → retention → monetization</span></div>
+<div class="grid" style="grid-template-columns:1.15fr repeat(4,1fr)">
+<div class="card" style="display:flex;align-items:center;gap:18px">
+<div id="growthScoreRing" style="width:86px;height:86px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--b) 0deg,#E2E8F0 0deg);position:relative;flex:0 0 auto">
+<div style="width:66px;height:66px;border-radius:50%;background:#fff;display:grid;place-items:center"><span id="growthScore" style="font-size:25px;font-weight:850">—</span></div>
+</div>
+<div><div class="label">Overall growth score</div><div class="value" id="growthScoreLabel" style="font-size:18px;margin-top:3px">Building baseline</div><div class="hint" id="growthScoreConfidence">Waiting for data</div></div>
+</div>
+<div class="card"><div class="label">Acquisition</div><div class="value" id="scoreAcquisition">—</div><div class="hint" id="scoreAcquisitionSub">Signups & conversion</div></div>
+<div class="card"><div class="label">Activation</div><div class="value" id="scoreActivation">—</div><div class="hint" id="scoreActivationSub">Users reaching value</div></div>
+<div class="card"><div class="label">Retention</div><div class="value" id="scoreRetention">—</div><div class="hint" id="scoreRetentionSub">Repeat usage</div></div>
+<div class="card"><div class="label">Monetization</div><div class="value" id="scoreMonetization">—</div><div class="hint" id="scoreMonetizationSub">Intent → revenue</div></div>
+</div>
+<div class="grid" style="margin-top:13px;grid-template-columns:1.2fr 1fr">
+<div class="panel" style="padding:18px"><div class="head"><h2>AI Growth Recommendations</h2><span class="pill">Prioritized actions</span></div><div id="growthRecommendations"></div></div>
+<div class="insight"><b>Score interpretation</b><p id="growthScoreBrief" style="color:var(--m);margin-bottom:0">Loading…</p></div>
+</div>
+</div>
+
+<div class="section">
 <div class="head"><h2>Retention cohorts</h2><span class="pill">Weekly active usage</span></div>
 <div class="panel"><div class="cohort" id="cohort"></div></div>
 </div>
@@ -391,6 +411,7 @@ function render(v,r,rev,ref,geo,camp,mon){
   renderCampaigns(camp?.rows||[]);
   renderMonetization(mon||{});
   renderRevenue(rev?.monthly||[]);
+  renderGrowthScore(c,g,r,ref,camp,mon||{},rev||{});
 
   const last=(rev?.monthly||[]).slice(-1)[0];
 
@@ -399,6 +420,101 @@ function render(v,r,rev,ref,geo,camp,mon){
   $('revstatus').textContent=(rev?.monthly||[]).length?'Live':'Not enough data';
 
   $('brief').textContent=brief(c,g,rev);
+}
+
+function renderGrowthScore(c,g,r,ref,camp,mon,rev){
+  const cleanCamp=(camp?.rows||[]).filter(Boolean);
+  const cleanRef=(ref?.rows||[]).filter(Boolean);
+  const t=mon?.totals||{};
+  const signups=Number(c?.signups||0);
+  const invoices=Number(c?.invoices||0);
+  const shares=Number(c?.shares||0);
+
+  // Acquisition: observed signup conversion, with a small trend component.
+  let visitors=0;
+  let campSignups=0;
+  cleanCamp.forEach(x=>{visitors+=Number(x.visitors||0);campSignups+=Number(x.signups||0);});
+  const signupRate=visitors>0 ? campSignups/visitors : 0;
+  const signupRateScore=Math.min(100, signupRate/0.30*100);
+  const signupTrend=g?.signups_pct==null ? 50 : Math.max(0,Math.min(100,50+Number(g.signups_pct)*1.5));
+  const acquisition=Math.round((signupRateScore*0.7)+(signupTrend*0.3));
+
+  // Activation: invoices/signups and shares/invoices are practical product-value signals.
+  const invoicePerSignup=signups>0 ? invoices/signups : 0;
+  const shareRate=invoices>0 ? shares/invoices : 0;
+  const invoiceScore=Math.min(100, invoicePerSignup/2*100);
+  const shareScore=Math.min(100, shareRate/0.60*100);
+  const activation=Math.round((invoiceScore*0.55)+(shareScore*0.45));
+
+  // Retention: use week-1 cohort retention when available, otherwise use a neutral provisional score.
+  const cohorts=(r?.cohorts||[]).filter(Boolean);
+  let w1=[];
+  cohorts.forEach(co=>{
+    const wk=(co.weeks||[]).find(x=>Number(x.week)===1);
+    if(wk && Number(co.cohort_users||0)>0 && wk.retention_pct!=null) w1.push({pct:Number(wk.retention_pct),users:Number(co.cohort_users||0)});
+  });
+  let w1Retention=null;
+  if(w1.length){
+    const den=w1.reduce((a,x)=>a+x.users,0);
+    w1Retention=den ? w1.reduce((a,x)=>a+x.pct*x.users,0)/den : null;
+  }
+  const retention=w1Retention==null ? 50 : Math.round(Math.max(0,Math.min(100,w1Retention/40*100)));
+
+  // Referral: reward both participation and activated-user contribution.
+  const referredActivated=cleanRef.reduce((a,x)=>a+Number(x.activated||0),0);
+  const referralShare=(Number(c?.signups||0)>0) ? Math.min(1,referredActivated/Math.max(1,signups)) : 0;
+  const referral=cleanRef.length ? Math.round(Math.min(100,(referralShare/0.15)*70 + Math.min(cleanRef.length/5,1)*30)) : 0;
+
+  // Monetization: intent is the leading signal until billing is live; paid conversion takes over when payments exist.
+  const limitUsers=Number(t.limit_users||0);
+  const upgradeUsers=Number(t.upgrade_users||0);
+  const limitToIntent=Number(t.limit_to_intent_users||0);
+  const intentRate=limitUsers>0 ? limitToIntent/limitUsers : (upgradeUsers>0 ? 0.10 : 0);
+  const intentScore=Math.min(100,(intentRate/0.30)*100);
+  const featureUsers=Number(t.feature_gate_users||0);
+  const demandScore=Math.min(100,featureUsers>0 ? 70 : 0);
+  const paidUsers=Number(t.paid_users||0);
+  const paidConversion=upgradeUsers>0 ? paidUsers/upgradeUsers : 0;
+  const paidScore=paidUsers>0 ? Math.min(100,paidConversion/0.20*100) : 50;
+  const monetization=Math.round((intentScore*0.55)+(demandScore*0.20)+(paidScore*0.25));
+
+  // Overall score. Referral is supporting evidence rather than a primary health dimension.
+  const overall=Math.round(acquisition*0.20+activation*0.25+retention*0.20+monetization*0.25+referral*0.10);
+
+  const confidence=signups>=10&&invoices>=10 ? 'Good baseline' : signups>=3||invoices>=5 ? 'Early baseline' : 'Limited data';
+  const label=overall>=80?'Strong growth':overall>=65?'Healthy growth':overall>=50?'Needs focus':'At risk';
+  const ring=Math.max(0,Math.min(360,overall*3.6));
+  $('growthScore').textContent=overall;
+  $('growthScoreLabel').textContent=label;
+  $('growthScoreConfidence').textContent=confidence+' · '+signups+' signups · '+invoices+' invoices';
+  $('growthScoreRing').style.background='conic-gradient(var(--b) '+ring+'deg,#E2E8F0 '+ring+'deg)';
+
+  setScore('scoreAcquisition',acquisition,'scoreAcquisitionSub',visitors ? (signupRate*100).toFixed(1)+'% visitor → signup' : 'No visitor data');
+  setScore('scoreActivation',activation,'scoreActivationSub',signups ? invoices+'/'+signups+' invoices per signup' : 'No signup data');
+  setScore('scoreRetention',retention,'scoreRetentionSub',w1Retention==null ? 'Provisional · no W1 cohort' : w1Retention.toFixed(1)+'% W1 retention');
+  setScore('scoreMonetization',monetization,'scoreMonetizationSub',upgradeUsers ? (intentRate*100).toFixed(1)+'% limit → intent' : 'Billing not live');
+
+  const ranked=[
+    {score:acquisition,title:'Improve acquisition quality',body:visitors ? 'Signup conversion is '+(signupRate*100).toFixed(1)+'%. Test the best-performing campaign/source with a tighter landing-page offer.' : 'Start collecting visitor and signup attribution before scaling acquisition.'},
+    {score:activation,title:'Push users to first value',body:signups ? 'You have '+invoices+' invoices from '+signups+' signups. Shorten the path from signup to the first useful invoice and share.' : 'Instrument the signup → invoice activation path.'},
+    {score:retention,title:'Increase repeat usage',body:w1Retention==null ? 'Retention evidence is still thin. Prioritize repeat invoicing, reminders and recurring workflows.' : 'W1 retention is '+w1Retention.toFixed(1)+'%. Target users who create one invoice but do not return.'},
+    {score:monetization,title:'Convert high-intent Free users',body:upgradeUsers ? upgradeUsers+' users showed upgrade intent. Focus the offer on the feature or limit that triggered demand.' : 'Billing is not live yet. Use limit hits and feature gates to identify the strongest upgrade triggers.'},
+    {score:referral,title:'Strengthen user-led acquisition',body:referredActivated ? referredActivated+' activated users came through tracked referrals. Double down on the strongest referral source and invoice sharing loop.' : 'Referral contribution is currently low or untracked. Make every shared invoice a measurable acquisition touchpoint.'}
+  ].sort((a,b)=>a.score-b.score).slice(0,3);
+
+  $('growthRecommendations').innerHTML=ranked.map((x,i)=>
+    '<div style="padding:12px 0;border-bottom:'+(i<ranked.length-1?'1px solid var(--l)':'0')+'">'+
+    '<div style="display:flex;justify-content:space-between;gap:12px"><b>'+(i+1)+'. '+esc(x.title)+'</b><span class="pill">Score '+x.score+'</span></div>'+
+    '<div class="hint" style="margin-top:5px">'+esc(x.body)+'</div></div>'
+  ).join('');
+
+  const paymentText=paidUsers>0 ? 'Paid conversion is '+(paidConversion*100).toFixed(1)+'%.' : 'Payments are not live, so monetization is weighted toward intent and feature demand.';
+  $('growthScoreBrief').textContent='Overall score '+overall+'/100. '+label+'. '+paymentText+' The score is explainable and recalculates whenever the date range changes.';
+}
+
+function setScore(valueId,score,subId,sub){
+  const el=$(valueId); if(el) el.textContent=score+'/100';
+  const s=$(subId); if(s) s.textContent=sub;
 }
 
 function renderCohorts(rows){
