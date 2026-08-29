@@ -916,31 +916,43 @@ input:focus:not(:focus-visible) {
 }
 .pitems {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  overflow: hidden;
   font-size: 13px;
   table-layout: fixed;
   margin-bottom: 8px;
+  background: #fff;
 }
 .pitems th {
   text-align: left;
   font-size: 10px;
-  color: #94a3b8;
+  color: #64748b;
+  background: #f8fafc;
   text-transform: uppercase;
   letter-spacing: 0.6px;
-  border-bottom: 2px solid #e2e8f0;
-  padding: 10px 8px;
+  border-bottom: 1px solid #cfd8e3;
+  border-right: 1px solid #dbe3ee;
+  padding: 10px 10px;
   font-weight: 700;
-  vertical-align: bottom;
+  vertical-align: middle;
 }
 .pitems td {
-  padding: 14px 8px;
-  border-bottom: 1px solid #f1f5f9;
-  vertical-align: top;
+  padding: 13px 10px;
+  border-bottom: 1px solid #e5eaf0;
+  border-right: 1px solid #e5eaf0;
+  vertical-align: middle;
   word-wrap: break-word;
   color: #0f172a;
 }
+.pitems th:last-child,
+.pitems td:last-child {
+  border-right: 0;
+}
 .pitems tbody tr:last-child td {
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 0;
 }
 .pitems th:nth-child(1),
 .pitems td:nth-child(1) { width: 40%; text-align: left; }
@@ -954,8 +966,12 @@ input:focus:not(:focus-visible) {
 .pitems td:nth-child(5) { width: 18%; text-align: right; font-weight: 600; }
 .pitems .right { text-align: right; }
  .total {
-  width: 300px;
+  width: 320px;
   margin: 20px 0 30px auto;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  padding: 8px 14px;
+  background: #fff;
 }
 .total div {
   display: grid;
