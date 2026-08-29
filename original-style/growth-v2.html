@@ -91,6 +91,7 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 </div>
 
 <div class="section">
+<div id="V14_ATTRIBUTION_NOTE" style="margin:0 0 14px;padding:12px 14px;border:1px solid #D9E7FF;border-radius:10px;background:#F5F9FF;color:#355B8A;font-size:12px;line-height:1.45"><b>Attribution model:</b> campaign and referral conversion rates use a stable anonymous/user actor and first-touch attribution. "Attributed visitors" means unique tracked actors in the selected date window, so duplicate signup events do not inflate conversion.</div>
 <div id="dataQualityNote" style="display:none;margin:0 0 14px;padding:12px 14px;border:1px solid #F5D0A9;border-radius:10px;background:#FFF8EF;color:#7C4A03;font-size:12px;line-height:1.45"><b>Attribution data quality note:</b> some campaign/referral rows currently have more signup or activation records than attributed visitor records. Those ratios can exceed 100% and should not be treated as literal conversion rates until the visitor-to-signup identity linkage is tightened. Growth Score below uses bounded/robust signals so these attribution anomalies cannot inflate the score.</div>
 
 <div class="head"><h2>Growth Score</h2><span class="pill">Acquisition → activation → retention → monetization</span></div>
@@ -122,16 +123,16 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 <div class="head"><h2>Campaign Insights</h2><span class="pill">Quality over traffic</span></div>
 <div class="grid">
 <div class="card"><div class="label">Best campaign</div><div class="value" id="campaignBest">—</div><div class="sub" id="campaignBestSub">Waiting for data</div></div>
-<div class="card"><div class="label">Best signup rate</div><div class="value" id="campaignSignupRate">—</div><div class="sub" id="campaignSignupRateSub">Visitors → signups</div></div>
+<div class="card"><div class="label">Best signup rate</div><div class="value" id="campaignSignupRate">—</div><div class="sub" id="campaignSignupRateSub">Attributed visitors → signups</div></div>
 <div class="card"><div class="label">Best activation rate</div><div class="value" id="campaignActivationRate">—</div><div class="sub" id="campaignActivationRateSub">Signups → activated</div></div>
 <div class="card"><div class="label">Top acquisition source</div><div class="value" id="campaignTopSource">—</div><div class="sub" id="campaignTopSourceSub">By activated users</div></div>
 </div>
 </div>
 
-<div class="head"><h2>Campaign performance</h2><span class="pill">Source → campaign → activation</span></div>
+<div class="head"><h2>Campaign performance</h2><span class="pill">Attributed visitor → signup → activation</span></div>
 <div class="panel">
 <table class="table">
-<thead><tr><th>Source</th><th>Medium</th><th>Campaign</th><th>Content</th><th class="num">Visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Sent</th><th class="num">Shares</th><th class="num">Downloads</th><th class="num">Quality</th></tr></thead>
+<thead><tr><th>Source</th><th>Medium</th><th>Campaign</th><th>Content</th><th class="num">Attributed visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Sent</th><th class="num">Shares</th><th class="num">Downloads</th><th class="num">Quality</th></tr></thead>
 <tbody id="campaigns"></tbody>
 </table>
 </div>
@@ -141,7 +142,7 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 <div class="head"><h2>Referral performance</h2><span class="pill">Referral → signup → activation</span></div>
 <div class="panel">
 <table class="table">
-<thead><tr><th>Referral code</th><th class="num">Visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Shares</th><th class="num">Downloads</th></tr></thead>
+<thead><tr><th>Referral code</th><th class="num">Attributed visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Shares</th><th class="num">Downloads</th></tr></thead>
 <tbody id="referrals"></tbody>
 </table>
 </div>
@@ -151,7 +152,7 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 <div class="head"><h2>Referral Intelligence</h2><span class="pill">Referral → signup → activation</span></div>
 <div class="grid">
 <div class="card"><div class="label">Top referral</div><div class="value" id="refBest">—</div><div class="sub" id="refBestSub">Waiting for data</div></div>
-<div class="card"><div class="label">Best signup rate</div><div class="value" id="refSignupRate">—</div><div class="sub" id="refSignupRateSub">Visitors → signups</div></div>
+<div class="card"><div class="label">Best signup rate</div><div class="value" id="refSignupRate">—</div><div class="sub" id="refSignupRateSub">Attributed visitors → signups</div></div>
 <div class="card"><div class="label">Best activation rate</div><div class="value" id="refActivationRate">—</div><div class="sub" id="refActivationRateSub">Signups → activated</div></div>
 <div class="card"><div class="label">Referred activated users</div><div class="value" id="refActivated">—</div><div class="sub" id="refActivatedSub">Across tracked referrals</div></div>
 </div>
@@ -204,7 +205,7 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 <div class="head"><h2>Geography</h2><span class="pill">Country performance</span></div>
 <div class="panel">
 <table class="table">
-<thead><tr><th>Country</th><th class="num">Visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Shares</th><th class="num">Downloads</th></tr></thead>
+<thead><tr><th>Country</th><th class="num">Attributed visitors</th><th class="num">Signups</th><th class="num">Activated</th><th class="num">Invoices</th><th class="num">Shares</th><th class="num">Downloads</th></tr></thead>
 <tbody id="geo"></tbody>
 </table>
 </div>

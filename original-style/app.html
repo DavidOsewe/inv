@@ -993,6 +993,80 @@ input:focus:not(:focus-visible) {
 }
 
 /* =========================================================
+   V15 REFINEMENTS — account session, clients, invoice output
+   ========================================================= */
+.account-area {
+  margin-top: auto;
+  position: relative;
+  padding-top: 18px;
+}
+.account-card {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  transition: background var(--ease), border-color var(--ease);
+}
+.account-card:hover, .account-card.open {
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+.account-avatar {
+  width: 34px; height: 34px; flex: 0 0 34px;
+  border-radius: 10px;
+  display: grid; place-items: center;
+  background: var(--text); color: var(--panel);
+  font-size: 12px; font-weight: 800;
+  letter-spacing: .2px;
+}
+.account-copy { min-width: 0; flex: 1; }
+.account-name { font-weight: 700; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-email { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.account-chevron { color: var(--muted-2); font-size: 13px; }
+.account-menu {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 8px);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow-lg); padding: 6px; display: none; z-index: 80;
+}
+.account-menu.show { display: block; }
+.account-menu-header { padding: 10px 10px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.account-menu-header strong { display:block; font-size:12px; }
+.account-menu-header span { display:block; color:var(--muted); font-size:11px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.account-menu button { width: 100%; text-align: left; border-radius: 9px; padding: 9px 10px; color: var(--text); font-size: 12px; font-weight: 600; }
+.account-menu button:hover { background: var(--panel-2); }
+.account-menu .danger-link { color: var(--red-text); }
+.client-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+.client-count { color:var(--muted); font-size:12px; }
+.client-actions { display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap; }
+.icon-button {
+  width: 34px; height: 34px; padding:0; border:1px solid var(--line); border-radius:9px;
+  display:inline-grid; place-items:center; color:var(--muted); background:var(--panel); box-shadow:var(--shadow);
+}
+.icon-button:hover { background:var(--panel-2); color:var(--text); }
+.icon-button.danger:hover { color:var(--red-text); border-color:var(--red-border); background:var(--red-bg); }
+.client-modal-actions { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:20px; }
+.client-modal-right { display:flex; gap:8px; margin-left:auto; }
+.client-delete-link { color:var(--red-text); font-weight:700; font-size:12px; padding:10px 6px; }
+.client-delete-link:hover { text-decoration:underline; }
+.invoice-output-badge {
+  display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border-radius:999px;
+  background:#F1F5F9; color:#475569; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.7px;
+}
+.invoice-output-badge.paid { background:#ECFDF5; color:#047857; }
+.invoice-output-badge.partial { background:#FFF7ED; color:#C2410C; }
+.invoice-meta-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:18px; }
+.invoice-meta-box { border:1px solid #E2E8F0; border-radius:10px; padding:11px 12px; background:#F8FAFC; }
+.invoice-meta-box .cap { margin-bottom:3px; }
+.invoice-meta-box strong { font-size:13px; color:#0F172A; }
+@media(max-width:640px){ .account-area{display:none;} .client-toolbar{align-items:flex-start;flex-direction:column;} .client-actions{justify-content:flex-start;} .client-modal-actions{align-items:flex-end;} .invoice-meta-grid{grid-template-columns:1fr;} }
+
+/* =========================================================
    COMPONENTS — Profile, search, modals, toast
    ========================================================= */
 .settings { max-width: 720px; }
@@ -1342,10 +1416,18 @@ input:focus:not(:focus-visible) {
     <div class="side-note">
       <b>Invoicedey V1</b>
       <div id="growthMeter" style="margin-top:5px;color:var(--muted)"></div>
-      Create invoices free. Cloud sync is available when signed in.
-      <div id="accountLine" style="margin-top:10px;font-size:12px;line-height:1.5">
-        <a href="index.html" style="color:var(--blue);font-weight:600;text-decoration:none">Account</a>
-        <button type="button" id="appLogoutBtn" style="display:none;margin-top:8px;padding:0;border:0;background:none;color:var(--muted);font:inherit;font-size:12px;font-weight:600;cursor:pointer">Log out</button>
+    </div>
+    <div class="account-area">
+      <button class="account-card" id="accountCard" type="button" aria-expanded="false" aria-haspopup="menu">
+        <span class="account-avatar" id="accountAvatar">ID</span>
+        <span class="account-copy"><span class="account-name" id="accountName">Account</span><span class="account-email" id="accountEmail">Sign in to sync</span></span>
+        <span class="account-chevron">⌃</span>
+      </button>
+      <div class="account-menu" id="accountMenu" role="menu">
+        <div class="account-menu-header"><strong id="accountMenuName">Account</strong><span id="accountMenuEmail">Not signed in</span></div>
+        <button type="button" data-account-action="profile">Profile &amp; settings</button>
+        <button type="button" data-account-action="plan">Plan &amp; billing</button>
+        <button type="button" class="danger-link" id="appLogoutBtn">Log out</button>
       </div>
     </div>
   </aside>
@@ -1420,8 +1502,14 @@ input:focus:not(:focus-visible) {
 
     <section class="view" id="clients">
       <div class="section-head">
-        <h2>Clients</h2>
-        <button class="button primary" id="addClient">+ Add client</button>
+        <div>
+          <h2>Clients</h2>
+          <div class="client-count" id="clientCount">0 clients</div>
+        </div>
+        <button class="button primary" id="addClient" type="button">+ Add client</button>
+      </div>
+      <div class="client-toolbar">
+        <div class="search-bar" style="margin:0;flex:1;max-width:520px"><input type="search" id="clientSearch" placeholder="Search clients by name or email…"></div>
       </div>
       <div id="clientList"></div>
     </section>
@@ -1752,14 +1840,20 @@ input:focus:not(:focus-visible) {
             <div>
               <div class="cap">Bill to</div>
               <b id="pClient">Client</b>
+              <div id="pClientContact" style="font-size:11px;color:var(--muted);margin-top:3px;white-space:pre-line"></div>
             </div>
             <div>
-              <div class="cap">Due date</div>
-              <span id="pDue"></span>
+              <div class="invoice-meta-grid" style="margin-top:0">
+                <div class="invoice-meta-box"><div class="cap">Issue date</div><strong id="pIssueMeta"></strong></div>
+                <div class="invoice-meta-box"><div class="cap">Due date</div><strong id="pDue"></strong></div>
+              </div>
             </div>
           </div>
-          <h2 class="project" id="pTitle">Your invoice title</h2>
-          <p class="note" id="pNote"></p>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:4px">
+            <h2 class="project" id="pTitle" style="margin-bottom:0">Your invoice title</h2>
+            <span class="invoice-output-badge" id="pStatusBadge">Draft</span>
+          </div>
+          <p class="note" id="pNote" style="margin-top:10px"></p>
           <table class="pitems">
             <thead>
               <tr>
@@ -1804,9 +1898,12 @@ input:focus:not(:focus-visible) {
     <div class="field"><label>Email</label><input id="mEmail"></div>
     <div class="field"><label>Billing address</label><textarea id="mAddress" rows="2" placeholder="Street, city, postcode, country"></textarea></div>
     <div class="field"><label>Tax ID (optional)</label><input id="mTaxId" placeholder="Client tax / VAT / ABN / EIN"></div>
-    <div class="buttons" style="justify-content:flex-end;margin-top:20px;gap:10px">
-      <button class="button" id="cancel">Cancel</button>
-      <button class="button primary" id="confirm">Save client</button>
+    <div class="client-modal-actions">
+      <button class="client-delete-link" id="modalDeleteClient" type="button" style="display:none">Delete client</button>
+      <div class="client-modal-right">
+        <button class="button" id="cancel" type="button">Cancel</button>
+        <button class="button primary" id="confirm" type="button">Save client</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3137,7 +3234,13 @@ function invoices() {
 }
 
 function clients() {
-  if (!db.clients.length) {
+  const query = (document.getElementById('clientSearch')?.value || '').trim().toLowerCase();
+  const all = db.clients.slice();
+  const list = all.filter(c => !query || [c.name, c.email, c.address, c.taxId].some(v => String(v || '').toLowerCase().includes(query)));
+  const countEl = document.getElementById('clientCount');
+  if (countEl) countEl.textContent = `${all.length} client${all.length === 1 ? '' : 's'}`;
+
+  if (!all.length) {
     $('#clientList').innerHTML = `<div class="empty">
       <div class="empty-icon">♙</div>
       <h3>No clients yet</h3>
@@ -3150,31 +3253,28 @@ function clients() {
     if (btn) btn.onclick = () => openClientModal(null);
     return;
   }
+
+  if (!list.length) {
+    $('#clientList').innerHTML = `<div class="empty"><div class="empty-icon">⌕</div><h3>No matching clients</h3><p>Try a different name or email.</p></div>`;
+    return;
+  }
+
   $('#clientList').innerHTML = `<table class="table">
-    <thead>
-      <tr>
-        <th>Client</th>
-        <th>Email</th>
-        <th>Address</th>
-        <th class="right">Invoices</th>
-        <th class="right">Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${db.clients.map(c => {
-        const count = db.invoices.filter(i => i.client === c.id).length;
-        return `<tr>
-          <td><b>${c.name}</b></td>
-          <td>${c.email || '—'}</td>
-          <td style="max-width:180px;white-space:pre-line;font-size:12px;color:var(--muted)">${c.address || '—'}</td>
-          <td class="right">${count}</td>
-          <td class="actions">
-            <button class="button small" data-edit-client="${c.id}">Edit</button>
-            <button class="button small danger" data-delete-client="${c.id}">Delete</button>
-          </td>
-        </tr>`;
-      }).join('')}
-    </tbody>
+    <thead><tr><th>Client</th><th>Email</th><th>Address</th><th class="right">Invoices</th><th class="right">Actions</th></tr></thead>
+    <tbody>${list.map(c => {
+      const count = db.invoices.filter(i => i.client === c.id).length;
+      const initials = String(c.name || '?').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase();
+      return `<tr>
+        <td><div style="display:flex;align-items:center;gap:10px"><span class="account-avatar" style="width:30px;height:30px;flex-basis:30px;font-size:10px;border-radius:8px">${initials || '?'}</span><div><b>${c.name}</b>${c.taxId ? `<div style="font-size:11px;color:var(--muted)">${c.taxId}</div>` : ''}</div></div></td>
+        <td>${c.email || '—'}</td>
+        <td style="max-width:220px;white-space:pre-line;font-size:12px;color:var(--muted)">${c.address || '—'}</td>
+        <td class="right">${count}</td>
+        <td><div class="client-actions">
+          <button class="icon-button" type="button" data-edit-client="${c.id}" title="Edit client" aria-label="Edit ${c.name}">✎</button>
+          <button class="icon-button danger" type="button" data-delete-client="${c.id}" title="Delete client" aria-label="Delete ${c.name}">⌫</button>
+        </div></td>
+      </tr>`;
+    }).join('')}</tbody>
   </table>`;
 }
 
@@ -3364,19 +3464,12 @@ function preview() {
   const pIssue = document.getElementById('pIssue');
   if (pIssue) pIssue.textContent = issueLabel ? ('Issued ' + issueLabel) : '';
   $('#pClient').textContent = c?.name || 'Client';
-  // Billing address under Bill to (no tax ID here)
-  let billExtra = document.getElementById('pClientTax');
-  if (!billExtra) {
-    billExtra = document.createElement('div');
-    billExtra.id = 'pClientTax';
-    billExtra.style.cssText = 'font-size:11px;color:var(--muted);margin-top:2px;white-space:pre-line';
-    const billTo = $('#pClient')?.parentElement;
-    if (billTo) billTo.appendChild(billExtra);
-  }
-  const addr = (c?.address || '').trim();
-  billExtra.textContent = addr;
-
-  $('#pDue').textContent = new Date(edit.due + 'T12:00:00').toLocaleDateString();
+  const clientBits = [c?.email, c?.address, c?.taxId ? ('Tax ID: ' + c.taxId) : ''].filter(Boolean);
+  $('#pClientContact').textContent = clientBits.join('\n');
+  const dueLabel = edit.due ? new Date(edit.due + 'T12:00:00').toLocaleDateString() : '';
+  const issueMeta = edit.issue ? new Date(edit.issue + 'T12:00:00').toLocaleDateString() : '';
+  $('#pIssueMeta').textContent = issueMeta;
+  $('#pDue').textContent = dueLabel;
   $('#pTitle').textContent = edit.title || 'Your invoice title';
   $('#pNote').textContent = edit.note;
   $('#pTerms').textContent = edit.terms;
@@ -3410,10 +3503,16 @@ function preview() {
   ensurePayments(edit);
   const paidAmt = amountPaid(edit);
   const bal = balanceDue(edit);
+  const badge = $('#pStatusBadge');
+  const statusText = paidAmt > 0 && bal <= 0.001 ? 'Paid' : paidAmt > 0 ? 'Partially paid' : String(edit.status || 'Draft');
+  if (badge) {
+    badge.textContent = statusText;
+    badge.className = 'invoice-output-badge ' + (statusText === 'Paid' ? 'paid' : statusText === 'Partially paid' ? 'partial' : '');
+  }
   if (paidAmt <= 0) {
     payInfo.textContent = '';
   } else if (bal <= 0.001) {
-    payInfo.innerHTML = '<span style="color:var(--green-text);font-weight:700">Paid in full</span>';
+    payInfo.innerHTML = '<span style="color:var(--green-text);font-weight:700">Paid in full · ' + money(paidAmt, edit.currency) + '</span>';
   } else {
     payInfo.innerHTML = 'Paid ' + money(paidAmt, edit.currency) + ' · <b style="color:var(--text)">Balance ' + money(bal, edit.currency) + '</b>';
   }
@@ -3657,6 +3756,7 @@ async function openClientModal(client) {
   $('#mTaxId').value = client?.taxId || '';
   $('#mAddress').value = client?.address || '';
   $('#confirm').textContent = client ? 'Update client' : 'Save client';
+  $('#modalDeleteClient').style.display = client ? 'inline-block' : 'none';
   clearInvalid(document.getElementById('modal'));
   showBanner('clientErrors', []);
   $('#modal').classList.add('show');
@@ -3668,6 +3768,28 @@ $('#cancel').onclick = () => {
   $('#modal').classList.remove('show');
   editingClientId = null;
 };
+$('#modalDeleteClient').onclick = () => {
+  const id = editingClientId;
+  const c = db.clients.find(x => x.id === id);
+  if (!c) return;
+  const count = db.invoices.filter(i => i.client === c.id).length;
+  const msg = count
+    ? `“${c.name}” has ${count} invoice(s). Deleting the client will keep those invoices but remove the client link. Continue?`
+    : `Delete “${c.name}”? This cannot be undone.`;
+  confirmAction('Delete client', msg, () => {
+    db.clients = db.clients.filter(x => x.id !== c.id);
+    save();
+    $('#modal').classList.remove('show');
+    editingClientId = null;
+    if (edit && $('#client')) {
+      const prev = edit.client;
+      $('#client').innerHTML = '<option value="">Select client…</option>' + db.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      $('#client').value = prev || '';
+    }
+    toast('Client deleted.');
+    clients();
+  });
+};
 $('#confirm').onclick = () => {
   clearInvalid(document.getElementById('modal'));
   showBanner('clientErrors', []);
@@ -3675,19 +3797,9 @@ $('#confirm').onclick = () => {
   const email = $('#mEmail').value.trim();
   const taxId = $('#mTaxId').value.trim();
   const errors = [];
-  if (!n) {
-    errors.push('Client name is required.');
-    $('#mName')?.classList.add('invalid');
-  }
-  if (email && !isValidEmail(email)) {
-    errors.push('Enter a valid email address.');
-    $('#mEmail')?.classList.add('invalid');
-  }
-  if (errors.length) {
-    showBanner('clientErrors', errors);
-    toast(errors[0]);
-    return;
-  }
+  if (!n) { errors.push('Client name is required.'); $('#mName')?.classList.add('invalid'); }
+  if (email && !isValidEmail(email)) { errors.push('Enter a valid email address.'); $('#mEmail')?.classList.add('invalid'); }
+  if (errors.length) { showBanner('clientErrors', errors); toast(errors[0]); return; }
   const address = ($('#mAddress')?.value || '').trim();
   const payload = { name: n, email, address, taxId };
   if (editingClientId) {
@@ -3700,14 +3812,13 @@ $('#confirm').onclick = () => {
   }
   save();
   editingClientId = null;
-  $('#mName').value = $('#mEmail').value = $('#mTaxId').value = '';
+  $('#mName').value = ''; $('#mEmail').value = ''; $('#mTaxId').value = '';
   if ($('#mAddress')) $('#mAddress').value = '';
   $('#modal').classList.remove('show');
   clients();
   if (edit && $('#client')) {
     const prev = edit.client;
-    $('#client').innerHTML = '<option value="">Select client…</option>' +
-      db.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    $('#client').innerHTML = '<option value="">Select client…</option>' + db.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
     $('#client').value = prev || '';
   }
 };
@@ -3741,6 +3852,7 @@ document.addEventListener('input', e => {
     preview();
   }
   if (e.target.id === 'invoiceSearch') invoices();
+  if (e.target.id === 'clientSearch') clients();
 });
 
 // Normalize qty/rate to numbers when leaving the field
@@ -3794,12 +3906,53 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
 });
 
 (async function initAccountLine() {
-  const line = document.getElementById('accountLine');
-  const logoutBtn = document.getElementById('appLogoutBtn');
+  const card = document.getElementById('accountCard');
+  const menu = document.getElementById('accountMenu');
+  const lineLogout = document.getElementById('appLogoutBtn');
   const client = await getSupabase();
-  if (!client || !line) return;
+  if (!client || !card || !menu) return;
+
+  function initialsFor(name, email) {
+    const s = String(name || email || 'ID').trim();
+    const parts = s.split(/\s+/).filter(Boolean);
+    return (parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : s.slice(0,2)).toUpperCase();
+  }
+
+  function paintAccount(session) {
+    const name = session?.user ? (session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Account') : 'Account';
+    const email = session?.user?.email || 'Sign in to sync';
+    $('#accountAvatar').textContent = initialsFor(name, email);
+    $('#accountName').textContent = name;
+    $('#accountEmail').textContent = email;
+    $('#accountMenuName').textContent = name;
+    $('#accountMenuEmail').textContent = email;
+    lineLogout.style.display = session?.user ? 'block' : 'none';
+  }
+
+  function closeMenu() {
+    menu.classList.remove('show');
+    card.classList.remove('open');
+    card.setAttribute('aria-expanded','false');
+  }
+
+  card.onclick = () => {
+    const open = !menu.classList.contains('show');
+    menu.classList.toggle('show', open);
+    card.classList.toggle('open', open);
+    card.setAttribute('aria-expanded', String(open));
+  };
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.account-area')) closeMenu();
+  });
+  menu.addEventListener('click', e => {
+    const action = e.target.closest('[data-account-action]')?.dataset.accountAction;
+    if (!action) return;
+    closeMenu();
+    switchTo(action);
+  });
 
   async function render(session) {
+    paintAccount(session);
     if (session?.user) {
       const signupKey = 'invoicedey-signup-completed-' + session.user.id;
       if (!localStorage.getItem(signupKey)) {
@@ -3808,69 +3961,31 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
       }
       await syncProfile(client, session.user);
       await startCloudSync(client, session.user);
-      const myReferralCode = cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '';
-      line.innerHTML = 'Signed in as <b style="color:var(--text)">' + (session.user.email || '') + '</b>' +
-        (myReferralCode ? '<div style="margin-top:6px">Referral code: <b style="color:var(--blue)">' + myReferralCode + '</b> · <button id="copyReferralBtn" type="button" style="border:0;background:none;padding:0;color:var(--blue);cursor:pointer;font-weight:600">Copy link</button></div>' : '');
-      const copyReferralBtn = document.getElementById('copyReferralBtn');
-      if (copyReferralBtn) copyReferralBtn.onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(referralLink(myReferralCode));
-          toast('Referral link copied.');
-        } catch {
-          prompt('Copy your referral link:', referralLink(myReferralCode));
-        }
-      };
-      if (logoutBtn) {
-        logoutBtn.style.display = 'block';
-        line.appendChild(logoutBtn);
-      }
-    } else {
-      line.innerHTML = '<a href="index.html" style="color:var(--blue);font-weight:600;text-decoration:none">Sign in</a>';
-      if (logoutBtn) logoutBtn.style.display = 'none';
     }
   }
 
   const { data: { session } } = await client.auth.getSession();
-
-  // A previously opened/expired magic link can leave Supabase auth errors in
-  // the URL hash (for example #error=access_denied&error_code=otp_expired).
-  // If the user already has a valid session, the stale error is irrelevant
-  // and should not remain in the app URL or confuse the tiering UI.
   if (session?.user && window.location.hash && /(?:^#|&)error(?:=|%3D)/i.test(window.location.hash)) {
     history.replaceState(null, document.title, window.location.pathname + window.location.search);
   }
-
   await render(session);
   client.auth.onAuthStateChange((_e, session) => { render(session); });
 
-  if (logoutBtn) {
-    logoutBtn.onclick = async () => {
-      clearTimeout(cloud.timer);
-      cloud.timer = null;
-      cloud.client = null;
-      cloud.user = null;
-      cloud.organizationId = null;
-      cloud.hydrated = false;
-      cloud.syncing = false;
-      activeUserId = null;
-      loadDefaultDb();
-
-      // Anonymous growth usage uses the fresh v3 bucket. This prevents
-      // counters from older app versions from leaking into a new session.
-      localStorage.removeItem('invoicedey-growth-v1');
-      localStorage.removeItem('invoicedey-growth-v2');
-      updateGrowthMeter();
-
-      // Do not copy the signed-in user's data into anonymous/global storage.
-      // The next account will load its own user-scoped cache after auth.
-      localStorage.removeItem(ANON_DB_KEY);
-      localStorage.removeItem('invoicedey-v2');
-      dashboard();
-      await client.auth.signOut();
-      toast('Logged out.');
-      // Keep user on app; session cleared on index too (same origin storage)
-    };
-  }
+  lineLogout.onclick = async e => {
+    e.stopPropagation();
+    closeMenu();
+    clearTimeout(cloud.timer); cloud.timer = null;
+    cloud.client = null; cloud.user = null; cloud.organizationId = null;
+    cloud.hydrated = false; cloud.syncing = false; activeUserId = null;
+    loadDefaultDb();
+    localStorage.removeItem(ANON_DB_KEY);
+    localStorage.removeItem('invoicedey-v2');
+    updateGrowthMeter();
+    await client.auth.signOut();
+    paintAccount(null);
+    dashboard();
+    toast('Logged out.');
+  };
 })();
 
 function getPrintCSS() {
@@ -3912,7 +4027,7 @@ function getPrintCSS() {
       display: grid;
       grid-template-columns: 1.2fr 1fr;
       gap: 28px;
-      padding: 26px 0 22px;
+      padding: 24px 0 20px;
     }
     .parties b { font-size: 15px; font-weight: 700; color: #0f172a; display: block; }
     .cap {
@@ -3975,13 +4090,9 @@ function getPrintCSS() {
       font-weight: 800;
       font-size: 17px;
     }
+    .footer-grid { display:flex; justify-content:space-between; gap:24px; margin-top:34px; padding-top:12px; border-top:1px solid #e2e8f0; color:#94a3b8; font-size:10px; }
     .viral-footer {
-      margin-top: 26px;
-      padding-top: 12px;
-      border-top: 1px solid #e2e8f0;
-      text-align: center;
-      color: #64748b;
-      font-size: 11px;
+      margin-top: 10px; padding-top: 8px; text-align:center; color:#64748b; font-size:10px;
     }
     .viral-footer a { color: #2467E3; text-decoration: none; }
     .viral-footer strong { color: #2467E3; }
@@ -4008,9 +4119,10 @@ function getPrintCSS() {
 }
 
 function openPrintDocument(title, bodyHtml) {
+  const footerMeta = '<div class="footer-grid"><span>Generated with Invoicedey</span><span>Invoice · ' + title + '</span></div>';
   const viralFooter = '<div class="viral-footer">Need to create an invoice? <a href="https://inv-pukka1.vercel.app/?utm_source=invoice_pdf&utm_medium=pdf&utm_campaign=viral_invoice" target="_blank" rel="noopener noreferrer"><strong>Try Invoicedey — free.</strong></a></div>';
   const htmlDoc = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' +
-    title + '</title><style>' + getPrintCSS() + '</style></head><body>' + bodyHtml + viralFooter + '</body></html>';
+    title + '</title><style>' + getPrintCSS() + '</style></head><body>' + bodyHtml + footerMeta + viralFooter + '</body></html>';
   const w = window.open('', '_blank');
   if (!w) {
     toast('Allow pop-ups to print, or use Share → Print');
