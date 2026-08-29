@@ -91,6 +91,8 @@ h1{margin:4px 0;font-size:29px}.sub{color:var(--m);margin:0}
 </div>
 
 <div class="section">
+<div id="dataQualityNote" style="display:none;margin:0 0 14px;padding:12px 14px;border:1px solid #F5D0A9;border-radius:10px;background:#FFF8EF;color:#7C4A03;font-size:12px;line-height:1.45"><b>Attribution data quality note:</b> some campaign/referral rows currently have more signup or activation records than attributed visitor records. Those ratios can exceed 100% and should not be treated as literal conversion rates until the visitor-to-signup identity linkage is tightened. Growth Score below uses bounded/robust signals so these attribution anomalies cannot inflate the score.</div>
+
 <div class="head"><h2>Growth Score</h2><span class="pill">Acquisition → activation → retention → monetization</span></div>
 <div class="grid" style="grid-template-columns:1.15fr repeat(4,1fr)">
 <div class="card" style="display:flex;align-items:center;gap:18px">
@@ -430,14 +432,19 @@ function renderGrowthScore(c,g,r,ref,camp,mon,rev){
   const invoices=Number(c?.invoices||0);
   const shares=Number(c?.shares||0);
 
-  // Acquisition: observed signup conversion, with a small trend component.
+  // Acquisition: robust to imperfect visitor↔signup attribution.
+  // Conversion ratios can temporarily exceed 100% when visitor identity linkage
+  // is incomplete, so they are diagnostic only and cannot inflate the score.
   let visitors=0;
   let campSignups=0;
   cleanCamp.forEach(x=>{visitors+=Number(x.visitors||0);campSignups+=Number(x.signups||0);});
-  const signupRate=visitors>0 ? campSignups/visitors : 0;
-  const signupRateScore=Math.min(100, signupRate/0.30*100);
+  const rawSignupRate=visitors>0 ? campSignups/visitors : 0;
+  const boundedSignupRate=Math.min(1, Math.max(0, rawSignupRate));
+  const signupVolumeScore=Math.min(100, signups/30*100);
+  const signupQualityScore=Math.min(100, boundedSignupRate/0.30*100);
   const signupTrend=g?.signups_pct==null ? 50 : Math.max(0,Math.min(100,50+Number(g.signups_pct)*1.5));
-  const acquisition=Math.round((signupRateScore*0.7)+(signupTrend*0.3));
+  const acquisition=Math.round((signupVolumeScore*0.35)+(signupQualityScore*0.35)+(signupTrend*0.30));
+  const signupRate=rawSignupRate;
 
   // Activation: invoices/signups and shares/invoices are practical product-value signals.
   const invoicePerSignup=signups>0 ? invoices/signups : 0;
@@ -489,13 +496,14 @@ function renderGrowthScore(c,g,r,ref,camp,mon,rev){
   $('growthScoreConfidence').textContent=confidence+' · '+signups+' signups · '+invoices+' invoices';
   $('growthScoreRing').style.background='conic-gradient(var(--b) '+ring+'deg,#E2E8F0 '+ring+'deg)';
 
-  setScore('scoreAcquisition',acquisition,'scoreAcquisitionSub',visitors ? (signupRate*100).toFixed(1)+'% visitor → signup' : 'No visitor data');
+  const acquisitionSub = visitors ? ((signupRate>1 ? 'Data check · ' : '') + Math.min(100,signupRate*100).toFixed(1)+'% visitor → signup') : 'No visitor data';
+  setScore('scoreAcquisition',acquisition,'scoreAcquisitionSub',acquisitionSub);
   setScore('scoreActivation',activation,'scoreActivationSub',signups ? invoices+'/'+signups+' invoices per signup' : 'No signup data');
   setScore('scoreRetention',retention,'scoreRetentionSub',w1Retention==null ? 'Provisional · no W1 cohort' : w1Retention.toFixed(1)+'% W1 retention');
   setScore('scoreMonetization',monetization,'scoreMonetizationSub',upgradeUsers ? (intentRate*100).toFixed(1)+'% limit → intent' : 'Billing not live');
 
   const ranked=[
-    {score:acquisition,title:'Improve acquisition quality',body:visitors ? 'Signup conversion is '+(signupRate*100).toFixed(1)+'%. Test the best-performing campaign/source with a tighter landing-page offer.' : 'Start collecting visitor and signup attribution before scaling acquisition.'},
+    {score:acquisition,title:'Improve acquisition quality',body:visitors ? ((signupRate>1 ? 'Attribution denominator is incomplete in part of the data. ' : '') + 'Use the best-performing campaign/source and improve visitor-to-signup tracking before scaling acquisition.') : 'Start collecting visitor and signup attribution before scaling acquisition.'},
     {score:activation,title:'Push users to first value',body:signups ? 'You have '+invoices+' invoices from '+signups+' signups. Shorten the path from signup to the first useful invoice and share.' : 'Instrument the signup → invoice activation path.'},
     {score:retention,title:'Increase repeat usage',body:w1Retention==null ? 'Retention evidence is still thin. Prioritize repeat invoicing, reminders and recurring workflows.' : 'W1 retention is '+w1Retention.toFixed(1)+'%. Target users who create one invoice but do not return.'},
     {score:monetization,title:'Convert high-intent Free users',body:upgradeUsers ? upgradeUsers+' users showed upgrade intent. Focus the offer on the feature or limit that triggered demand.' : 'Billing is not live yet. Use limit hits and feature gates to identify the strongest upgrade triggers.'},
@@ -509,7 +517,7 @@ function renderGrowthScore(c,g,r,ref,camp,mon,rev){
   ).join('');
 
   const paymentText=paidUsers>0 ? 'Paid conversion is '+(paidConversion*100).toFixed(1)+'%.' : 'Payments are not live, so monetization is weighted toward intent and feature demand.';
-  $('growthScoreBrief').textContent='Overall score '+overall+'/100. '+label+'. '+paymentText+' The score is explainable and recalculates whenever the date range changes.';
+  $('growthScoreBrief').textContent='Overall score '+overall+'/100. '+label+'. '+paymentText+' The score is explainable, robust to attribution anomalies, and recalculates whenever the date range changes.';
 }
 
 function setScore(valueId,score,subId,sub){
@@ -556,8 +564,8 @@ function renderReferrals(rows){
     const signups=Number(x.signups||0);
     const activated=Number(x.activated||0);
 
-    const signupRate=visitors ? signups/visitors : 0;
-    const activationRate=signups ? activated/signups : 0;
+    const signupRate=visitors ? Math.min(1,signups/visitors) : 0;
+    const activationRate=signups ? Math.min(1,activated/signups) : 0;
 
     // Referral quality prioritizes activation, then signup conversion, then volume.
     const quality=(activationRate*0.55)+(signupRate*0.30)+(Math.min(activated/20,1)*0.15);
@@ -595,8 +603,8 @@ function renderReferrals(rows){
     const visitors=Number(x.visitors||0);
     const signups=Number(x.signups||0);
     const activated=Number(x.activated||0);
-    const signupRate=visitors ? ((signups/visitors)*100).toFixed(1)+'%' : '—';
-    const activationRate=signups ? ((activated/signups)*100).toFixed(1)+'%' : '—';
+    const signupRate=visitors ? (signups>visitors ? 'Check data' : ((signups/visitors)*100).toFixed(1)+'%') : '—';
+    const activationRate=signups ? (activated>signups ? 'Check data' : ((activated/signups)*100).toFixed(1)+'%') : '—';
     const quality=Math.round(Number(x.__quality||0)*100);
 
     return '<tr>'+
@@ -623,8 +631,8 @@ function renderCampaigns(rows){
     const visitors=Number(x.visitors||0);
     const signups=Number(x.signups||0);
     const activated=Number(x.activated||0);
-    const signupRate=visitors ? signups/visitors : 0;
-    const activationRate=signups ? activated/signups : 0;
+    const signupRate=visitors ? Math.min(1,signups/visitors) : 0;
+    const activationRate=signups ? Math.min(1,activated/signups) : 0;
 
     // Quality prioritizes activation, then signup conversion, then volume.
     const quality=(activationRate*0.55)+(signupRate*0.30)+(Math.min(activated/50,1)*0.15);
@@ -660,8 +668,8 @@ function renderCampaigns(rows){
     const visitors=Number(x.visitors||0);
     const signups=Number(x.signups||0);
     const activated=Number(x.activated||0);
-    const signupRate=visitors ? ((signups/visitors)*100).toFixed(1)+'%' : '—';
-    const activationRate=signups ? ((activated/signups)*100).toFixed(1)+'%' : '—';
+    const signupRate=visitors ? (signups>visitors ? 'Check data' : ((signups/visitors)*100).toFixed(1)+'%') : '—';
+    const activationRate=signups ? (activated>signups ? 'Check data' : ((activated/signups)*100).toFixed(1)+'%') : '—';
     const quality=Math.round(Number(x.__quality||0)*100);
 
     return '<tr>'+
