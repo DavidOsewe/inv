@@ -109,6 +109,17 @@
     letter-spacing:-.15px;
   }
   .totals .grand > span:last-child { color:#0f172a; font-weight:800; }
+  .terms {
+    border-top: 1px solid #e2e8f0;
+    padding-top: 18px;
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-line;
+    margin-top: 0;
+  }
+  .terms + .terms { margin-top: 18px; }
+  .terms b { color: #0f172a; }
   .viral { margin-top:24px; padding-top:15px; border-top:1px solid var(--line); text-align:center; color:var(--muted); font-size:12px; }
   .viral a { color:var(--blue); font-weight:800; text-decoration:none; }
   .state { text-align:center; padding:60px 20px; }
@@ -236,8 +247,8 @@ function render(data) {
       <div><span>${esc(taxLabel)} (${esc(i.tax_rate)}%)</span><span>${moneyMinor(i.tax_minor,i.currency)}</span></div>
       <div class="grand"><span>Total</span><span>${moneyMinor(i.total_minor,i.currency)}</span></div>
     </div></div>
-    ${o.payment_details ? '<div class="payment"><b>Payment instructions</b>\n'+esc(o.payment_details)+'</div>' : ''}
-    ${o.tax_registration_number ? '<div class="payment"><b>Tax ID</b>\n'+esc(o.tax_registration_number)+'</div>' : ''}
+    ${o.payment_details ? '<div class="terms"><b>Payment instructions</b><br><span>'+esc(o.payment_details)+'</span></div>' : ''}
+    ${o.tax_registration_number ? '<div class="terms"><b>Tax ID</b><br><span>'+esc(o.tax_registration_number)+'</span></div>' : ''}
     <div class="viral">Need to create an invoice? <a id="publicFooterCta" href="index.html">Try Invoicedey — free.</a></div>
   `;
 }
