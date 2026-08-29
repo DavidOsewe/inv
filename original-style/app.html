@@ -2086,10 +2086,13 @@ async function syncProfile(client, user) {
     const { data: referralCode, error: referralError } = await client.rpc('ensure_my_referral_code');
     if (referralError) {
       console.warn('referral code', referralError.message || referralError);
-    } else if (referralCode) {
-      cloud.referralCode = String(referralCode).toUpperCase();
-      localStorage.setItem('invoicedey-my-referral-code', cloud.referralCode);
-      document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
+    } else {
+      const code = normalizeReferralCodeValue(referralCode);
+      if (code) {
+        cloud.referralCode = code;
+        localStorage.setItem('invoicedey-my-referral-code', code);
+        document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
+      }
     }
   } catch (e) {
     console.warn('referral code', e.message || e);
@@ -2109,40 +2112,69 @@ function normalizeReferralCodeValue(value) {
 }
 
 async function getMyReferralCode() {
-  const cached = cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '';
-  const cachedCode = normalizeReferralCodeValue(cached);
-  if (cachedCode) return cachedCode;
-
+  // Always resolve the real Supabase session first. Do not rely on the
+  // asynchronous cloud bootstrap having completed before Profile opens.
   const client = cloud.client || await getSupabase();
   if (!client) return '';
 
-  // The referral control can be opened before startCloudSync() has finished.
-  // Resolve the current session directly instead of treating the user as signed out.
-  if (!cloud.user) {
+  try {
+    const { data: sessionData, error: sessionError } = await client.auth.getSession();
+    if (sessionError) throw sessionError;
+    const sessionUser = sessionData?.session?.user || null;
+    if (!sessionUser) return '';
+    cloud.client = client;
+    cloud.user = sessionUser;
+
+    const cached = normalizeReferralCodeValue(
+      cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || ''
+    );
+    if (cached) {
+      cloud.referralCode = cached;
+      return cached;
+    }
+
+    // Primary source: server-side RPC that creates/returns the permanent code.
     try {
-      const { data: sessionData } = await client.auth.getSession();
-      if (sessionData?.session?.user) {
-        cloud.client = client;
-        cloud.user = sessionData.session.user;
+      const { data, error } = await client.rpc('ensure_my_referral_code');
+      if (!error) {
+        const code = normalizeReferralCodeValue(data);
+        if (code && code !== '[OBJECT OBJECT]') {
+          cloud.referralCode = code;
+          localStorage.setItem('invoicedey-my-referral-code', code);
+          document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
+          return code;
+        }
+      } else {
+        console.warn('ensure_my_referral_code', error.message || error);
       }
     } catch (e) {
-      console.warn('referral session lookup', e.message || e);
+      console.warn('ensure_my_referral_code', e.message || e);
     }
-  }
-  if (!cloud.user) return '';
 
-  try {
-    const { data, error } = await client.rpc('ensure_my_referral_code');
-    if (error) throw error;
-    const code = normalizeReferralCodeValue(data);
-    if (code) {
-      cloud.referralCode = code;
-      localStorage.setItem('invoicedey-my-referral-code', code);
-      document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
-      return code;
+    // Fallback: read the already-generated code directly from the user's
+    // profile. This also handles deployments where the RPC returns no body.
+    try {
+      const { data: row, error: profileError } = await client
+        .from('profiles')
+        .select('referral_code')
+        .eq('id', sessionUser.id)
+        .maybeSingle();
+      if (!profileError) {
+        const code = normalizeReferralCodeValue(row?.referral_code);
+        if (code) {
+          cloud.referralCode = code;
+          localStorage.setItem('invoicedey-my-referral-code', code);
+          document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
+          return code;
+        }
+      } else {
+        console.warn('profile referral lookup', profileError.message || profileError);
+      }
+    } catch (e) {
+      console.warn('profile referral lookup', e.message || e);
     }
   } catch (e) {
-    console.warn('get referral code', e.message || e);
+    console.warn('referral session lookup', e.message || e);
   }
   return '';
 }
@@ -3503,16 +3535,16 @@ function profile() {
   const copyReferralBtn = document.getElementById('copyProfileReferral');
 
   const paintReferral = (code) => {
-    const hasCode = !!code;
-    if (referralCodeEl) referralCodeEl.textContent = code || (cloud.user ? 'Loading referral code…' : 'Sign in to generate a referral code');
-    if (referralUrlEl) referralUrlEl.textContent = code ? referralLink(code) : (cloud.user ? 'Loading your referral link…' : 'Sign in to generate your referral link.');
+    const normalized = normalizeReferralCodeValue(code);
+    if (referralCodeEl) referralCodeEl.textContent = normalized || 'Loading referral code…';
+    if (referralUrlEl) referralUrlEl.textContent = normalized ? referralLink(normalized) : 'Loading your referral link…';
     if (copyReferralBtn) {
       copyReferralBtn.disabled = false;
       copyReferralBtn.onclick = async (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
         const liveCode = await getMyReferralCode();
-        if (!liveCode) { toast('Referral link is not available yet.'); return; }
+        if (!liveCode) { toast('Referral link is not available yet. Try again in a moment.'); return; }
         const url = referralLink(liveCode);
         try {
           await navigator.clipboard.writeText(url);
@@ -3521,15 +3553,21 @@ function profile() {
         } catch {
           window.prompt('Copy your referral link:', url);
         }
+        paintReferral(liveCode);
       };
     }
-    return hasCode;
   };
 
   paintReferral(cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '');
-  if (cloud.user && !cloud.referralCode) {
-    getMyReferralCode().then(paintReferral);
-  }
+  // Always initialize referral data independently of the rest of profile/cloud
+  // rendering. The retry loop handles slow auth/session restoration.
+  (async () => {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const code = await getMyReferralCode();
+      if (code) { paintReferral(code); return; }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  })();
 }
 
 document.addEventListener('invoicedey:referral-ready', () => {
