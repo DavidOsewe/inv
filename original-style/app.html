@@ -5,7 +5,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Invoicedey — App</title>
+<title>invoicedey — App</title>
 <style>
 /* =========================================================
    DESIGN TOKENS
@@ -1469,7 +1469,7 @@ input:focus:not(:focus-visible) {
       <span id="themeLabel">Dark mode</span>
     </button>
     <div class="side-note">
-      <b>Invoicedey V1</b>
+      <b>invoicedey</b>
       <div id="growthMeter" style="margin-top:5px;color:var(--muted)"></div>
     </div>
     <div class="account-area">
@@ -1535,7 +1535,7 @@ input:focus:not(:focus-visible) {
           <div id="aging"></div>
         </div>
         <div class="insight">
-          <h3>Invoicedey insight</h3>
+          <h3>invoicedey insight</h3>
           <div id="insightText" style="color:var(--muted);line-height:1.7"></div>
         </div>
       </div>
@@ -1574,7 +1574,7 @@ input:focus:not(:focus-visible) {
       <div class="section-head">
         <div>
           <h2>Plan & billing</h2>
-          <p style="color:var(--muted);margin:4px 0 0">Manage your InvoiceDey plan, usage and feature access.</p>
+          <p style="color:var(--muted);margin:4px 0 0">Manage your invoicedey plan, usage and feature access.</p>
         </div>
         <span class="badge" id="planStatusBadge">Active</span>
       </div>
@@ -1671,7 +1671,7 @@ input:focus:not(:focus-visible) {
         <h3 style="margin:28px 0 12px;font-size:15px;font-weight:700">Tax profile</h3>
         <p style="color:var(--muted);margin:-4px 0 16px;font-size:13px">
           V1 supports manual tax configuration for the US, UK, Australia, Canada, Nigeria and India.
-          InvoiceDey does not determine tax liability automatically.
+          invoicedey does not determine tax liability automatically.
         </p>
         <div class="three">
           <div class="field">
@@ -1748,7 +1748,7 @@ input:focus:not(:focus-visible) {
 
         <div class="referral-card">
           <h3>Referral link</h3>
-          <p>Share InvoiceDey with another business. Your referral link keeps the referral attached when they sign up.</p>
+          <p>Share invoicedey with another business. Your referral link stays attached when they sign up.</p>
           <div class="referral-row">
             <div class="referral-code-box" id="profileReferralCode">Loading referral code…</div>
             <button class="button" type="button" id="copyProfileReferral">Copy referral link</button>
@@ -2104,14 +2104,26 @@ function normalizeReferralCodeValue(value) {
   if (typeof value === 'string' || typeof value === 'number') {
     return String(value).trim().toUpperCase();
   }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = normalizeReferralCodeValue(item);
+      if (found) return found;
+    }
+    return '';
+  }
   if (typeof value === 'object') {
-    const candidate = value.referral_code ?? value.referralCode ?? value.code ?? value.data ?? '';
+    const candidate =
+      value.referral_code ?? value.referralCode ?? value.code ??
+      value.data ?? value.result ?? value.value ?? '';
+    if (candidate && typeof candidate === 'object') {
+      return normalizeReferralCodeValue(candidate);
+    }
     return String(candidate || '').trim().toUpperCase();
   }
   return '';
 }
 
-async function getMyReferralCode() {
+async function getMyReferralCode(force = false) {
   // Always resolve the real Supabase session first. Do not rely on the
   // asynchronous cloud bootstrap having completed before Profile opens.
   const client = cloud.client || await getSupabase();
@@ -2125,25 +2137,31 @@ async function getMyReferralCode() {
     cloud.client = client;
     cloud.user = sessionUser;
 
-    const cached = normalizeReferralCodeValue(
-      cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || ''
-    );
-    if (cached) {
-      cloud.referralCode = cached;
-      return cached;
+    if (!force) {
+      const cached = normalizeReferralCodeValue(
+        cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || ''
+      );
+      if (cached) {
+        cloud.referralCode = cached;
+        return cached;
+      }
     }
 
-    // Primary source: server-side RPC that creates/returns the permanent code.
+    const storeCode = (raw) => {
+      const code = normalizeReferralCodeValue(raw);
+      if (!code || code === '[OBJECT OBJECT]') return '';
+      cloud.referralCode = code;
+      localStorage.setItem('invoicedey-my-referral-code', code);
+      document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
+      return code;
+    };
+
+    // 1) Server RPC that creates/returns the permanent code
     try {
       const { data, error } = await client.rpc('ensure_my_referral_code');
       if (!error) {
-        const code = normalizeReferralCodeValue(data);
-        if (code && code !== '[OBJECT OBJECT]') {
-          cloud.referralCode = code;
-          localStorage.setItem('invoicedey-my-referral-code', code);
-          document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
-          return code;
-        }
+        const code = storeCode(data);
+        if (code) return code;
       } else {
         console.warn('ensure_my_referral_code', error.message || error);
       }
@@ -2151,31 +2169,133 @@ async function getMyReferralCode() {
       console.warn('ensure_my_referral_code', e.message || e);
     }
 
-    // Fallback: read the already-generated code directly from the user's
-    // profile. This also handles deployments where the RPC returns no body.
+    // 2) profiles row — try referral_code, then any code-like field
     try {
       const { data: row, error: profileError } = await client
         .from('profiles')
-        .select('referral_code')
+        .select('*')
         .eq('id', sessionUser.id)
         .maybeSingle();
-      if (!profileError) {
-        const code = normalizeReferralCodeValue(row?.referral_code);
-        if (code) {
-          cloud.referralCode = code;
-          localStorage.setItem('invoicedey-my-referral-code', code);
-          document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
-          return code;
-        }
-      } else {
+      if (!profileError && row) {
+        const code = storeCode(
+          row.referral_code || row.referralCode || row.code || row.ref_code
+        );
+        if (code) return code;
+      } else if (profileError) {
         console.warn('profile referral lookup', profileError.message || profileError);
       }
     } catch (e) {
       console.warn('profile referral lookup', e.message || e);
     }
+
+    // 3) referral_codes table — tolerate common column name variants
+    const ownerCols = ['user_id', 'owner_id', 'profile_id', 'created_by'];
+    for (const col of ownerCols) {
+      try {
+        const { data: rows, error: rcError } = await client
+          .from('referral_codes')
+          .select('*')
+          .eq(col, sessionUser.id)
+          .limit(1);
+        if (rcError) {
+          // Column may not exist — try next
+          continue;
+        }
+        if (rows && rows.length) {
+          const r = rows[0];
+          const code = storeCode(r.code || r.referral_code || r.referralCode || r.ref_code);
+          if (code) return code;
+        }
+      } catch (e) {
+        console.warn('referral_codes lookup', col, e.message || e);
+      }
+    }
   } catch (e) {
     console.warn('referral session lookup', e.message || e);
   }
+  return '';
+}
+
+/** Paint the Business profile referral widgets. Safe to call anytime. */
+function paintProfileReferralUI(code, state = 'ready') {
+  const referralCodeEl = document.getElementById('profileReferralCode');
+  const referralUrlEl = document.getElementById('profileReferralUrl');
+  const copyReferralBtn = document.getElementById('copyProfileReferral');
+  const normalized = normalizeReferralCodeValue(code);
+
+  if (referralCodeEl) {
+    if (normalized) referralCodeEl.textContent = normalized;
+    else if (state === 'signed_out') referralCodeEl.textContent = 'Sign in required';
+    else if (state === 'error') referralCodeEl.textContent = 'Unavailable — tap Copy to retry';
+    else referralCodeEl.textContent = 'Loading referral code…';
+  }
+  if (referralUrlEl) {
+    if (normalized) referralUrlEl.textContent = referralLink(normalized);
+    else if (state === 'signed_out') referralUrlEl.textContent = 'Sign in to generate your referral link.';
+    else if (state === 'error') referralUrlEl.textContent = 'Could not load referral link. Tap Copy to retry.';
+    else referralUrlEl.textContent = 'Loading your referral link…';
+  }
+  if (copyReferralBtn) {
+    copyReferralBtn.disabled = state === 'loading';
+    copyReferralBtn.onclick = async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      copyReferralBtn.disabled = true;
+      paintProfileReferralUI('', 'loading');
+      const liveCode = await getMyReferralCode(true);
+      if (!liveCode) {
+        let signedIn = !!cloud.user;
+        if (!signedIn) {
+          try {
+            const c = cloud.client || await getSupabase();
+            const { data } = await c.auth.getSession();
+            signedIn = !!data?.session?.user;
+          } catch {}
+        }
+        paintProfileReferralUI('', signedIn ? 'error' : 'signed_out');
+        toast(signedIn ? 'Referral link is not available yet. Try again in a moment.' : 'Sign in to use your referral link.');
+        copyReferralBtn.disabled = false;
+        return;
+      }
+      const url = referralLink(liveCode);
+      try {
+        await navigator.clipboard.writeText(url);
+        await track('referral_link_copied', { referral_code: liveCode });
+        toast('Referral link copied.');
+      } catch {
+        window.prompt('Copy your referral link:', url);
+      }
+      paintProfileReferralUI(liveCode, 'ready');
+      copyReferralBtn.disabled = false;
+    };
+  }
+}
+
+async function refreshProfileReferralUI() {
+  const cached = normalizeReferralCodeValue(
+    cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || ''
+  );
+  if (cached) paintProfileReferralUI(cached, 'ready');
+  else paintProfileReferralUI('', 'loading');
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const code = await getMyReferralCode(attempt > 0);
+    if (code) {
+      paintProfileReferralUI(code, 'ready');
+      return code;
+    }
+    await new Promise(r => setTimeout(r, 350 + attempt * 120));
+  }
+
+  let signedIn = !!cloud.user;
+  if (!signedIn) {
+    try {
+      const c = cloud.client || await getSupabase();
+      const { data } = await c.auth.getSession();
+      signedIn = !!data?.session?.user;
+    } catch {}
+  }
+  paintProfileReferralUI('', signedIn ? 'error' : 'signed_out');
   return '';
 }
 
@@ -2542,9 +2662,20 @@ function withAttribution(url) {
 }
 
 function referralLink(code = cloud?.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '') {
-  const u = new URL('index.html', window.location.href);
-  if (code) u.searchParams.set('ref', code);
-  return u.toString();
+  // Prefer signup page so referred users land on account creation
+  const base = new URL('signup.html', window.location.origin + window.location.pathname.replace(/[^/]*$/, ''));
+  // Fallback if path resolution is odd
+  try {
+    const u = new URL('signup.html', window.location.href);
+    if (code) u.searchParams.set('ref', String(code).trim().toUpperCase());
+    u.searchParams.set('utm_source', 'referral');
+    u.searchParams.set('utm_medium', 'referral_link');
+    return u.toString();
+  } catch {
+    const u = base;
+    if (code) u.searchParams.set('ref', String(code).trim().toUpperCase());
+    return u.toString();
+  }
 }
 
 async function track(eventName, metadata = {}) {
@@ -2627,7 +2758,7 @@ async function shareInvoice() {
   const invoice = ensureEditSavedForShare();
   if (!invoice) return;
   if (!cloud.client || !cloud.user) {
-    showGrowthModal('Create an account to share', 'Sharing requires a free Invoicedey account so your invoice can be stored securely and opened by your client.');
+    showGrowthModal('Create an account to share', 'Sharing requires a free invoicedey account so your invoice can be stored securely and opened by your client.');
     track('share_blocked_auth', { invoice_id: invoice.id });
     return;
   }
@@ -3357,7 +3488,7 @@ function dashboard() {
   ).join('');
 
   if (!all.length) {
-    $('#insightText').innerHTML = `<b style="color:var(--text)">Welcome to Invoicedey</b><br>
+    $('#insightText').innerHTML = `<b style="color:var(--text)">Welcome to invoicedey</b><br>
       Set up once, then invoice with confidence. Everything stays on this device until you export a backup.`;
     $('#aging').innerHTML = '';
     $('#recent').innerHTML = `<div class="empty">
@@ -3493,7 +3624,7 @@ async function planView() {
   const descriptions = {
     free: 'A simple starting plan for freelancers and small businesses.',
     starter: 'More capacity for businesses sending invoices regularly.',
-    pro: 'Full InvoiceDey capacity for growing teams and advanced workflows.'
+    pro: 'Full invoicedey capacity for growing teams and advanced workflows.'
   };
   $('#planDescription').textContent = descriptions[plan] || descriptions.free;
 
@@ -3534,17 +3665,40 @@ function profile() {
   const referralUrlEl = document.getElementById('profileReferralUrl');
   const copyReferralBtn = document.getElementById('copyProfileReferral');
 
-  const paintReferral = (code) => {
+  const paintReferral = (code, state = 'ready') => {
     const normalized = normalizeReferralCodeValue(code);
-    if (referralCodeEl) referralCodeEl.textContent = normalized || 'Loading referral code…';
-    if (referralUrlEl) referralUrlEl.textContent = normalized ? referralLink(normalized) : 'Loading your referral link…';
+    if (referralCodeEl) {
+      if (normalized) referralCodeEl.textContent = normalized;
+      else if (state === 'signed_out') referralCodeEl.textContent = 'Sign in required';
+      else if (state === 'error') referralCodeEl.textContent = 'Unavailable';
+      else referralCodeEl.textContent = 'Loading referral code…';
+    }
+    if (referralUrlEl) {
+      if (normalized) referralUrlEl.textContent = referralLink(normalized);
+      else if (state === 'signed_out') referralUrlEl.textContent = 'Sign in to generate your referral link.';
+      else if (state === 'error') referralUrlEl.textContent = 'Could not load referral link. Tap Copy to retry.';
+      else referralUrlEl.textContent = 'Loading your referral link…';
+    }
     if (copyReferralBtn) {
-      copyReferralBtn.disabled = false;
+      copyReferralBtn.disabled = state === 'loading';
       copyReferralBtn.onclick = async (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
+        copyReferralBtn.disabled = true;
         const liveCode = await getMyReferralCode();
-        if (!liveCode) { toast('Referral link is not available yet. Try again in a moment.'); return; }
+        if (!liveCode) {
+          const signedIn = !!(cloud.user || (await (async () => {
+            try {
+              const c = cloud.client || await getSupabase();
+              const { data } = await c.auth.getSession();
+              return data?.session?.user;
+            } catch { return null; }
+          })()));
+          paintReferral('', signedIn ? 'error' : 'signed_out');
+          toast(signedIn ? 'Referral link is not available yet. Try again in a moment.' : 'Sign in to use your referral link.');
+          copyReferralBtn.disabled = false;
+          return;
+        }
         const url = referralLink(liveCode);
         try {
           await navigator.clipboard.writeText(url);
@@ -3553,20 +3707,33 @@ function profile() {
         } catch {
           window.prompt('Copy your referral link:', url);
         }
-        paintReferral(liveCode);
+        paintReferral(liveCode, 'ready');
+        copyReferralBtn.disabled = false;
       };
     }
   };
 
-  paintReferral(cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '');
-  // Always initialize referral data independently of the rest of profile/cloud
-  // rendering. The retry loop handles slow auth/session restoration.
+  const cachedCode = cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '';
+  if (cachedCode) paintReferral(cachedCode, 'ready');
+  else paintReferral('', 'loading');
+
+  // Resolve independently of the rest of profile/cloud rendering.
   (async () => {
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       const code = await getMyReferralCode();
-      if (code) { paintReferral(code); return; }
-      await new Promise(resolve => setTimeout(resolve, 500));
+      if (code) { paintReferral(code, 'ready'); return; }
+      await new Promise(resolve => setTimeout(resolve, 400 + attempt * 150));
     }
+    // Final state after retries
+    let signedIn = !!cloud.user;
+    if (!signedIn) {
+      try {
+        const c = cloud.client || await getSupabase();
+        const { data } = await c.auth.getSession();
+        signedIn = !!data?.session?.user;
+      } catch {}
+    }
+    paintReferral('', signedIn ? 'error' : 'signed_out');
   })();
 }
 
@@ -4356,8 +4523,8 @@ function getPrintCSS() {
 }
 
 function openPrintDocument(title, bodyHtml) {
-  const footerMeta = '<div class="footer-grid"><span>Generated with Invoicedey</span><span>Invoice · ' + title + '</span></div>';
-  const viralFooter = '<div class="viral-footer">Need to create an invoice? <a href="https://inv-pukka1.vercel.app/?utm_source=invoice_pdf&utm_medium=pdf&utm_campaign=viral_invoice" target="_blank" rel="noopener noreferrer"><strong>Try Invoicedey — free.</strong></a></div>';
+  const footerMeta = '<div class="footer-grid"><span>Generated with invoicedey</span><span>Invoice · ' + title + '</span></div>';
+  const viralFooter = '<div class="viral-footer">Need to create an invoice? <a href="https://inv-pukka1.vercel.app/?utm_source=invoice_pdf&utm_medium=pdf&utm_campaign=viral_invoice" target="_blank" rel="noopener noreferrer"><strong>Try invoicedey — free.</strong></a></div>';
   const htmlDoc = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' +
     title + '</title><style>' + getPrintCSS() + '</style></head><body>' + bodyHtml + footerMeta + viralFooter + '</body></html>';
   const w = window.open('', '_blank');
