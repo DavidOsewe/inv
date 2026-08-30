@@ -1721,21 +1721,22 @@ input:focus:not(:focus-visible) {
         </div>
         <div class="insight">
           <h3>Available plans</h3>
+          <p class="section-sub" id="planPricingContext" style="margin:0 0 12px">Prices shown for your business country.</p>
           <div class="plan-tiers">
             <div class="plan-tier">
               <div class="plan-tier-name">Starter</div>
-              <div class="plan-tier-price">$3<span>/month</span></div>
-              <div class="plan-tier-desc">50 invoices · 50 clients · custom logo · advanced tax</div>
+              <div class="plan-tier-price" id="planTierStarterPrice">—</div>
+              <div class="plan-tier-desc" id="planTierStarterMeta">50 invoices · 50 clients · custom logo · advanced tax</div>
               <button class="button primary" type="button" data-plan-page-upgrade="starter">Upgrade to Starter</button>
             </div>
             <div class="plan-tier featured">
               <div class="plan-tier-name">Pro</div>
-              <div class="plan-tier-price">$8<span>/month</span></div>
-              <div class="plan-tier-desc">Unlimited invoices &amp; clients · recurring invoices · reports · API · team</div>
+              <div class="plan-tier-price" id="planTierProPrice">—</div>
+              <div class="plan-tier-desc" id="planTierProMeta">Unlimited invoices &amp; clients · recurring invoices · reports · API · team</div>
               <button class="button" type="button" data-plan-page-upgrade="pro">Upgrade to Pro</button>
             </div>
           </div>
-          <p class="plan-note">Billing is coming soon. Your current plan remains active.</p>
+          <p class="plan-note" id="planBillingNote">Billing is coming soon. Your current plan remains active.</p>
         </div>
       </div>
       <div class="insight stack-gap">
@@ -3912,14 +3913,188 @@ function clients() {
         <td class="right">${count}</td>
         <td><div class="client-actions">
           <button class="button" type="button" data-edit-client="${c.id}" title="Edit client" aria-label="Edit ${c.name}" style="padding:7px 10px;font-size:12px">Edit</button>
-          <button class="button danger" type="button" data-delete-client="${c.id}" title="Delete client" aria-label="Delete ${c.name}" style="padding:7px 10px;font-size:12px">Delete</button>
+          ${c.isUnassigned || c.name === 'Unassigned' ? '' : `<button class="button danger" type="button" data-delete-client="${c.id}" title="Delete client" aria-label="Delete ${c.name}" style="padding:7px 10px;font-size:12px">Delete</button>`}
         </div></td>
       </tr>`;
     }).join('')}</tbody>
   </table>`;
 }
 
+/* ---------- Localised pricing (World Bank bands) ---------- */
+// Fallback catalog when Supabase resolve_pricing is unavailable.
+// LIC/LMC = annual (Paystack $2 min); UMC/HIC = monthly.
+const PRICING_FALLBACK = {
+  LIC: {
+    band: 'LIC', currency: 'USD', interval: 'annually',
+    starter: { cents: 360, monthlyCents: 30 },
+    pro: { cents: 1800, monthlyCents: 150 }
+  },
+  LMC: {
+    band: 'LMC', currency: 'NGN', interval: 'annually',
+    // ~₦1600 per $1 illustrative — replace with live rate / DB local_price
+    starter: { cents: 768000, monthlyCents: 64000, usdCents: 480 },
+    pro: { cents: 3840000, monthlyCents: 320000, usdCents: 2400 }
+  },
+  UMC: {
+    band: 'UMC', currency: 'USD', interval: 'monthly',
+    starter: { cents: 300, monthlyCents: 300 },
+    pro: { cents: 800, monthlyCents: 800 }
+  },
+  HIC: {
+    band: 'HIC', currency: 'USD', interval: 'monthly',
+    starter: { cents: 500, monthlyCents: 500 },
+    pro: { cents: 1200, monthlyCents: 1200 }
+  }
+};
+
+const COUNTRY_BAND = {
+  NG: 'LMC', GH: 'LMC', KE: 'LMC', EG: 'LMC', IN: 'LMC', PK: 'LMC', BD: 'LMC',
+  TZ: 'LMC', SN: 'LMC', CI: 'LMC', CM: 'LMC', MA: 'LMC', AO: 'LMC',
+  UG: 'LIC', RW: 'LIC', ET: 'LIC',
+  ZA: 'UMC', BR: 'UMC', MX: 'UMC', ID: 'UMC', PH: 'UMC', VN: 'UMC',
+  TH: 'UMC', MY: 'UMC', CN: 'UMC', TR: 'UMC', CO: 'UMC', AR: 'UMC',
+  US: 'HIC', GB: 'HIC', CA: 'HIC', AU: 'HIC', NZ: 'HIC', DE: 'HIC', FR: 'HIC',
+  NL: 'HIC', IE: 'HIC', AE: 'HIC', SA: 'HIC', SG: 'HIC', JP: 'HIC', KR: 'HIC',
+  CH: 'HIC', SE: 'HIC', NO: 'HIC', DK: 'HIC', SC: 'HIC'
+};
+
+const COUNTRY_CURRENCY = {
+  NG: 'NGN', GH: 'GHS', KE: 'KES', ZA: 'ZAR', US: 'USD', GB: 'GBP',
+  CA: 'CAD', AU: 'AUD', EU: 'EUR', DE: 'EUR', FR: 'EUR', NL: 'EUR', IE: 'EUR',
+  IN: 'INR', EG: 'EGP', AE: 'AED', SA: 'SAR', JP: 'JPY', CN: 'CNY', BR: 'BRL',
+  MX: 'MXN', CI: 'XOF'
+};
+
+// Indicative FX vs USD for display when DB has no local_price (not for charging)
+const FX_USD = {
+  USD: 1, NGN: 1600, GHS: 15.5, KES: 130, ZAR: 18, GBP: 0.79, EUR: 0.92,
+  CAD: 1.36, AUD: 1.52, INR: 84, EGP: 50, AED: 3.67, SAR: 3.75, JPY: 150,
+  CNY: 7.2, BRL: 5.5, MXN: 17, XOF: 600
+};
+
+function currencySymbol(code) {
+  return ({
+    USD: '$', NGN: '₦', GHS: 'GH₵', KES: 'KSh', ZAR: 'R', GBP: '£', EUR: '€',
+    CAD: 'CA$', AUD: 'A$', INR: '₹', EGP: 'E£', AED: 'AED ', SAR: 'SAR ',
+    JPY: '¥', CNY: '¥', BRL: 'R$', MXN: 'MX$', XOF: 'CFA '
+  })[code] || (code + ' ');
+}
+
+function formatMoneyCents(cents, currency) {
+  const n = (Number(cents) || 0) / 100;
+  const cur = currency || 'USD';
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency', currency: cur,
+      maximumFractionDigits: n % 1 === 0 ? 0 : 2
+    }).format(n);
+  } catch {
+    return currencySymbol(cur) + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+}
+
+function bandForCountry(country) {
+  const cc = String(country || '').toUpperCase();
+  return COUNTRY_BAND[cc] || 'LMC';
+}
+
+function displayCurrencyForCountry(country, bandFallbackCurrency) {
+  const cc = String(country || '').toUpperCase();
+  return COUNTRY_CURRENCY[cc] || bandFallbackCurrency || 'USD';
+}
+
+/** Convert USD cents → local currency cents using FX_USD table */
+function usdCentsToLocal(usdCents, localCurrency) {
+  const rate = FX_USD[localCurrency] || 1;
+  return Math.round((Number(usdCents) || 0) * rate);
+}
+
+async function resolvePlanPricing(country, planId) {
+  const cc = String(country || db?.profile?.taxCountry || 'NG').toUpperCase();
+  const plan = String(planId || 'starter').toLowerCase();
+
+  // Prefer Supabase RPC when signed in / client available
+  try {
+    const client = cloud.client || await getSupabase();
+    if (client) {
+      const { data, error } = await client.rpc('resolve_pricing', {
+        p_country_code: cc,
+        p_plan_id: plan
+      });
+      if (!error && data) {
+        const row = Array.isArray(data) ? data[0] : data;
+        if (row) {
+          const interval = row.billing_interval || 'monthly';
+          const chargeCurrency = row.local_currency || row.currency || 'USD';
+          const chargeCents = row.local_price_cents != null ? row.local_price_cents : row.price_cents;
+          const monthlyUsd = row.effective_monthly_cents != null
+            ? row.effective_monthly_cents
+            : (interval === 'annually' ? Math.round((row.price_cents || 0) / 12) : row.price_cents);
+          return {
+            country: cc,
+            band: row.band_id,
+            plan,
+            interval,
+            chargeCurrency,
+            chargeCents: Number(chargeCents) || 0,
+            monthlyUsdCents: Number(monthlyUsd) || 0,
+            source: 'rpc'
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('resolve_pricing', e.message || e);
+  }
+
+  // Client fallback
+  const band = bandForCountry(cc);
+  const fb = PRICING_FALLBACK[band] || PRICING_FALLBACK.LMC;
+  const row = fb[plan] || fb.starter;
+  const displayCur = displayCurrencyForCountry(cc, fb.currency);
+  let chargeCents = row.cents;
+  let chargeCurrency = fb.currency;
+  // Prefer showing user's local currency
+  if (displayCur !== fb.currency) {
+    const usdBase = row.usdCents != null ? row.usdCents : (fb.currency === 'USD' ? row.cents : row.usdCents);
+    if (usdBase != null && displayCur !== 'USD') {
+      chargeCents = usdCentsToLocal(usdBase, displayCur);
+      chargeCurrency = displayCur;
+    } else if (fb.currency === 'USD' && displayCur !== 'USD') {
+      chargeCents = usdCentsToLocal(row.cents, displayCur);
+      chargeCurrency = displayCur;
+    }
+  } else if (band === 'LMC' && displayCur === 'NGN' && row.usdCents) {
+    chargeCents = usdCentsToLocal(row.usdCents, 'NGN');
+    chargeCurrency = 'NGN';
+  }
+  return {
+    country: cc,
+    band,
+    plan,
+    interval: fb.interval,
+    chargeCurrency,
+    chargeCents,
+    monthlyUsdCents: row.monthlyCents || Math.round(row.cents / (fb.interval === 'annually' ? 12 : 1)),
+    source: 'fallback'
+  };
+}
+
+function paintPlanTierPrice(el, pricing) {
+  if (!el || !pricing) return;
+  const main = formatMoneyCents(pricing.chargeCents, pricing.chargeCurrency);
+  const period = pricing.interval === 'annually' ? '/year' : '/month';
+  let html = main + '<span>' + period + '</span>';
+  if (pricing.interval === 'annually') {
+    const monthlyLocal = Math.round(pricing.chargeCents / 12);
+    html += '<div style="font-size:12px;font-weight:600;color:var(--muted);margin-top:4px">≈ '
+      + formatMoneyCents(monthlyLocal, pricing.chargeCurrency) + '/month · billed annually</div>';
+  }
+  el.innerHTML = html;
+}
+
 async function planView() {
+
   const e = await getEntitlements(true);
   const plan = String(e?.plan || 'free').toLowerCase();
   const name = e?.plan_name || (plan === 'pro' ? 'Pro' : plan === 'starter' ? 'Starter' : 'Free');
@@ -3972,6 +4147,41 @@ async function planView() {
   }).join('');
   renderFeatureAccess();
   applyFeatureGates();
+
+  // Localised prices from business country (profile taxCountry)
+  try {
+    const country = (db.profile?.taxCountry || 'NG').toUpperCase();
+    const [starterP, proP] = await Promise.all([
+      resolvePlanPricing(country, 'starter'),
+      resolvePlanPricing(country, 'pro')
+    ]);
+    paintPlanTierPrice(document.getElementById('planTierStarterPrice'), starterP);
+    paintPlanTierPrice(document.getElementById('planTierProPrice'), proP);
+    const ctx = document.getElementById('planPricingContext');
+    if (ctx) {
+      const bandLabel = ({ LIC: 'low-income', LMC: 'lower-middle income', UMC: 'upper-middle income', HIC: 'high-income' })[starterP.band] || starterP.band;
+      ctx.textContent = 'Prices for ' + country + ' (' + bandLabel + ' band) · shown in ' + (starterP.chargeCurrency || 'USD');
+    }
+    const note = document.getElementById('planBillingNote');
+    if (note) {
+      if (starterP.interval === 'annually') {
+        note.textContent = 'In your region, Starter and Pro are billed annually (Paystack minimum). Billing checkout coming soon.';
+      } else {
+        note.textContent = 'Billed monthly. Checkout coming soon. Your current plan remains active.';
+      }
+    }
+    // Current plan price card
+    const curPlan = String(e?.plan || 'free').toLowerCase();
+    if (curPlan === 'starter' || curPlan === 'pro') {
+      const p = curPlan === 'pro' ? proP : starterP;
+      const period = p.interval === 'annually' ? '/year' : '/month';
+      $('#planPrice').textContent = formatMoneyCents(p.chargeCents, p.chargeCurrency) + period;
+    } else {
+      $('#planPrice').textContent = formatMoneyCents(0, starterP.chargeCurrency) + '/month';
+    }
+  } catch (err) {
+    console.warn('plan pricing paint', err.message || err);
+  }
 }
 
 function profile() {
@@ -4382,7 +4592,7 @@ document.addEventListener('click', e => {
     if (c) {
       const count = db.invoices.filter(i => i.client === c.id).length;
       const msg = count
-        ? `"${c.name}" has ${count} invoice(s). Deleting will leave those invoices without a client name. Continue?`
+        ? `"${c.name}" has ${count} invoice(s). Those invoices will move to Unassigned. Continue?`
         : `Delete client "${c.name}"? This cannot be undone.`;
       confirmAction('Delete client', msg, async () => {
         await deleteClientById(c.id);
@@ -4431,7 +4641,7 @@ $('#modalDeleteClient').onclick = () => {
   if (!c) return;
   const count = db.invoices.filter(i => i.client === c.id).length;
   const msg = count
-    ? `“${c.name}” has ${count} invoice(s). Deleting the client will keep those invoices but remove the client link. Continue?`
+    ? `“${c.name}” has ${count} invoice(s). Those invoices will move to Unassigned. Continue?`
     : `Delete “${c.name}”? This cannot be undone.`;
   confirmAction('Delete client', msg, async () => {
     await deleteClientById(c.id);
@@ -5519,37 +5729,125 @@ function addPaymentToEdit(amount, date, note, method) {
   });
 })();
 
-/* Delete a client locally and in the cloud. Existing invoices are retained
-   but their client link is cleared first so the client can be removed safely. */
+/* invoices.client_id is NOT NULL in Supabase — never null it out.
+   When a client with invoices is deleted, reassign those invoices to a
+   single shared "Unassigned" client (local + cloud), then delete the client. */
+async function getOrCreateUnassignedClient(organizationId) {
+  let local = db.clients.find(x => x.isUnassigned || x.name === 'Unassigned');
+  if (!local) {
+    local = {
+      id: crypto.randomUUID(),
+      name: 'Unassigned',
+      email: '',
+      address: '',
+      taxId: '',
+      isUnassigned: true
+    };
+    db.clients.push(local);
+  } else {
+    local.isUnassigned = true;
+    if (!local.name) local.name = 'Unassigned';
+  }
+
+  if (cloud.client && cloud.user && organizationId) {
+    try {
+      if (!local.cloudId) {
+        const { data: existing, error: findErr } = await cloud.client
+          .from('clients')
+          .select('id')
+          .eq('organization_id', organizationId)
+          .eq('name', 'Unassigned')
+          .limit(1);
+        if (findErr) console.warn('unassigned client lookup', findErr.message || findErr);
+        if (existing?.[0]?.id) {
+          local.cloudId = existing[0].id;
+        } else {
+          const { data: created, error: createErr } = await cloud.client
+            .from('clients')
+            .insert({
+              organization_id: organizationId,
+              name: 'Unassigned',
+              email: null,
+              billing_address: { address: '' },
+              tax_id: null
+            })
+            .select('id')
+            .single();
+          if (createErr) throw createErr;
+          local.cloudId = created.id;
+        }
+      }
+    } catch (e) {
+      console.warn('unassigned client', e.message || e);
+      throw e;
+    }
+  }
+  return local;
+}
+
 async function deleteClientById(clientId) {
   const c = db.clients.find(x => x.id === clientId);
   if (!c) return;
-
-  if (cloud.client && cloud.user && c.cloudId) {
-    const organizationId = await ensureCloudOrganization();
-    const linkedInvoices = db.invoices.filter(i => i.client === c.id);
-    for (const inv of linkedInvoices) {
-      if (!inv.cloudId) continue;
-      const { error } = await cloud.client.from('invoices').update({ client_id: null })
-        .eq('id', inv.cloudId).eq('organization_id', organizationId);
-      if (error) throw error;
-    }
-    const { error: deleteError } = await cloud.client.from('clients').delete()
-      .eq('id', c.cloudId).eq('organization_id', organizationId);
-    if (deleteError) throw deleteError;
+  if (c.isUnassigned || c.name === 'Unassigned') {
+    toast('The Unassigned client is kept so invoices always have a client.');
+    return;
   }
 
-  db.invoices.forEach(i => {
-    if (i.client === c.id) i.client = '';
-  });
-  db.clients = db.clients.filter(x => x.id !== c.id);
-  save();
+  const linkedInvoices = db.invoices.filter(i => i.client === c.id);
 
-  if (edit && $('#client')) {
-    const previous = edit.client;
-    $('#client').innerHTML = '<option value="">Select client…</option>' +
-      db.clients.map(x => `<option value="${x.id}">${x.name}</option>`).join('');
-    $('#client').value = previous || '';
+  try {
+    if (cloud.client && cloud.user && c.cloudId) {
+      const organizationId = await ensureCloudOrganization();
+
+      if (linkedInvoices.length) {
+        const unassigned = await getOrCreateUnassignedClient(organizationId);
+        if (!unassigned.cloudId) {
+          throw new Error('Could not prepare Unassigned client in the cloud.');
+        }
+        for (const inv of linkedInvoices) {
+          inv.client = unassigned.id;
+          inv.formerClientName = c.name;
+          if (!inv.cloudId) continue;
+          const { error } = await cloud.client.from('invoices')
+            .update({ client_id: unassigned.cloudId })
+            .eq('id', inv.cloudId)
+            .eq('organization_id', organizationId);
+          if (error) throw error;
+        }
+      }
+
+      const { error: deleteError } = await cloud.client.from('clients').delete()
+        .eq('id', c.cloudId)
+        .eq('organization_id', organizationId);
+      if (deleteError) throw deleteError;
+    } else if (linkedInvoices.length) {
+      // Local-only: still keep a valid client pointer for invoices
+      const unassigned = await getOrCreateUnassignedClient(null);
+      for (const inv of linkedInvoices) {
+        inv.client = unassigned.id;
+        inv.formerClientName = c.name;
+      }
+    }
+
+    db.clients = db.clients.filter(x => x.id !== c.id);
+    save();
+
+    if (edit && $('#client')) {
+      const previous = edit.client === c.id
+        ? (db.clients.find(x => x.isUnassigned)?.id || '')
+        : edit.client;
+      if (edit.client === c.id) edit.client = previous;
+      $('#client').innerHTML = '<option value="">Select client…</option>' +
+        db.clients.map(x => `<option value="${x.id}">${x.name}</option>`).join('');
+      $('#client').value = previous || '';
+    }
+  } catch (error) {
+    console.error('delete client', error);
+    const msg = error?.message || String(error);
+    toast(msg.includes('client_id') || msg.includes('not-null')
+      ? 'Could not delete client while invoices still need a client. Try again.'
+      : ('Could not delete client: ' + msg));
+    throw error;
   }
 }
 
