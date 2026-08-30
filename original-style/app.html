@@ -622,6 +622,132 @@ input:focus:not(:focus-visible) {
 }
 .trust-strip b { color: var(--text); }
 
+/* =========================================================
+   PLAN PAGE + section helpers
+   ========================================================= */
+.section-sub {
+  color: var(--muted);
+  margin: 4px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.section-lead {
+  color: var(--muted);
+  margin: -8px 0 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.stack-gap { margin-top: 18px; }
+.plan-feature-list {
+  line-height: 1.9;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.plan-feature-list .on { color: var(--green-text); font-weight: 600; }
+.plan-feature-list .off { color: var(--muted-2); }
+.plan-tiers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.plan-tier {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color var(--ease), box-shadow var(--ease);
+}
+.plan-tier.featured {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 35%, transparent);
+}
+.plan-tier-name {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  color: var(--text);
+}
+.plan-tier-price {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  margin: 4px 0;
+  color: var(--text);
+}
+.plan-tier-price span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.plan-tier-desc {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+  flex: 1;
+}
+.plan-tier .button { margin-top: 12px; width: 100%; }
+.plan-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 14px;
+  line-height: 1.45;
+}
+.feature-access-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.feature-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+}
+.feature-chip .chip-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.feature-chip.on .chip-icon {
+  background: var(--green-bg);
+  color: var(--green-text);
+}
+.feature-chip.off .chip-icon {
+  background: var(--panel);
+  color: var(--muted-2);
+  border: 1px solid var(--line);
+}
+.feature-chip .chip-meta {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.side-note b {
+  font-size: 13px;
+  letter-spacing: -0.2px;
+}
+#growthMeter {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 
 /* =========================================================
    COMPONENTS — Insights / charts
@@ -1380,6 +1506,9 @@ input:focus:not(:focus-visible) {
 
   .payments-box { padding: 14px; }
   .empty { padding: 36px 18px; }
+  .plan-tiers { grid-template-columns: 1fr; }
+  .feature-access-grid { grid-template-columns: 1fr; }
+  .plan-tier .button { width: 100%; }
 }
 
 /* —— Narrow phone —— */
@@ -1470,7 +1599,7 @@ input:focus:not(:focus-visible) {
     </button>
     <div class="side-note">
       <b>invoicedey</b>
-      <div id="growthMeter" style="margin-top:5px;color:var(--muted)"></div>
+      <div id="growthMeter"></div>
     </div>
     <div class="account-area">
       <button class="account-card" id="accountCard" type="button" aria-expanded="false" aria-haspopup="menu">
@@ -1574,50 +1703,52 @@ input:focus:not(:focus-visible) {
       <div class="section-head">
         <div>
           <h2>Plan & billing</h2>
-          <p style="color:var(--muted);margin:4px 0 0">Manage your invoicedey plan, usage and feature access.</p>
+          <p class="section-sub">Manage your invoicedey plan, usage and feature access.</p>
         </div>
         <span class="badge" id="planStatusBadge">Active</span>
       </div>
-      <div class="cards" style="margin-top:18px">
+      <div class="cards stack-gap">
         <div class="card"><small>Current plan</small><b id="planCurrent">Free</b><span class="mini" id="planPrice">$0/month</span></div>
         <div class="card"><small>Invoices / 30 days</small><b id="planInvoiceUsage">0 / 3</b><span class="mini" id="planInvoiceUsageSub">Current billing window</span></div>
         <div class="card"><small>Clients</small><b id="planClientUsage">0 / 5</b><span class="mini">Saved clients</span></div>
         <div class="card"><small>User segment</small><b id="planSegment">New</b><span class="mini" id="planSegmentScore">Growth segment</span></div>
       </div>
-      <div class="insights" style="margin-top:18px">
+      <div class="insights stack-gap">
         <div class="insight">
           <h3>Your plan</h3>
-          <p id="planDescription" style="color:var(--muted);line-height:1.6">Free plan for getting started.</p>
-          <div id="planFeatureList" style="line-height:1.9"></div>
+          <p id="planDescription" class="section-sub" style="margin:0 0 12px">Free plan for getting started.</p>
+          <div id="planFeatureList" class="plan-feature-list"></div>
         </div>
         <div class="insight">
           <h3>Available plans</h3>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
-            <div style="border:1px solid var(--border);border-radius:14px;padding:16px">
-              <b style="font-size:18px">Starter</b><div style="font-size:24px;font-weight:800;margin:5px 0">$3<span style="font-size:13px;font-weight:600;color:var(--muted)">/month</span></div>
-              <div style="color:var(--muted);font-size:13px;line-height:1.6">50 invoices · 50 clients · custom logo · advanced tax</div>
-              <button class="button primary" style="margin-top:12px" data-plan-page-upgrade="starter">Upgrade to Starter</button>
+          <div class="plan-tiers">
+            <div class="plan-tier">
+              <div class="plan-tier-name">Starter</div>
+              <div class="plan-tier-price">$3<span>/month</span></div>
+              <div class="plan-tier-desc">50 invoices · 50 clients · custom logo · advanced tax</div>
+              <button class="button primary" type="button" data-plan-page-upgrade="starter">Upgrade to Starter</button>
             </div>
-            <div style="border:1px solid var(--blue);border-radius:14px;padding:16px">
-              <b style="font-size:18px">Pro</b><div style="font-size:24px;font-weight:800;margin:5px 0">$8<span style="font-size:13px;font-weight:600;color:var(--muted)">/month</span></div>
-              <div style="color:var(--muted);font-size:13px;line-height:1.6">Unlimited invoices & clients · recurring invoices · reports · API · team</div>
-              <button class="button" style="margin-top:12px" data-plan-page-upgrade="pro">Upgrade to Pro</button>
+            <div class="plan-tier featured">
+              <div class="plan-tier-name">Pro</div>
+              <div class="plan-tier-price">$8<span>/month</span></div>
+              <div class="plan-tier-desc">Unlimited invoices &amp; clients · recurring invoices · reports · API · team</div>
+              <button class="button" type="button" data-plan-page-upgrade="pro">Upgrade to Pro</button>
             </div>
           </div>
-          <p style="font-size:12px;color:var(--muted);margin-top:14px">Billing is coming soon. Your current plan remains active.</p>
+          <p class="plan-note">Billing is coming soon. Your current plan remains active.</p>
         </div>
       </div>
-      <div class="insight" style="margin-top:18px">
+      <div class="insight stack-gap">
         <h3>Feature access</h3>
-        <p style="color:var(--muted);margin:4px 0 14px;line-height:1.5">Premium features stay visible so you know exactly what your plan unlocks.</p>
-        <div id="featureAccessList" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px"></div>
+        <p class="section-sub" style="margin:4px 0 14px">Premium features stay visible so you know exactly what your plan unlocks.</p>
+        <div id="featureAccessList" class="feature-access-grid"></div>
       </div>
     </section>
 
     <section class="view" id="profile">
       <div class="form settings">
         <h2>Business profile</h2>
-        <p style="color:var(--muted);margin-top:-8px;margin-bottom:20px">
+        <p class="section-lead">
           Your reporting currency is used for dashboard totals. Each invoice can still use its own currency.
         </p>
         <div class="logo-upload">
@@ -1996,15 +2127,15 @@ input:focus:not(:focus-visible) {
   <div class="modal" style="max-width:620px">
     <h2 id="upgradeModalTitle">You’ve reached your plan limit</h2>
     <p id="upgradeModalMessage">Upgrade to keep creating invoices and unlock more features.</p>
-    <div id="upgradePlans" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:18px">
-      <div style="border:1px solid var(--border);border-radius:14px;padding:16px">
-        <div style="font-weight:800;font-size:18px">Starter</div>
-        <div style="color:var(--muted);margin:4px 0 12px">$3/month · 50 invoices · 50 clients</div>
+    <div id="upgradePlans" class="plan-tiers" style="margin-top:18px">
+      <div class="plan-tier">
+        <div class="plan-tier-name">Starter</div>
+        <div class="plan-tier-desc" style="margin:4px 0 0">$3/month · 50 invoices · 50 clients</div>
         <button class="button primary" type="button" data-upgrade-plan="starter">Upgrade to Starter</button>
       </div>
-      <div style="border:1px solid var(--border);border-radius:14px;padding:16px">
-        <div style="font-weight:800;font-size:18px">Pro</div>
-        <div style="color:var(--muted);margin:4px 0 12px">$8/month · Unlimited invoices & clients</div>
+      <div class="plan-tier featured">
+        <div class="plan-tier-name">Pro</div>
+        <div class="plan-tier-desc" style="margin:4px 0 0">$8/month · Unlimited invoices &amp; clients</div>
         <button class="button" type="button" data-upgrade-plan="pro">Upgrade to Pro</button>
       </div>
     </div>
@@ -2351,17 +2482,21 @@ async function ensureCloudOrganization() {
 
 async function syncOrganizationProfile(organizationId) {
   if (!cloud.client || !organizationId) return;
-  const { error } = await cloud.client.from('organizations').update({
-    name: db.profile.name || 'My business',
-    currency: db.profile.reporting || 'USD',
-    contact_email: db.profile.email || null,
-    phone: db.profile.phone || null,
-    tax_registration_number: db.profile.taxId || null,
-    address: { text: db.profile.address || '' },
-    payment_details: db.profile.paymentDetails || '',
-    tax_label: db.profile.taxLabel || 'Tax'
-  }).eq('id', organizationId);
-  if (error) throw error;
+  try {
+    const { error } = await cloud.client.from('organizations').update({
+      name: db.profile.name || 'My business',
+      currency: db.profile.reporting || 'USD',
+      contact_email: db.profile.email || null,
+      phone: db.profile.phone || null,
+      tax_registration_number: db.profile.taxId || null,
+      address: { text: db.profile.address || '' },
+      payment_details: db.profile.paymentDetails || '',
+      tax_label: db.profile.taxLabel || 'Tax'
+    }).eq('id', organizationId);
+    if (error) console.warn('org profile sync', error.message || error);
+  } catch (e) {
+    console.warn('org profile sync', e.message || e);
+  }
 }
 
 async function pushCloudState() {
@@ -2371,16 +2506,20 @@ async function pushCloudState() {
     const organizationId = await ensureCloudOrganization();
     await syncOrganizationProfile(organizationId);
     if (cloud.client && cloud.user && db.profile.taxCountry) {
-      const { error: taxProfileError } = await cloud.client.rpc('create_or_update_tax_profile', {
-        p_country_code: db.profile.taxCountry,
-        p_state_code: db.profile.taxState || null,
-        p_tax_registered: !!db.profile.taxRegistered,
-        p_tax_registration_number: db.profile.taxId || null,
-        p_default_tax_rate: Number(db.profile.defaultTax || 0),
-        p_tax_label: db.profile.taxLabel || 'Tax',
-        p_tax_settings: { source: 'invoicedey-tax-v1' }
-      });
-      if (taxProfileError) throw taxProfileError;
+      try {
+        const { error: taxProfileError } = await cloud.client.rpc('create_or_update_tax_profile', {
+          p_country_code: db.profile.taxCountry,
+          p_state_code: db.profile.taxState || null,
+          p_tax_registered: !!db.profile.taxRegistered,
+          p_tax_registration_number: db.profile.taxId || null,
+          p_default_tax_rate: Number(db.profile.defaultTax || 0),
+          p_tax_label: db.profile.taxLabel || 'Tax',
+          p_tax_settings: { source: 'invoicedey-tax-v1' }
+        });
+        if (taxProfileError) console.warn('tax profile sync', taxProfileError.message || taxProfileError);
+      } catch (e) {
+        console.warn('tax profile sync', e.message || e);
+      }
     }
     for (const localClient of db.clients) {
       if (!localClient.cloudId) {
@@ -2510,8 +2649,18 @@ async function pushCloudState() {
     }
     persistDb();
   } catch (error) {
+    const msg = error?.message || String(error || 'Unknown error');
     console.error('CLOUD SYNC FAILED:', error);
-    alert('CLOUD SYNC FAILED: ' + (error?.message || JSON.stringify(error)));
+    // Network blips / offline / extensions often surface as "Failed to fetch".
+    // Keep local data intact and avoid blocking the user with an alert.
+    const isNetwork =
+      /failed to fetch|networkerror|load failed|network request failed/i.test(msg) ||
+      error?.name === 'TypeError';
+    if (typeof toast === 'function') {
+      toast(isNetwork
+        ? 'Cloud sync paused (network). Your data is still saved on this device.'
+        : ('Cloud sync issue: ' + msg));
+    }
   } finally {
     cloud.syncing = false;
   }
@@ -3145,15 +3294,23 @@ function requireFeature(feature, source = 'feature_gate') {
 function renderFeatureAccess() {
   const el = document.getElementById('featureAccessList');
   if (!el) return;
-  const plan = String(entitlements?.plan || 'free').toLowerCase();
   const items = Object.entries(FEATURE_REQUIREMENTS);
   el.innerHTML = items.map(([key, meta]) => {
     const enabled = hasFeature(key);
     const required = requiredPlanLabel(meta.plan);
-    const available = enabled || (plan === 'pro') || (plan === 'starter' && meta.plan === 'starter');
-    return `<div style="border:1px solid var(--border);border-radius:12px;padding:12px;display:flex;align-items:center;justify-content:space-between;gap:10px">
-      <div><b>${meta.label}</b><div style="font-size:12px;color:var(--muted);margin-top:3px">${enabled ? 'Included in your plan' : 'Requires ' + required}</div></div>
-      ${enabled ? '<span class="badge">Included</span>' : `<button class="button small" type="button" data-feature-gate="${key}">Unlock</button>`}
+    const state = enabled ? 'on' : 'off';
+    const icon = enabled ? '✓' : '·';
+    const metaText = enabled ? 'Included in your plan' : ('Requires ' + required);
+    const action = enabled
+      ? '<span class="badge">Included</span>'
+      : `<button class="button small" type="button" data-feature-gate="${key}">Unlock</button>`;
+    return `<div class="feature-chip ${state}">
+      <span class="chip-icon" aria-hidden="true">${icon}</span>
+      <div style="flex:1;min-width:0">
+        <b>${meta.label}</b>
+        <span class="chip-meta">${metaText}</span>
+      </div>
+      ${action}
     </div>`;
   }).join('');
   el.querySelectorAll('[data-feature-gate]').forEach(btn => {
@@ -3694,7 +3851,7 @@ async function planView() {
   ];
   $('#planFeatureList').innerHTML = featureLabels.map(([key,label]) => {
     const on = key === 'invoices' || key === 'clients' ? true : !!e?.features?.[key];
-    return `<div>${on ? '✓' : '—'} <span style="color:${on ? 'var(--text)' : 'var(--muted)'}">${label}</span></div>`;
+    return `<div class="${on ? 'on' : 'off'}">${on ? '✓' : '—'} ${label}</div>`;
   }).join('');
   renderFeatureAccess();
   applyFeatureGates();
