@@ -2092,6 +2092,9 @@ async function syncProfile(client, user) {
         cloud.referralCode = code;
         localStorage.setItem('invoicedey-my-referral-code', code);
         document.dispatchEvent(new CustomEvent('invoicedey:referral-ready'));
+        if (document.getElementById('profile')?.classList.contains('active')) {
+          paintProfileReferralUI(code, 'ready');
+        }
       }
     }
   } catch (e) {
@@ -3217,6 +3220,57 @@ const fx = {
   PLN: 0.25, BRL: 0.18, MXN: 0.058, PHP: 0.017, THB: 0.028
 };
 
+function taxSuggestionForCountry(country) {
+  const map = {
+    US: { label: 'Sales Tax', rate: 0, hint: 'US sales tax varies by state — enter your local rate.', notice: '' },
+    GB: { label: 'VAT', rate: 20, hint: 'UK standard VAT is typically 20%.', notice: '' },
+    AU: { label: 'GST', rate: 10, hint: 'Australian GST is typically 10%.', notice: '' },
+    CA: { label: 'GST/HST', rate: 13, hint: 'Canada — use GST, HST or PST as required in your province.', notice: '' },
+    NG: { label: 'VAT', rate: 7.5, hint: 'Nigeria VAT is typically 7.5%.', notice: '' },
+    IN: { label: 'GST', rate: 18, hint: 'India GST slabs vary — confirm the rate for your goods/services.', notice: '' }
+  };
+  return map[String(country || '').toUpperCase()] || {
+    label: 'Tax', rate: 0, hint: 'Set your tax type and rate manually.', notice: ''
+  };
+}
+
+/**
+ * Update tax hint/notice (and optionally default label/rate) when business country changes.
+ * @param {string} country  ISO country code from #taxCountry
+ * @param {boolean} applyDefaults  when true, write suggested label/rate into the form + db
+ */
+function applyTaxCountrySuggestion(country, applyDefaults = false) {
+  const suggestion = taxSuggestionForCountry(country);
+  const hint = document.getElementById('taxSuggestHint');
+  if (hint) hint.textContent = suggestion.hint || '';
+
+  const notice = document.getElementById('taxV1Notice');
+  if (notice) {
+    const supported = ['US', 'GB', 'AU', 'CA', 'NG', 'IN'].includes(String(country || '').toUpperCase());
+    if (supported) {
+      notice.style.display = 'none';
+      notice.textContent = '';
+    } else {
+      notice.style.display = 'block';
+      notice.textContent = 'This country is outside the V1 guided tax list. Enter tax type and rate manually.';
+    }
+  }
+
+  if (applyDefaults) {
+    const labelEl = document.getElementById('taxLabelSelect');
+    const rateEl = document.getElementById('defaultTax');
+    if (labelEl) labelEl.value = suggestion.label;
+    if (rateEl && (rateEl.value === '' || Number(rateEl.value) === 0)) {
+      rateEl.value = suggestion.rate;
+    }
+    if (db?.profile) {
+      db.profile.taxLabel = suggestion.label;
+      if (!Number(db.profile.defaultTax)) db.profile.defaultTax = suggestion.rate;
+      db.profile.taxCountry = String(country || 'US').toUpperCase();
+    }
+  }
+}
+
 function suggestTaxForCurrency(code) {
   // Default tax type + rate by reporting/invoice currency (user can override anytime)
   const map = {
@@ -3658,87 +3712,25 @@ function profile() {
       '<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="100%" height="100%" fill="#E8F0FE"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#2467E3" font-size="16" font-family="system-ui" font-weight="700">ID</text></svg>'
     );
   if ($('#taxRegistered')) $('#taxRegistered').value = String(!!db.profile.taxRegistered);
-  applyTaxCountrySuggestion(db.profile.taxCountry || 'US', false);
-  applyFeatureGates();
+  try {
+    applyTaxCountrySuggestion(db.profile.taxCountry || 'US', false);
+  } catch (e) {
+    console.warn('tax suggestion', e.message || e);
+  }
+  try { applyFeatureGates(); } catch (e) { console.warn('feature gates', e.message || e); }
 
-  const referralCodeEl = document.getElementById('profileReferralCode');
-  const referralUrlEl = document.getElementById('profileReferralUrl');
-  const copyReferralBtn = document.getElementById('copyProfileReferral');
-
-  const paintReferral = (code, state = 'ready') => {
-    const normalized = normalizeReferralCodeValue(code);
-    if (referralCodeEl) {
-      if (normalized) referralCodeEl.textContent = normalized;
-      else if (state === 'signed_out') referralCodeEl.textContent = 'Sign in required';
-      else if (state === 'error') referralCodeEl.textContent = 'Unavailable';
-      else referralCodeEl.textContent = 'Loading referral code…';
-    }
-    if (referralUrlEl) {
-      if (normalized) referralUrlEl.textContent = referralLink(normalized);
-      else if (state === 'signed_out') referralUrlEl.textContent = 'Sign in to generate your referral link.';
-      else if (state === 'error') referralUrlEl.textContent = 'Could not load referral link. Tap Copy to retry.';
-      else referralUrlEl.textContent = 'Loading your referral link…';
-    }
-    if (copyReferralBtn) {
-      copyReferralBtn.disabled = state === 'loading';
-      copyReferralBtn.onclick = async (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        copyReferralBtn.disabled = true;
-        const liveCode = await getMyReferralCode();
-        if (!liveCode) {
-          const signedIn = !!(cloud.user || (await (async () => {
-            try {
-              const c = cloud.client || await getSupabase();
-              const { data } = await c.auth.getSession();
-              return data?.session?.user;
-            } catch { return null; }
-          })()));
-          paintReferral('', signedIn ? 'error' : 'signed_out');
-          toast(signedIn ? 'Referral link is not available yet. Try again in a moment.' : 'Sign in to use your referral link.');
-          copyReferralBtn.disabled = false;
-          return;
-        }
-        const url = referralLink(liveCode);
-        try {
-          await navigator.clipboard.writeText(url);
-          await track('referral_link_copied', { referral_code: liveCode });
-          toast('Referral link copied.');
-        } catch {
-          window.prompt('Copy your referral link:', url);
-        }
-        paintReferral(liveCode, 'ready');
-        copyReferralBtn.disabled = false;
-      };
-    }
-  };
-
-  const cachedCode = cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || '';
-  if (cachedCode) paintReferral(cachedCode, 'ready');
-  else paintReferral('', 'loading');
-
-  // Resolve independently of the rest of profile/cloud rendering.
-  (async () => {
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const code = await getMyReferralCode();
-      if (code) { paintReferral(code, 'ready'); return; }
-      await new Promise(resolve => setTimeout(resolve, 400 + attempt * 150));
-    }
-    // Final state after retries
-    let signedIn = !!cloud.user;
-    if (!signedIn) {
-      try {
-        const c = cloud.client || await getSupabase();
-        const { data } = await c.auth.getSession();
-        signedIn = !!data?.session?.user;
-      } catch {}
-    }
-    paintReferral('', signedIn ? 'error' : 'signed_out');
-  })();
+  // Referral widgets — always refresh when profile opens (must run even if tax helpers fail)
+  refreshProfileReferralUI();
 }
 
 document.addEventListener('invoicedey:referral-ready', () => {
-  if (document.getElementById('profile')?.classList.contains('active')) profile();
+  const code = normalizeReferralCodeValue(
+    cloud.referralCode || localStorage.getItem('invoicedey-my-referral-code') || ''
+  );
+  if (code) paintProfileReferralUI(code, 'ready');
+  else if (document.getElementById('profile')?.classList.contains('active')) {
+    refreshProfileReferralUI();
+  }
 });
 
 function nextInvoiceNumber() {
@@ -4241,6 +4233,10 @@ document.addEventListener('input', e => {
 });
 
 // Normalize qty/rate to numbers when leaving the field
+document.getElementById('taxCountry')?.addEventListener('change', (e) => {
+  applyTaxCountrySuggestion(e.target.value, true);
+});
+
 document.addEventListener('change', e => {
   if (e.target.dataset.n !== undefined && edit && (e.target.dataset.f === 'qty' || e.target.dataset.f === 'rate')) {
     const n = e.target.dataset.n;
