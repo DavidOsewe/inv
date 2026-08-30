@@ -2633,18 +2633,88 @@ async function pushCloudState() {
         const { error } = await cloud.client.from('invoice_line_items').insert(lines);
         if (error) throw error;
       }
-      for (const payment of ensurePayments(invoice)) {
-        if (payment.cloudId) continue;
-        const { data, error } = await cloud.client.from('payments').insert({
-          invoice_id: invoice.cloudId,
-          amount_minor: toMinor(payment.amount, currency),
-          currency,
-          status: 'succeeded',
-          provider: 'manual',
-          paid_at: payment.date ? new Date(payment.date).toISOString() : new Date().toISOString()
-        }).select('id').single();
-        if (error) throw error;
-        payment.cloudId = data.id;
+      // Sync payments: delete removed locals, collapse remote duplicates, insert only truly new rows
+      try {
+        dedupePayments(invoice);
+        const localPays = ensurePayments(invoice);
+        const localCloudIds = new Set(localPays.map(p => p.cloudId).filter(Boolean));
+
+        const { data: remotePays, error: remotePayErr } = await cloud.client
+          .from('payments')
+          .select('id, amount_minor, paid_at, status')
+          .eq('invoice_id', invoice.cloudId);
+        if (remotePayErr) {
+          console.warn('payments fetch', remotePayErr.message || remotePayErr);
+        } else {
+          const remote = remotePays || [];
+          // Drop remote rows not present locally (user removed them)
+          for (const rp of remote) {
+            if (!localCloudIds.has(rp.id)) {
+              // Keep if a local payment without cloudId matches amount+date (link instead of delete+reinsert)
+              const paidDay = rp.paid_at ? String(rp.paid_at).slice(0, 10) : '';
+              const match = localPays.find(p => !p.cloudId &&
+                toMinor(p.amount, currency) === Number(rp.amount_minor) &&
+                (p.date || '') === paidDay);
+              if (match) {
+                match.cloudId = rp.id;
+                match.id = match.id || rp.id;
+                localCloudIds.add(rp.id);
+                continue;
+              }
+              const { error: delErr } = await cloud.client.from('payments').delete().eq('id', rp.id);
+              if (delErr) console.warn('payment delete', delErr.message || delErr);
+            }
+          }
+
+          // Collapse duplicate remote rows (same amount_minor + paid day) — keep one
+          const groups = new Map();
+          for (const rp of remote) {
+            const paidDay = rp.paid_at ? String(rp.paid_at).slice(0, 10) : '';
+            const key = Number(rp.amount_minor) + '|' + paidDay;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(rp);
+          }
+          for (const [, rows] of groups) {
+            if (rows.length < 2) continue;
+            // Prefer a row already linked locally
+            rows.sort((a, b) => {
+              const al = localCloudIds.has(a.id) ? 0 : 1;
+              const bl = localCloudIds.has(b.id) ? 0 : 1;
+              return al - bl;
+            });
+            const keep = rows[0];
+            for (const rp of rows.slice(1)) {
+              const { error: delErr } = await cloud.client.from('payments').delete().eq('id', rp.id);
+              if (delErr) console.warn('payment dupe delete', delErr.message || delErr);
+              for (const p of localPays) {
+                if (p.cloudId === rp.id) {
+                  p.cloudId = keep.id;
+                  p.id = keep.id;
+                }
+              }
+              localCloudIds.delete(rp.id);
+              localCloudIds.add(keep.id);
+            }
+          }
+        }
+
+        for (const payment of localPays) {
+          if (payment.cloudId) continue;
+          const { data, error } = await cloud.client.from('payments').insert({
+            invoice_id: invoice.cloudId,
+            amount_minor: toMinor(payment.amount, currency),
+            currency,
+            status: 'succeeded',
+            provider: 'manual',
+            paid_at: payment.date ? new Date(payment.date).toISOString() : new Date().toISOString()
+          }).select('id').single();
+          if (error) throw error;
+          payment.cloudId = data.id;
+        }
+        dedupePayments(invoice);
+      } catch (paySyncErr) {
+        console.warn('payment sync', paySyncErr.message || paySyncErr);
+        throw paySyncErr;
       }
     }
     persistDb();
@@ -3014,9 +3084,18 @@ async function hydrateFromCloud() {
     })),
     payments: (invoice.payments || []).filter(payment => payment.status === 'succeeded').map(payment => ({
       id: payment.id, cloudId: payment.id, amount: fromMinor(payment.amount_minor, invoice.currency),
-      date: payment.paid_at?.slice(0, 10) || invoice.issue_date, note: 'Payment received'
-    }))
-  }));
+      date: payment.paid_at?.slice(0, 10) || invoice.issue_date, note: payment.note || 'Payment received'
+    })),
+    _paymentsMigrated: true,
+    paid: undefined
+  })).map(inv => {
+    dedupePayments(inv);
+    syncPaidFlag(inv);
+    if (inv.paid) inv.status = 'Paid';
+    else if (amountPaid(inv) > 0) inv.status = inv.status === 'Draft' ? 'Sent' : inv.status;
+    else if (inv.status === 'Paid') inv.status = 'Sent';
+    return inv;
+  });
   persistDb();
   return true;
 }
@@ -3506,10 +3585,13 @@ function total(i) {
 function ensurePayments(i) {
   if (!i) return [];
   if (!Array.isArray(i.payments)) i.payments = [];
-  // Migrate legacy boolean paid → one full payment
-  if (i.paid && !i.payments.length) {
+  // One-time migration: legacy invoices used paid:true without a payments[].
+  // Never re-create payments after the user has cleared them (payments is []).
+  if (i.paid && i.payments.length === 0 && i._paymentsMigrated !== true) {
     const t = total(i);
-    if (t > 0) {
+    if (t > 0 && i.paidAt) {
+      // Only migrate when there is evidence of a historical paid date
+      // and we have never touched the payments array this session/persist.
       i.payments.push({
         id: crypto.randomUUID(),
         amount: t,
@@ -3517,12 +3599,47 @@ function ensurePayments(i) {
         note: 'Paid in full'
       });
     }
+    i._paymentsMigrated = true;
   }
   return i.payments;
 }
 
+function paymentDedupeKey(p) {
+  if (!p) return '';
+  if (p.cloudId) return 'c:' + p.cloudId;
+  if (p.id) return 'i:' + p.id;
+  const amt = Math.round((Number(p.amount) || 0) * 100);
+  return 'a:' + amt + '|d:' + (p.date || '') + '|n:' + (p.note || '');
+}
+
+/** Remove duplicate payment rows (same cloud id or same amount+date). Keeps first. */
+function dedupePayments(i) {
+  if (!i) return [];
+  ensurePayments(i);
+  const seen = new Set();
+  const out = [];
+  for (const p of i.payments) {
+    const key = paymentDedupeKey(p);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  // Second pass: collapse identical amount+date even with different ids (sync dupes)
+  const seenAmtDate = new Set();
+  const final = [];
+  for (const p of out) {
+    const amt = Math.round((Number(p.amount) || 0) * 100);
+    const ad = amt + '|' + (p.date || '');
+    if (seenAmtDate.has(ad)) continue;
+    seenAmtDate.add(ad);
+    final.push(p);
+  }
+  i.payments = final;
+  return i.payments;
+}
+
 function amountPaid(i) {
-  return ensurePayments(i).reduce((n, p) => n + (Number(p.amount) || 0), 0);
+  return dedupePayments(i).reduce((n, p) => n + (Number(p.amount) || 0), 0);
 }
 
 function balanceDue(i) {
@@ -5212,6 +5329,7 @@ function renderPayments() {
   if (elB) elB.textContent = money(bal, cur);
   const dateEl = $('#payDate');
   if (dateEl && !dateEl.value) dateEl.value = today;
+  dedupePayments(edit);
   const list = $('#payList');
   if (list) {
     if (!edit.payments.length) {
@@ -5325,8 +5443,18 @@ function addPaymentToEdit(amount, date, note, method) {
     const dp = e.target.closest('[data-del-pay]');
     if (dp && edit) {
       e.preventDefault();
+      const removed = ensurePayments(edit).find(p => p.id === dp.dataset.delPay);
       edit.payments = ensurePayments(edit).filter(p => p.id !== dp.dataset.delPay);
+      edit._paymentsMigrated = true; // prevent legacy paid-flag resurrection
+      if (!edit.payments.length) {
+        edit.paid = false;
+        edit.paidAt = null;
+      }
       syncPaidFlag(edit);
+      // Keep invoice status consistent with remaining balance
+      if (balanceDue(edit) > 0.001 && edit.status === 'Paid') {
+        edit.status = 'Sent';
+      }
       const idx = db.invoices.findIndex(i => i.id === edit.id);
       if (idx >= 0) {
         const copy = structuredClone(edit);
@@ -5334,6 +5462,19 @@ function addPaymentToEdit(amount, date, note, method) {
         db.invoices[idx] = copy;
         save();
       }
+      // Delete from Supabase immediately so refresh/hydrate cannot restore it
+      (async () => {
+        try {
+          if (removed?.cloudId && cloud.client && cloud.user) {
+            const { error } = await cloud.client.from('payments').delete().eq('id', removed.cloudId);
+            if (error) console.warn('payment cloud delete', error.message || error);
+          }
+          // Also push invoice status if cloud-backed
+          if (edit?.cloudId) queueCloudSync();
+        } catch (err) {
+          console.warn('payment cloud delete', err.message || err);
+        }
+      })();
       renderPayments();
       preview();
       toast('Payment removed.');
