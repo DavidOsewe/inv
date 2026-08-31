@@ -3060,6 +3060,31 @@ async function hydrateFromCloud() {
     db.profile.taxLabel = remoteTaxProfile.tax_label || db.profile.taxLabel || 'Tax';
     db.profile.defaultTax = Number(remoteTaxProfile.default_tax_rate ?? db.profile.defaultTax ?? 0);
   }
+  // Prefer organization currency from cloud when present
+  try {
+    const { data: orgRow } = await cloud.client.from('organizations')
+      .select('currency, name')
+      .eq('id', organizationId)
+      .maybeSingle();
+    if (orgRow?.currency) {
+      // Only adopt cloud currency if local is still the blank default,
+      // OR cloud matches a non-USD choice the user already saved (re-hydrate).
+      const localRep = String(db.profile.reporting || 'USD').toUpperCase();
+      const cloudCur = String(orgRow.currency).toUpperCase();
+      if (localRep === 'USD' && cloudCur !== 'USD') {
+        db.profile.reporting = cloudCur;
+      } else if (localRep !== 'USD') {
+        // keep local user preference — will push on next sync
+      } else {
+        db.profile.reporting = cloudCur || localRep;
+      }
+    }
+    if (orgRow?.name && !(db.profile.name || '').trim()) {
+      db.profile.name = orgRow.name;
+    }
+  } catch (e) {
+    console.warn('org currency hydrate', e.message || e);
+  }
   const { data: remoteInvoices, error } = await cloud.client.from('invoices')
     .select('*, clients(*), invoice_line_items(*), payments(*)')
     .eq('organization_id', organizationId)
@@ -3174,17 +3199,20 @@ let activeUserId = null;
 let db = structuredClone(defaultDB);
 
 function normalizeDbProfile() {
-  // Migrate older profiles
+  // Migrate older profiles — never overwrite an explicit reporting currency
   if (db.profile) {
-  db.profile.taxId = db.profile.taxId ?? '';
-  db.profile.taxCountry = db.profile.taxCountry ?? 'US';
-  db.profile.taxState = db.profile.taxState ?? '';
-  db.profile.taxRegistered = db.profile.taxRegistered ?? false;
-  db.profile.taxLabel = db.profile.taxLabel ?? 'Tax';
-  db.profile.defaultTax = db.profile.defaultTax ?? 0;
-  db.profile.invoicePrefix = db.profile.invoicePrefix ?? 'INV';
-  db.profile.nextInvoiceNumber = db.profile.nextInvoiceNumber ?? (db.invoices.length + 1);
-  db.profile.paymentDetails = db.profile.paymentDetails ?? '';
+    db.profile.taxId = db.profile.taxId ?? '';
+    db.profile.taxCountry = db.profile.taxCountry ?? 'US';
+    db.profile.taxState = db.profile.taxState ?? '';
+    db.profile.taxRegistered = db.profile.taxRegistered ?? false;
+    db.profile.taxLabel = db.profile.taxLabel ?? 'Tax';
+    db.profile.defaultTax = db.profile.defaultTax ?? 0;
+    db.profile.invoicePrefix = db.profile.invoicePrefix ?? 'INV';
+    db.profile.nextInvoiceNumber = db.profile.nextInvoiceNumber ?? (db.invoices.length + 1);
+    db.profile.paymentDetails = db.profile.paymentDetails ?? '';
+    // Keep whatever the user chose; only default when missing/empty
+    if (!db.profile.reporting) db.profile.reporting = 'USD';
+    else db.profile.reporting = String(db.profile.reporting).toUpperCase();
   }
 }
 normalizeDbProfile();
@@ -4736,8 +4764,61 @@ document.addEventListener('input', e => {
 });
 
 // Normalize qty/rate to numbers when leaving the field
+/** Persist any Business profile field marked data-p="…" */
+function saveProfileField(el) {
+  if (!el || !el.dataset || !el.dataset.p || !db?.profile) return;
+  const key = el.dataset.p;
+  let val = el.type === 'checkbox' ? el.checked : el.value;
+  if (key === 'defaultTax' || key === 'nextInvoiceNumber') {
+    const n = Number(val);
+    val = Number.isFinite(n) ? n : (key === 'defaultTax' ? 0 : 1);
+  }
+  if (key === 'taxCountry' || key === 'reporting') {
+    val = String(val || '').toUpperCase();
+  }
+  db.profile[key] = val;
+  save();
+  if (key === 'reporting') {
+    const label = document.getElementById('reportingLabel');
+    if (label) label.textContent = 'Reported in ' + val;
+    // Soft tax hint from currency (does not override user tax if already set)
+    try {
+      const sug = typeof suggestTaxForCurrency === 'function' ? suggestTaxForCurrency(val) : null;
+      const hint = document.getElementById('taxSuggestHint');
+      if (sug && hint && !hint.textContent) hint.textContent = sug.region || '';
+    } catch {}
+    if (typeof dashboard === 'function' && document.getElementById('dashboard')?.classList.contains('active')) {
+      try { dashboard(); } catch {}
+    }
+    toast('Reporting currency set to ' + val);
+  }
+  if (key === 'taxCountry') {
+    applyTaxCountrySuggestion(val, true);
+  }
+}
+
 document.getElementById('taxCountry')?.addEventListener('change', (e) => {
+  // Also persist country (applyTaxCountrySuggestion may set defaults)
+  if (db?.profile) {
+    db.profile.taxCountry = String(e.target.value || 'US').toUpperCase();
+    save();
+  }
   applyTaxCountrySuggestion(e.target.value, true);
+});
+
+// Save all profile fields on change (selects) and blur/input (text)
+document.addEventListener('change', (e) => {
+  if (e.target?.dataset?.p) saveProfileField(e.target);
+  if (e.target?.id === 'taxRegistered' && db?.profile) {
+    db.profile.taxRegistered = e.target.value === 'true' || e.target.value === true;
+    save();
+  }
+});
+document.addEventListener('input', (e) => {
+  // Debounce-ish: save text fields as user types into data-p inputs
+  if (e.target?.dataset?.p && e.target.tagName !== 'SELECT') {
+    saveProfileField(e.target);
+  }
 });
 
 document.addEventListener('change', e => {
