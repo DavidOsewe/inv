@@ -847,6 +847,47 @@ input:focus:not(:focus-visible) {
   flex: 1;
 }
 .plan-tier .button { margin-top: 12px; width: 100%; }
+
+.team-invite-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 4px;
+}
+.team-list {
+  display: grid;
+  gap: 8px;
+}
+.team-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  font-size: 13px;
+}
+.team-row b { color: var(--text); }
+.team-role {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--panel-2);
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+.team-locked {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+
 .plan-note {
   font-size: 12px;
   color: var(--muted);
@@ -1928,7 +1969,7 @@ input:focus:not(:focus-visible) {
             <div class="plan-tier featured">
               <div class="plan-tier-name">Pro</div>
               <div class="plan-tier-price" id="planTierProPrice">—</div>
-              <div class="plan-tier-desc" id="planTierProMeta">Unlimited invoices &amp; clients · recurring invoices · reports · API · team</div>
+              <div class="plan-tier-desc" id="planTierProMeta">Unlimited invoices &amp; clients · <strong>invite team</strong> · reports · API · recurring</div>
               <button class="button" type="button" data-plan-page-upgrade="pro">Upgrade to Pro</button>
             </div>
           </div>
@@ -1939,6 +1980,41 @@ input:focus:not(:focus-visible) {
         <h3>Feature access</h3>
         <p class="section-sub" style="margin:4px 0 14px">Premium features stay visible so you know exactly what your plan unlocks.</p>
         <div id="featureAccessList" class="feature-access-grid"></div>
+      </div>
+
+      <div class="insight stack-gap" id="teamSection">
+        <h3>Team</h3>
+        <p class="section-sub" id="teamSectionLead" style="margin:4px 0 14px">
+          Pro lets you invite colleagues to the same business — shared invoices and clients.
+        </p>
+        <div id="teamLocked" class="team-locked" style="display:none">
+          <p style="margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.55">
+            Team invites are included with <b>Pro</b>. Upgrade to add members who can work on invoices with you.
+          </p>
+          <button class="button primary" type="button" data-plan-page-upgrade="pro">Upgrade to Pro</button>
+        </div>
+        <div id="teamPanel" style="display:none">
+          <div class="team-invite-row">
+            <div class="field" style="flex:1;margin:0;min-width:180px">
+              <label>Invite by email</label>
+              <input id="teamInviteEmail" type="email" placeholder="colleague@company.com" autocomplete="email">
+            </div>
+            <div class="field" style="width:140px;margin:0">
+              <label>Role</label>
+              <select id="teamInviteRole">
+                <option value="member">Member</option>
+              </select>
+            </div>
+            <div style="align-self:flex-end">
+              <button class="button primary" type="button" id="teamInviteBtn">Send invite</button>
+            </div>
+          </div>
+          <p style="font-size:12px;color:var(--muted);margin:8px 0 16px">
+            Members can manage invoices and clients. Billing and plan stay with the owner. You’ll get a link to share (email delivery comes later).
+          </p>
+          <div id="teamMembersList" class="team-list"></div>
+          <div id="teamInvitesList" class="team-list" style="margin-top:12px"></div>
+        </div>
       </div>
     </section>
 
@@ -3622,7 +3698,7 @@ const FEATURE_REQUIREMENTS = {
   advanced_tax: { label: 'Advanced tax tools', plan: 'starter' },
   advanced_reports: { label: 'Advanced reports', plan: 'pro' },
   recurring_invoices: { label: 'Recurring invoices', plan: 'pro' },
-  team_collaboration: { label: 'Team collaboration', plan: 'pro' },
+  team_collaboration: { label: 'Invite team', plan: 'pro' },
   api_access: { label: 'API access', plan: 'pro' },
   priority_support: { label: 'Priority support', plan: 'pro' }
 };
@@ -4567,7 +4643,7 @@ async function planView() {
   const descriptions = {
     free: 'A simple starting plan for freelancers and small businesses.',
     starter: 'More capacity for businesses sending invoices regularly.',
-    pro: 'Full invoicedey capacity for growing teams and advanced workflows.'
+    pro: 'Unlimited capacity plus invite your team — shared invoices and clients.'
   };
   $('#planDescription').textContent = descriptions[plan] || descriptions.free;
 
@@ -4578,7 +4654,7 @@ async function planView() {
     ['advanced_tax', 'Advanced tax tools'],
     ['advanced_reports', 'Advanced reports'],
     ['recurring_invoices', 'Recurring invoices'],
-    ['team_collaboration', 'Team collaboration'],
+    ['team_collaboration', 'Invite team'],
     ['api_access', 'API access']
   ];
   $('#planFeatureList').innerHTML = featureLabels.map(([key,label]) => {
@@ -4622,6 +4698,8 @@ async function planView() {
   } catch (err) {
     console.warn('plan pricing paint', err.message || err);
   }
+
+  try { await loadTeamPanel(); } catch (e) { console.warn('team panel', e.message || e); }
 }
 
 function profile() {
@@ -5407,6 +5485,7 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
       }
       await syncProfile(client, session.user);
       await startCloudSync(client, session.user);
+      try { await maybeAcceptInviteFromUrl(); } catch (e) { console.warn('invite accept', e.message || e); }
       if (document.getElementById('profile')?.classList.contains('active')) profile();
     }
   }
@@ -6432,6 +6511,145 @@ async function deleteClientById(clientId) {
       ? 'Could not delete client while invoices still need a client. Try again.'
       : ('Could not delete client: ' + msg));
     throw error;
+  }
+}
+
+
+/* ---------- Team (Pro) ---------- */
+async function loadTeamPanel() {
+  const locked = document.getElementById('teamLocked');
+  const panel = document.getElementById('teamPanel');
+  const lead = document.getElementById('teamSectionLead');
+  if (!locked || !panel) return;
+
+  const canTeam = hasFeature('team_collaboration') || String(entitlements?.plan || '').toLowerCase() === 'pro';
+  if (!canTeam) {
+    locked.style.display = '';
+    panel.style.display = 'none';
+    if (lead) lead.textContent = 'Pro lets you invite colleagues to the same business — shared invoices and clients.';
+    return;
+  }
+  locked.style.display = 'none';
+  panel.style.display = '';
+  if (lead) lead.textContent = 'Invite your team. Members share invoices and clients for this business.';
+
+  const membersEl = document.getElementById('teamMembersList');
+  const invitesEl = document.getElementById('teamInvitesList');
+  if (membersEl) membersEl.innerHTML = '<div style="color:var(--muted);font-size:13px">Loading team…</div>';
+  if (invitesEl) invitesEl.innerHTML = '';
+
+  try {
+    if (!cloud.client || !cloud.user) {
+      if (membersEl) membersEl.innerHTML = '<div style="color:var(--muted);font-size:13px">Sign in to manage your team.</div>';
+      return;
+    }
+    const organizationId = await ensureCloudOrganization();
+    const { data, error } = await cloud.client.rpc('list_organization_team', {
+      p_organization_id: organizationId
+    });
+    if (error) throw error;
+    const payload = typeof data === 'string' ? JSON.parse(data) : data;
+    const members = payload?.members || [];
+    const invites = payload?.invites || [];
+
+    if (membersEl) {
+      if (!members.length) {
+        membersEl.innerHTML = '<div style="color:var(--muted);font-size:13px">You are the only member so far.</div>';
+      } else {
+        membersEl.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Members</div>' +
+          members.map(m => {
+            const email = m.email || m.user_id || 'Member';
+            const role = m.role || 'member';
+            return `<div class="team-row"><span><b>${email}</b></span><span class="team-role">${role}</span></div>`;
+          }).join('');
+      }
+    }
+    if (invitesEl) {
+      if (!invites.length) {
+        invitesEl.innerHTML = '';
+      } else {
+        invitesEl.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Pending invites</div>' +
+          invites.map(inv => {
+            const link = window.location.origin + '/index.html?invite=' + encodeURIComponent(inv.token || '');
+            return `<div class="team-row">
+              <span><b>${inv.email}</b><div style="font-size:11px;color:var(--muted);margin-top:2px">Pending</div></span>
+              <button class="button small" type="button" data-copy-invite="${link}">Copy link</button>
+            </div>`;
+          }).join('');
+      }
+    }
+  } catch (e) {
+    console.warn('team panel', e.message || e);
+    if (membersEl) {
+      membersEl.innerHTML = '<div style="color:var(--muted);font-size:13px">Team data will appear after you run the team SQL migration and upgrade to Pro.</div>';
+    }
+  }
+}
+
+document.getElementById('teamInviteBtn')?.addEventListener('click', async () => {
+  const email = (document.getElementById('teamInviteEmail')?.value || '').trim();
+  const role = document.getElementById('teamInviteRole')?.value || 'member';
+  if (!email || !email.includes('@')) {
+    toast('Enter a valid email');
+    return;
+  }
+  if (!(hasFeature('team_collaboration') || String(entitlements?.plan || '').toLowerCase() === 'pro')) {
+    showUpgradeModal('Invite team is a Pro feature', 'Upgrade to Pro to invite colleagues to your business.');
+    return;
+  }
+  const btn = document.getElementById('teamInviteBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Inviting…'; }
+  try {
+    if (!cloud.client || !cloud.user) throw new Error('Sign in first');
+    const organizationId = await ensureCloudOrganization();
+    const { data, error } = await cloud.client.rpc('create_organization_invite', {
+      p_organization_id: organizationId,
+      p_email: email,
+      p_role: role
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    const token = row?.token;
+    if (token) {
+      const link = window.location.origin + '/index.html?invite=' + encodeURIComponent(token);
+      try { await navigator.clipboard.writeText(link); } catch {}
+      toast('Invite created — link copied');
+    } else {
+      toast('Invite created');
+    }
+    const input = document.getElementById('teamInviteEmail');
+    if (input) input.value = '';
+    await loadTeamPanel();
+  } catch (e) {
+    console.error(e);
+    toast(e.message || 'Could not create invite');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Send invite'; }
+  }
+});
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-copy-invite]');
+  if (!btn) return;
+  const link = btn.getAttribute('data-copy-invite');
+  navigator.clipboard.writeText(link).then(() => toast('Invite link copied')).catch(() => {
+    window.prompt('Copy invite link:', link);
+  });
+});
+
+async function maybeAcceptInviteFromUrl() {
+  try {
+    const token = new URLSearchParams(location.search).get('invite');
+    if (!token || !cloud.client || !cloud.user) return;
+    const { data, error } = await cloud.client.rpc('accept_organization_invite', { p_token: token });
+    if (error) throw error;
+    toast('You joined the team');
+    const url = new URL(location.href);
+    url.searchParams.delete('invite');
+    history.replaceState({}, '', url.pathname + url.search);
+    await loadTeamPanel();
+  } catch (e) {
+    console.warn('accept invite', e.message || e);
   }
 }
 
