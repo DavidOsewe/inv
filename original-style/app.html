@@ -1750,7 +1750,7 @@ input:focus:not(:focus-visible) {
       <div class="form settings">
         <h2>Business profile</h2>
         <p class="section-lead">
-          Your reporting currency is used for dashboard totals. Each invoice can still use its own currency.
+          Business country sets your plan pricing band. Reporting currency is for dashboard totals — each invoice can still use its own currency.
         </p>
         <div class="logo-upload">
           <img class="logo-preview" id="logoPreview" alt="Logo">
@@ -1767,6 +1767,48 @@ input:focus:not(:focus-visible) {
           <div class="field"><label>Email</label><input data-p="email"></div>
           <div class="field"><label>Phone number</label><input data-p="phone" placeholder="+1 415 555 0132"></div>
           <div class="field">
+            <label>Business country</label>
+            <select data-p="taxCountry" id="taxCountry">
+              <option value="NG">Nigeria</option>
+              <option value="GH">Ghana</option>
+              <option value="KE">Kenya</option>
+              <option value="ZA">South Africa</option>
+              <option value="US">United States</option>
+              <option value="GB">United Kingdom</option>
+              <option value="AU">Australia</option>
+              <option value="CA">Canada</option>
+              <option value="IN">India</option>
+              <option value="EG">Egypt</option>
+              <option value="AE">United Arab Emirates</option>
+              <option value="SA">Saudi Arabia</option>
+              <option value="DE">Germany</option>
+              <option value="FR">France</option>
+              <option value="NL">Netherlands</option>
+              <option value="IE">Ireland</option>
+              <option value="BR">Brazil</option>
+              <option value="MX">Mexico</option>
+              <option value="ID">Indonesia</option>
+              <option value="PH">Philippines</option>
+              <option value="VN">Viet Nam</option>
+              <option value="SG">Singapore</option>
+              <option value="JP">Japan</option>
+              <option value="CN">China</option>
+              <option value="TR">Türkiye</option>
+              <option value="UG">Uganda</option>
+              <option value="RW">Rwanda</option>
+              <option value="ET">Ethiopia</option>
+              <option value="CI">Côte d’Ivoire</option>
+              <option value="SN">Senegal</option>
+              <option value="NZ">New Zealand</option>
+              <option value="CH">Switzerland</option>
+              <option value="SE">Sweden</option>
+              <option value="NO">Norway</option>
+              <option value="DK">Denmark</option>
+            </select>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">Used for plan pricing band and tax defaults.</div>
+          </div>
+        </div>
+        <div class="field" style="max-width:320px">
             <label>Reporting currency</label>
             <select data-p="reporting" id="reportingSelect">
                 <option value="USD">USD — US Dollar</option>
@@ -1795,8 +1837,7 @@ input:focus:not(:focus-visible) {
                 <option value="MXN">MXN — Mexican Peso</option>
                 <option value="PHP">PHP — Philippine Peso</option>
                 <option value="THB">THB — Thai Baht</option>
-</select>
-          </div>
+            </select>
         </div>
         <div class="field"><label>Business address</label><input data-p="address"></div>
 
@@ -1805,18 +1846,10 @@ input:focus:not(:focus-visible) {
           V1 supports manual tax configuration for the US, UK, Australia, Canada, Nigeria and India.
           invoicedey does not determine tax liability automatically.
         </p>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 14px">
+          Business country is set above (it also controls plan pricing). Adjust state and registration here.
+        </p>
         <div class="three">
-          <div class="field">
-            <label>Business country</label>
-            <select data-p="taxCountry" id="taxCountry">
-              <option value="US">United States</option>
-              <option value="GB">United Kingdom</option>
-              <option value="AU">Australia</option>
-              <option value="CA">Canada</option>
-              <option value="NG">Nigeria</option>
-              <option value="IN">India</option>
-            </select>
-          </div>
           <div class="field">
             <label>State / Province</label>
             <input data-p="taxState" id="taxState" placeholder="e.g. Texas, Ontario, Lagos">
@@ -1828,6 +1861,7 @@ input:focus:not(:focus-visible) {
               <option value="true">Yes</option>
             </select>
           </div>
+          <div class="field"></div>
         </div>
         <div class="three">
           <div class="field">
@@ -4794,6 +4828,11 @@ function saveProfileField(el) {
   }
   if (key === 'taxCountry') {
     applyTaxCountrySuggestion(val, true);
+    // Refresh plan prices when country (pricing band) changes
+    if (document.getElementById('plan')?.classList.contains('active') && typeof planView === 'function') {
+      try { planView(); } catch (err) { console.warn('planView refresh', err.message || err); }
+    }
+    toast('Business country set to ' + val + ' — plan prices updated');
   }
 }
 
