@@ -4043,34 +4043,55 @@ const COUNTRY_CURRENCY = {
   NG: 'NGN', GH: 'GHS', KE: 'KES', ZA: 'ZAR', US: 'USD', GB: 'GBP',
   CA: 'CAD', AU: 'AUD', EU: 'EUR', DE: 'EUR', FR: 'EUR', NL: 'EUR', IE: 'EUR',
   IN: 'INR', EG: 'EGP', AE: 'AED', SA: 'SAR', JP: 'JPY', CN: 'CNY', BR: 'BRL',
-  MX: 'MXN', CI: 'XOF'
+  MX: 'MXN', CI: 'XOF', SN: 'XOF', CM: 'XAF',
+  // LIC
+  RW: 'RWF', UG: 'UGX', ET: 'ETB',
+  // more LMC / others
+  TZ: 'TZS', PK: 'PKR', BD: 'BDT', MA: 'MAD', AO: 'AOA',
+  PH: 'PHP', VN: 'VND', TH: 'THB', MY: 'MYR', ID: 'IDR', TR: 'TRY',
+  CO: 'COP', AR: 'ARS', NZ: 'NZD', SG: 'SGD', CH: 'CHF',
+  SE: 'SEK', NO: 'NOK', DK: 'DKK', KR: 'KRW', SC: 'SCR'
 };
 
 // Indicative FX vs USD for display when DB has no local_price (not for charging)
 const FX_USD = {
   USD: 1, NGN: 1600, GHS: 15.5, KES: 130, ZAR: 18, GBP: 0.79, EUR: 0.92,
   CAD: 1.36, AUD: 1.52, INR: 84, EGP: 50, AED: 3.67, SAR: 3.75, JPY: 150,
-  CNY: 7.2, BRL: 5.5, MXN: 17, XOF: 600
+  CNY: 7.2, BRL: 5.5, MXN: 17, XOF: 600, XAF: 600,
+  // LIC
+  RWF: 1300, UGX: 3700, ETB: 120,
+  TZS: 2600, PKR: 280, BDT: 120, MAD: 10, AOA: 850,
+  PHP: 58, VND: 25000, THB: 35, MYR: 4.5, IDR: 16000, TRY: 34,
+  COP: 4100, ARS: 1000, NZD: 1.65, SGD: 1.35, CHF: 0.88,
+  SEK: 10.5, NOK: 10.7, DKK: 6.9, KRW: 1350, SCR: 14
 };
 
 function currencySymbol(code) {
   return ({
     USD: '$', NGN: '₦', GHS: 'GH₵', KES: 'KSh', ZAR: 'R', GBP: '£', EUR: '€',
     CAD: 'CA$', AUD: 'A$', INR: '₹', EGP: 'E£', AED: 'AED ', SAR: 'SAR ',
-    JPY: '¥', CNY: '¥', BRL: 'R$', MXN: 'MX$', XOF: 'CFA '
+    JPY: '¥', CNY: '¥', BRL: 'R$', MXN: 'MX$', XOF: 'CFA ', XAF: 'CFA ',
+    RWF: 'FRw ', UGX: 'USh ', ETB: 'Br ', TZS: 'TSh ', PKR: '₨', BDT: '৳',
+    MAD: 'MAD ', AOA: 'Kz ', PHP: '₱', VND: '₫', THB: '฿', MYR: 'RM ',
+    IDR: 'Rp ', TRY: '₺', COP: 'COL$', ARS: 'AR$', NZD: 'NZ$', SGD: 'S$',
+    CHF: 'CHF ', SEK: 'kr ', NOK: 'kr ', DKK: 'kr ', KRW: '₩', SCR: 'SCR '
   })[code] || (code + ' ');
 }
 
 function formatMoneyCents(cents, currency) {
   const n = (Number(cents) || 0) / 100;
   const cur = currency || 'USD';
+  // Many African currencies are typically shown without decimals
+  const zeroDec = ['JPY', 'NGN', 'KES', 'GHS', 'RWF', 'UGX', 'TZS', 'XOF', 'XAF', 'VND', 'KRW', 'IDR'];
+  const maxFrac = zeroDec.includes(cur) ? 0 : (n % 1 === 0 ? 0 : 2);
   try {
     return new Intl.NumberFormat(undefined, {
       style: 'currency', currency: cur,
-      maximumFractionDigits: n % 1 === 0 ? 0 : 2
+      maximumFractionDigits: maxFrac,
+      minimumFractionDigits: 0
     }).format(n);
   } catch {
-    return currencySymbol(cur) + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    return currencySymbol(cur) + n.toLocaleString(undefined, { maximumFractionDigits: maxFrac });
   }
 }
 
