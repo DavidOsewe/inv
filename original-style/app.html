@@ -3782,36 +3782,157 @@ function maybePromptSignup() {
 }
 
 document.getElementById('upgradeLater')?.addEventListener('click', () => document.getElementById('upgradeModal')?.classList.remove('show'));
-async function notifyBillingComingSoon(plan, source) {
-  const planId = String(plan || 'starter').toLowerCase();
+
+/* ---------- Paystack billing (scaffolding) ----------
+ * When ready:
+ *  1. Run billing_paystack.sql
+ *  2. Create Paystack plans + set pricing_plan_rules.paystack_plan_code
+ *  3. Deploy Edge Functions: create-checkout-session, paystack-webhook
+ *  4. Set PAYSTACK_SECRET_KEY (and optional PAYSTACK_PUBLIC_KEY) in Supabase secrets
+ * Until then, startPaystackCheckout falls back to a clear “setup in progress” message.
+ */
+const BILLING_PROVIDER = 'paystack';
+const BILLING_READY = false; // flip to true once Edge Function + keys are live
+
+function formatPlanPriceLine(planId, pricing) {
   const label = planId === 'pro' ? 'Pro' : 'Starter';
-  track('upgrade_cta_clicked', { plan: planId, source: source || 'unknown' });
-  let priceLine = label;
-  try {
-    const country = (db.profile?.taxCountry || 'NG').toUpperCase();
-    const p = await resolvePlanPricing(country, planId);
-    if (p && p.chargeCents != null) {
-      const amount = formatMoneyCents(p.chargeCents, p.chargeCurrency);
-      const period = p.interval === 'annually' ? '/year' : '/month';
-      priceLine = `${label} — ${amount}${period}`;
-      if (p.interval === 'annually') {
-        const monthly = formatMoneyCents(Math.round(p.chargeCents / 12), p.chargeCurrency);
-        priceLine += ` (≈ ${monthly}/month, billed annually)`;
+  if (!pricing || pricing.chargeCents == null) return label;
+  const amount = formatMoneyCents(pricing.chargeCents, pricing.chargeCurrency);
+  const period = pricing.interval === 'annually' ? '/year' : '/month';
+  let line = `${label} — ${amount}${period}`;
+  if (pricing.interval === 'annually') {
+    const monthly = formatMoneyCents(Math.round(pricing.chargeCents / 12), pricing.chargeCurrency);
+    line += ` (≈ ${monthly}/month, billed annually)`;
+  }
+  return line;
+}
+
+/**
+ * Initialize Paystack checkout for a plan upgrade.
+ * Calls Supabase Edge Function `create-checkout-session` which holds the secret key.
+ * Returns { authorization_url, reference } on success.
+ */
+async function createPaystackCheckoutSession(planId, source) {
+  const client = cloud.client || await getSupabase();
+  if (!client || !cloud.user) {
+    throw new Error('SIGN_IN_REQUIRED');
+  }
+  const organizationId = await ensureCloudOrganization();
+  const country = (db.profile?.taxCountry || 'NG').toUpperCase();
+  const pricing = await resolvePlanPricing(country, planId);
+
+  const { data, error } = await client.functions.invoke('create-checkout-session', {
+    body: {
+      plan: planId,
+      source: source || 'unknown',
+      organization_id: organizationId,
+      country_code: country,
+      amount_minor: pricing?.chargeCents,
+      currency: pricing?.chargeCurrency,
+      interval: pricing?.interval,
+      paystack_plan_code: pricing?.paystackPlanCode || pricing?._paystackPlanCode || null,
+      callback_url: (window.location.origin || '') + '/payment-success.html',
+      metadata: {
+        product: 'invoicedey',
+        plan: planId,
+        band: pricing?.band || null
       }
     }
-  } catch (e) {
-    console.warn('pricing notify', e.message || e);
+  });
+
+  if (error) throw error;
+  const payload = typeof data === 'string' ? JSON.parse(data) : data;
+  if (!payload?.authorization_url && !payload?.access_code) {
+    throw new Error(payload?.message || 'Checkout session could not be created');
   }
-  alert(`${priceLine} billing is coming soon. Your current plan remains active.`);
+  return payload;
+}
+
+async function startPaystackCheckout(plan, source) {
+  const planId = String(plan || 'starter').toLowerCase();
+  const label = planId === 'pro' ? 'Pro' : 'Starter';
+  track('upgrade_cta_clicked', { plan: planId, source: source || 'unknown', provider: BILLING_PROVIDER });
+
+  let pricing = null;
+  try {
+    const country = (db.profile?.taxCountry || 'NG').toUpperCase();
+    pricing = await resolvePlanPricing(country, planId);
+  } catch (e) {
+    console.warn('pricing checkout', e.message || e);
+  }
+  const priceLine = formatPlanPriceLine(planId, pricing);
+
+  if (!cloud.user) {
+    track('upgrade_signin_required', { plan: planId, source: source || 'unknown' });
+    if (confirm(`${priceLine}\n\nSign in to upgrade your plan.`)) {
+      goToSignup();
+    }
+    return;
+  }
+
+  if (!BILLING_READY) {
+    track('upgrade_billing_not_ready', { plan: planId, source: source || 'unknown' });
+    alert(
+      `${priceLine}\n\nPaystack billing is almost ready. We’re finishing account setup — you’ll be able to upgrade here shortly.\n\nYour current plan remains active.`
+    );
+    return;
+  }
+
+  try {
+    const session = await createPaystackCheckoutSession(planId, source);
+    track('checkout_session_created', {
+      plan: planId,
+      source: source || 'unknown',
+      reference: session.reference || null
+    });
+    if (session.authorization_url) {
+      window.location.href = session.authorization_url;
+      return;
+    }
+    // Optional: Paystack Inline popup if access_code is returned and js is loaded
+    if (session.access_code && window.PaystackPop) {
+      const handler = window.PaystackPop.setup({
+        key: session.public_key,
+        email: cloud.user.email,
+        amount: pricing?.chargeCents,
+        currency: pricing?.chargeCurrency || 'NGN',
+        ref: session.reference,
+        callback: function () {
+          window.location.href = '/payment-success.html?reference=' + encodeURIComponent(session.reference || '');
+        },
+        onClose: function () {
+          track('checkout_closed', { plan: planId, reference: session.reference || null });
+        }
+      });
+      handler.openIframe();
+      return;
+    }
+    throw new Error('No authorization URL returned');
+  } catch (e) {
+    console.warn('paystack checkout', e.message || e);
+    track('checkout_failed', { plan: planId, error: String(e.message || e) });
+    const msg = String(e.message || e);
+    if (msg.includes('SIGN_IN_REQUIRED') || msg.includes('not authenticated')) {
+      if (confirm('Sign in to upgrade your plan.')) goToSignup();
+      return;
+    }
+    if (msg.includes('FunctionsFetchError') || msg.includes('Failed to send') || msg.includes('404')) {
+      alert(
+        `${priceLine}\n\nPaystack checkout is not live yet (Edge Function pending). Your current plan remains active.`
+      );
+      return;
+    }
+    alert(`Could not start checkout for ${label}. Please try again in a moment.\n\n${msg}`);
+  }
 }
 
 document.querySelectorAll('[data-plan-page-upgrade]').forEach(btn => btn.addEventListener('click', () => {
-  notifyBillingComingSoon(btn.dataset.planPageUpgrade, 'plan_page');
+  startPaystackCheckout(btn.dataset.planPageUpgrade, 'plan_page');
 }));
 
 document.querySelectorAll('[data-upgrade-plan]').forEach(btn => btn.addEventListener('click', () => {
   document.getElementById('upgradeModal')?.classList.remove('show');
-  notifyBillingComingSoon(btn.dataset.upgradePlan, 'upgrade_modal');
+  startPaystackCheckout(btn.dataset.upgradePlan, 'upgrade_modal');
 }));
 
 let edit = null;
@@ -4580,6 +4701,7 @@ async function resolvePlanPricing(country, planId) {
           const rawCents = row.local_price_cents != null ? row.local_price_cents : row.price_cents;
           const localized = localizePlanPricing(cc, band, plan, interval, rawCents, rawCurrency);
           localized.source = 'rpc';
+          localized.paystackPlanCode = row.paystack_plan_code || null;
           return localized;
         }
       }
@@ -4681,9 +4803,13 @@ async function planView() {
     const note = document.getElementById('planBillingNote');
     if (note) {
       if (starterP.interval === 'annually') {
-        note.textContent = 'In your region, Starter and Pro are billed annually (Paystack minimum). Billing checkout coming soon.';
+        note.textContent = BILLING_READY
+          ? 'In your region, Starter and Pro are billed annually via Paystack.'
+          : 'In your region, Starter and Pro are billed annually (Paystack minimum). Paystack checkout is being set up — upgrade will go live here soon.';
       } else {
-        note.textContent = 'Billed monthly. Checkout coming soon. Your current plan remains active.';
+        note.textContent = BILLING_READY
+          ? 'Billed monthly via Paystack. Your current plan remains active until you upgrade.'
+          : 'Billed monthly via Paystack. Checkout is being set up — your current plan remains active.';
       }
     }
     // Current plan price card

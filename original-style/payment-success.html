@@ -1,1 +1,36 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>InvoiceDey - Payment</title><style>body{margin:0;background:#f8fafc;color:#0f172a;font:15px system-ui}.box{max-width:520px;margin:100px auto;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:30px;text-align:center}a{display:inline-block;margin-top:18px;background:#2467e3;color:#fff;text-decoration:none;padding:11px 18px;border-radius:9px;font-weight:700}</style></head><body><div class="box"><h1>Payment received</h1><p>We're confirming your Paystack payment. You can return to InvoiceDey.</p><a href="/app.html">Return to InvoiceDey</a></div></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>invoicedey — Payment</title>
+  <style>
+    body { margin: 0; background: #F8FAFC; color: #0F172A; font: 15px/1.5 system-ui, sans-serif; }
+    .box { max-width: 480px; margin: 80px auto; background: #fff; border: 1px solid #E2E8F0; border-radius: 16px; padding: 32px; text-align: center; box-shadow: 0 4px 16px rgba(15,23,42,0.06); }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    p { margin: 0 0 8px; color: #64748B; }
+    .ref { font-size: 12px; color: #94A3B8; word-break: break-all; margin-top: 12px; }
+    a.button { display: inline-block; margin-top: 20px; background: #2467E3; color: #fff; text-decoration: none; padding: 12px 20px; border-radius: 10px; font-weight: 700; }
+    a.button:hover { background: #1d56c4; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Payment received</h1>
+    <p>We’re confirming your Paystack payment and activating your plan. This usually takes a few seconds.</p>
+    <p class="ref" id="refLine" hidden></p>
+    <a class="button" href="/app.html">Return to invoicedey</a>
+  </div>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var ref = params.get('reference') || params.get('trxref') || '';
+      if (ref) {
+        var el = document.getElementById('refLine');
+        el.hidden = false;
+        el.textContent = 'Reference: ' + ref;
+      }
+    })();
+  </script>
+</body>
+</html>
