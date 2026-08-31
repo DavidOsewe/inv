@@ -162,36 +162,59 @@ input:focus:not(:focus-visible) {
 }
 .nav {
   display: grid;
-  gap: 4px;
-  margin-top: 36px;
+  gap: 2px;
+  margin-top: 8px;
+}
+.nav-section {
+  margin: 28px 12px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.85;
 }
 .nav button {
-  padding: 12px 14px;
+  position: relative;
+  padding: 10px 12px 10px 14px;
   border-radius: 10px;
   color: var(--muted);
   text-align: left;
   font-weight: 600;
+  font-size: 13.5px;
   display: flex;
   align-items: center;
   gap: 10px;
   transition: background var(--ease), color var(--ease);
 }
 .nav button:hover {
-  background: var(--blue-soft);
-  color: var(--blue-soft-text);
+  background: var(--panel-2);
+  color: var(--text);
 }
 .nav button.active {
   background: var(--blue-soft);
   color: var(--blue-soft-text);
+  font-weight: 700;
+}
+.nav button.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--blue);
 }
 .nav span {
-  font-size: 18px;
-  width: 24px;
+  font-size: 16px;
+  width: 22px;
   text-align: center;
+  opacity: 0.9;
 }
 .side-note {
-  margin-top: auto;
-  padding: 16px 12px;
+  margin-top: 12px;
+  padding: 12px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 12px;
@@ -204,23 +227,31 @@ input:focus:not(:focus-visible) {
   font-weight: 700;
 }
 
-/* Theme toggle in sidebar */
+/* Theme — preference control, not a destination */
 .theme-toggle {
-  margin-top: 16px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
+  margin-top: 8px;
+  margin-bottom: 4px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  border: 0;
   color: var(--muted);
   font-weight: 600;
-  font-size: 13px;
+  font-size: 12px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  transition: background var(--ease), color var(--ease), border-color var(--ease);
+  gap: 8px;
+  transition: background var(--ease), color var(--ease);
 }
 .theme-toggle:hover {
   background: var(--panel-2);
   color: var(--text);
+}
+.side-footer {
+  margin-top: auto;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* Bottom nav (mobile) */
@@ -1709,17 +1740,15 @@ input:focus:not(:focus-visible) {
 <div class="app">
   <aside class="side">
     <div class="logo">invoice<em>dey</em></div>
+    <div class="nav-section">Workspace</div>
     <nav class="nav">
-      <button class="active" data-view="dashboard"><span>⌂</span> Dashboard</button>
+      <button class="active" data-view="dashboard"><span>⌂</span> Home</button>
       <button data-view="invoices"><span>▤</span> Invoices</button>
       <button data-view="clients"><span>♙</span> Clients</button>
-      <button data-view="profile"><span>⚙</span> Business profile</button>
-      <button data-view="plan"><span>◆</span> Plan & billing</button>
+      <button data-view="profile"><span>⚙</span> Profile</button>
+      <button data-view="plan"><span>◆</span> Plan</button>
     </nav>
-    <button class="theme-toggle" id="themeToggle" type="button" title="Toggle theme">
-      <span id="themeIcon">◐</span>
-      <span id="themeLabel">Dark mode</span>
-    </button>
+    <div class="side-footer">
     <div class="side-note">
       <b>invoicedey</b>
       <div id="growthMeter"></div>
@@ -1738,7 +1767,12 @@ input:focus:not(:focus-visible) {
         <button type="button" class="danger-link" id="appLogoutBtn">Log out</button>
       </div>
     </div>
-  </aside>
+      <button class="theme-toggle" id="themeToggle" type="button" title="Toggle color theme">
+      <span id="themeIcon">◐</span>
+      <span id="themeLabel">Theme</span>
+    </button>
+    </div>
+</aside>
 
   <main class="main">
     <header class="top">
@@ -3784,7 +3818,7 @@ function applyTheme(theme) {
   localStorage.setItem('invoicedey-theme', theme);
   const isDark = theme === 'dark';
   $('#themeIcon').textContent = isDark ? '☀' : '◐';
-  $('#themeLabel').textContent = isDark ? 'Light mode' : 'Dark mode';
+  $('#themeLabel').textContent = isDark ? 'Light' : 'Dark';
 }
 applyTheme(getPreferredTheme());
 $('#themeToggle').onclick = () => {
