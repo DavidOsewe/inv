@@ -410,6 +410,77 @@ input:focus:not(:focus-visible) {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
+
+/* ---- Light UI polish: lists, next action, sticky editor ---- */
+.next-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.next-action-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.next-action-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.next-action-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.next-action-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.inv-due-soon { color: var(--red-text); font-weight: 700; }
+.inv-due-ok { color: var(--muted); }
+.table tbody tr[data-open] { cursor: pointer; }
+.table tbody tr[data-open]:hover { background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+.client-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.editor-sticky-bar {
+  position: sticky;
+  bottom: 64px;
+  z-index: 30;
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin: 16px 0 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 -8px 28px rgba(0,0,0,.12);
+}
+.editor-sticky-bar.show { display: flex; }
+.editor-sticky-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.editor-sticky-stats b { color: var(--text); font-size: 14px; font-weight: 800; }
+.editor-sticky-stats .bal b { color: var(--accent); }
+.editor-sticky-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 720px) {
+  .editor-sticky-bar { bottom: 72px; }
+  .table th:nth-child(3), .table td:nth-child(3) { /* due still visible */ }
+}
+
 @media (max-width: 720px) {
   .dash-hero { padding: 16px; }
   .dash-title { font-size: 18px; }
@@ -1718,6 +1789,7 @@ input:focus:not(:focus-visible) {
           <span class="mini">By invoice value</span>
         </div>
       </div>
+      <div id="nextAction" class="next-action" style="display:none"></div>
       <div class="section-head">
         <h2>Aging analysis</h2>
         <small id="reportingLabel" style="color:var(--muted)"></small>
@@ -2108,6 +2180,17 @@ input:focus:not(:focus-visible) {
           <p style="margin-top:14px;font-size:12px;color:var(--muted)">
             Record partial or full payments. Each payment can generate a receipt.
           </p>
+        </div>
+        <div class="editor-sticky-bar" id="editorStickyBar">
+          <div class="editor-sticky-stats">
+            <span>Total <b id="stickyTotal">—</b></span>
+            <span>Paid <b id="stickyPaid">—</b></span>
+            <span class="bal">Balance <b id="stickyBalance">—</b></span>
+          </div>
+          <div class="editor-sticky-actions">
+            <button class="button" type="button" id="stickySave">Save draft</button>
+            <button class="button primary" type="button" id="stickySend">Mark as sent</button>
+          </div>
         </div>
 
         <button class="button preview-toggle" id="togglePreview">Show invoice preview</button>
@@ -3893,6 +3976,19 @@ function confirmAction(title, message, onConfirm) {
   $('#confirmModal').classList.add('show');
 }
 
+function relativeDueLabel(due) {
+  if (!due) return { text: '—', cls: 'inv-due-ok' };
+  const d = new Date(due + 'T12:00:00');
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const days = Math.floor((d - today) / 86400000);
+  const dateStr = d.toLocaleDateString();
+  if (days < 0) return { text: dateStr + ' · ' + Math.abs(days) + 'd overdue', cls: 'inv-due-soon' };
+  if (days === 0) return { text: dateStr + ' · due today', cls: 'inv-due-soon' };
+  if (days <= 7) return { text: dateStr + ' · in ' + days + 'd', cls: 'inv-due-soon' };
+  return { text: dateStr, cls: 'inv-due-ok' };
+}
+
 function renderInvoiceRows(arr, options = {}) {
   const { showActions = false } = options;
   if (!arr.length) {
@@ -3920,15 +4016,24 @@ function renderInvoiceRows(arr, options = {}) {
     <tbody>
       ${arr.map(i => {
         const st = status(i);
+        const due = relativeDueLabel(i.due);
+        const tot = total(i);
+        const paid = amountPaid(i);
+        const bal = balanceDue(i);
+        const amtExtra = bal <= 0.001 && paid > 0
+          ? `<br><small style="color:var(--green-text)">Paid in full</small>`
+          : paid > 0
+            ? `<br><small style="color:var(--muted)">Bal ${money(bal, i.currency)}</small>`
+            : '';
         return `<tr data-open="${i.id}">
-          <td><b>${i.number}</b><br><small style="color:var(--muted)">${i.title || 'Untitled'}</small></td>
+          <td><b>${i.number || '—'}</b><br><small style="color:var(--muted)">${i.title || 'Untitled'}</small></td>
           <td>${client(i.client)?.name || '—'}</td>
-          <td>${new Date(i.due + 'T12:00:00').toLocaleDateString()}</td>
+          <td class="${due.cls}">${due.text}</td>
           <td><span class="badge ${st.toLowerCase()}">${st}</span></td>
-          <td class="right"><b>${money(total(i), i.currency)}</b>${amountPaid(i) > 0 && balanceDue(i) > 0.001 ? `<br><small style="color:var(--muted)">Bal ${money(balanceDue(i), i.currency)}</small>` : amountPaid(i) > 0 && balanceDue(i) <= 0.001 ? `<br><small style="color:var(--green-text)">Paid</small>` : ''}</td>
+          <td class="right"><b>${money(tot, i.currency)}</b>${amtExtra}</td>
           ${showActions ? `<td class="actions" onclick="event.stopPropagation()">
-            ${balanceDue(i) > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
-            ${amountPaid(i) > 0 ? `<button class="button small" data-receipt="${i.id}">PDF</button>` : ''}
+            ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
+            ${paid > 0 ? `<button class="button small" data-receipt="${i.id}">PDF</button>` : ''}
             <button class="button small danger" data-delete-invoice="${i.id}">Delete</button>
           </td>` : ''}
         </tr>`;
@@ -4028,6 +4133,49 @@ function dashboard() {
     : `<b style="color:var(--green-text)">You are all caught up.</b><br>
        There are no overdue sent invoices. Keep invoices clear and mark payments as they arrive.`;
 
+  // Next action card
+  const na = document.getElementById('nextAction');
+  if (na) {
+    const drafts = all.filter(i => status(i) === 'Draft');
+    let html = '';
+    if (over.length) {
+      const inv = over[0];
+      html = `<div><div class="next-action-label">Next action</div>
+        <div class="next-action-title">Follow up on ${inv.number}</div>
+        <div class="next-action-meta">${client(inv.client)?.name || 'Client'} · ${money(balanceDue(inv), inv.currency)} overdue</div></div>
+        <div class="next-action-actions">
+          <button class="button primary" type="button" data-open="${inv.id}">Open invoice</button>
+          <button class="button" type="button" data-mark-paid="${inv.id}">Mark paid</button>
+        </div>`;
+    } else if (drafts.length) {
+      const inv = drafts[0];
+      html = `<div><div class="next-action-label">Next action</div>
+        <div class="next-action-title">Finish draft ${inv.number}</div>
+        <div class="next-action-meta">${client(inv.client)?.name || 'No client yet'} · ${money(total(inv), inv.currency)}</div></div>
+        <div class="next-action-actions">
+          <button class="button primary" type="button" data-open="${inv.id}">Continue editing</button>
+        </div>`;
+    } else if (open.length) {
+      const inv = open[0];
+      html = `<div><div class="next-action-label">Up next</div>
+        <div class="next-action-title">${inv.number} awaiting payment</div>
+        <div class="next-action-meta">${client(inv.client)?.name || 'Client'} · due ${inv.due || '—'}</div></div>
+        <div class="next-action-actions">
+          <button class="button primary" type="button" data-open="${inv.id}">Open</button>
+          <button class="button" type="button" onclick="newInvoice()">New invoice</button>
+        </div>`;
+    } else {
+      html = '';
+    }
+    if (html) {
+      na.style.display = 'flex';
+      na.innerHTML = html;
+    } else {
+      na.style.display = 'none';
+      na.innerHTML = '';
+    }
+  }
+
   $('#recent').innerHTML = renderInvoiceRows(all.slice(0, 5));
 }
 
@@ -4087,13 +4235,18 @@ function clients() {
   $('#clientList').innerHTML = `<table class="table">
     <thead><tr><th>Client</th><th>Email</th><th>Address</th><th class="right">Invoices</th><th class="right">Actions</th></tr></thead>
     <tbody>${list.map(c => {
-      const count = db.invoices.filter(i => i.client === c.id).length;
+      const invs = db.invoices.filter(i => i.client === c.id);
+      const count = invs.length;
+      const outstanding = invs.reduce((n, i) => {
+        syncPaidFlag(i);
+        return n + (balanceDue(i) > 0.001 && i.status !== 'Draft' ? balanceDue(i) * ((fx[i.currency] ?? 1) / (fx[db.profile.reporting] ?? 1)) : 0);
+      }, 0);
       const initials = String(c.name || '?').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase();
       return `<tr>
-        <td><div style="display:flex;align-items:center;gap:10px"><span class="account-avatar" style="width:30px;height:30px;flex-basis:30px;font-size:10px;border-radius:8px">${initials || '?'}</span><div><b>${c.name}</b>${c.taxId ? `<div style="font-size:11px;color:var(--muted)">${c.taxId}</div>` : ''}</div></div></td>
+        <td><div style="display:flex;align-items:center;gap:10px"><span class="account-avatar" style="width:32px;height:32px;flex-basis:32px;font-size:11px;border-radius:10px">${initials || '?'}</span><div><b>${c.name}</b>${c.taxId ? `<div class="client-meta">${c.taxId}</div>` : ''}</div></div></td>
         <td>${c.email || '—'}</td>
         <td style="max-width:220px;white-space:pre-line;font-size:12px;color:var(--muted)">${c.address || '—'}</td>
-        <td class="right">${count}</td>
+        <td class="right"><b>${count}</b>${outstanding > 0.001 ? `<div class="client-meta" style="color:var(--red-text)">Owes ${money(outstanding)}</div>` : count ? `<div class="client-meta">Settled</div>` : ''}</td>
         <td><div class="client-actions">
           <button class="button" type="button" data-edit-client="${c.id}" title="Edit client" aria-label="Edit ${c.name}" style="padding:7px 10px;font-size:12px">Edit</button>
           ${c.isUnassigned || c.name === 'Unassigned' ? '' : `<button class="button danger" type="button" data-delete-client="${c.id}" title="Delete client" aria-label="Delete ${c.name}" style="padding:7px 10px;font-size:12px">Delete</button>`}
@@ -4480,6 +4633,7 @@ async function newInvoice() {
 
 function editor() {
   switchTo('editor');
+  setTimeout(updateEditorStickyBar, 0);
   showBanner('editorErrors', []);
   clearInvalid(document.getElementById('editor'));
   $('#number').value = edit.number;
@@ -4528,6 +4682,27 @@ function updateLineAmount(n) {
   el.textContent = money(lineAmount(x), edit.currency);
   el.classList.toggle('invalid', invalid);
   if (typeof renderPayments === 'function') renderPayments();
+  updateEditorStickyBar();
+}
+
+
+function updateEditorStickyBar() {
+  const bar = document.getElementById('editorStickyBar');
+  if (!bar || !edit) {
+    if (bar) bar.classList.remove('show');
+    return;
+  }
+  bar.classList.add('show');
+  const cur = edit.currency || db.profile.reporting || 'USD';
+  const tot = total(edit);
+  const paid = amountPaid(edit);
+  const bal = balanceDue(edit);
+  const st = document.getElementById('stickyTotal');
+  const sp = document.getElementById('stickyPaid');
+  const sb = document.getElementById('stickyBalance');
+  if (st) st.textContent = money(tot, cur);
+  if (sp) sp.textContent = money(paid, cur);
+  if (sb) sb.textContent = money(bal, cur);
 }
 
 function preview() {
@@ -4605,6 +4780,8 @@ function preview() {
     payInfo.innerHTML = 'Paid ' + money(paidAmt, edit.currency) + ' · <b style="color:var(--text)">Balance ' + money(bal, edit.currency) + '</b>';
   }
 }
+
+  updateEditorStickyBar();
 
 function clearInvalid(root) {
   (root || document).querySelectorAll('.invalid').forEach(el => el.classList.remove('invalid'));
@@ -5068,6 +5245,8 @@ const editorBackBtn = document.getElementById('editorBack');
 if (editorBackBtn) editorBackBtn.onclick = () => switchTo('invoices');
 $('#save').onclick = () => persist('Draft');
 $('#send').onclick = () => persist('Sent');
+document.getElementById('stickySave')?.addEventListener('click', () => persist('Draft'));
+document.getElementById('stickySend')?.addEventListener('click', () => persist('Sent'));
 
 document.getElementById('growthLater')?.addEventListener('click', () => {
   document.getElementById('growthModal')?.classList.remove('show');
@@ -5898,6 +6077,7 @@ function renderPayments() {
     }
   }
   updateReceiptButtons();
+  updateEditorStickyBar();
 }
 
 function updateReceiptButtons() {
