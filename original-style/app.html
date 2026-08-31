@@ -3433,17 +3433,36 @@ function maybePromptSignup() {
 }
 
 document.getElementById('upgradeLater')?.addEventListener('click', () => document.getElementById('upgradeModal')?.classList.remove('show'));
+async function notifyBillingComingSoon(plan, source) {
+  const planId = String(plan || 'starter').toLowerCase();
+  const label = planId === 'pro' ? 'Pro' : 'Starter';
+  track('upgrade_cta_clicked', { plan: planId, source: source || 'unknown' });
+  let priceLine = label;
+  try {
+    const country = (db.profile?.taxCountry || 'NG').toUpperCase();
+    const p = await resolvePlanPricing(country, planId);
+    if (p && p.chargeCents != null) {
+      const amount = formatMoneyCents(p.chargeCents, p.chargeCurrency);
+      const period = p.interval === 'annually' ? '/year' : '/month';
+      priceLine = `${label} — ${amount}${period}`;
+      if (p.interval === 'annually') {
+        const monthly = formatMoneyCents(Math.round(p.chargeCents / 12), p.chargeCurrency);
+        priceLine += ` (≈ ${monthly}/month, billed annually)`;
+      }
+    }
+  } catch (e) {
+    console.warn('pricing notify', e.message || e);
+  }
+  alert(`${priceLine} billing is coming soon. Your current plan remains active.`);
+}
+
 document.querySelectorAll('[data-plan-page-upgrade]').forEach(btn => btn.addEventListener('click', () => {
-  const plan = btn.dataset.planPageUpgrade;
-  track('upgrade_cta_clicked', { plan, source: 'plan_page' });
-  alert(`${plan === 'starter' ? 'Starter — $3/month' : 'Pro — $8/month'} billing is coming soon. Your current plan remains active.`);
+  notifyBillingComingSoon(btn.dataset.planPageUpgrade, 'plan_page');
 }));
 
 document.querySelectorAll('[data-upgrade-plan]').forEach(btn => btn.addEventListener('click', () => {
-  const plan = btn.dataset.upgradePlan;
   document.getElementById('upgradeModal')?.classList.remove('show');
-  track('upgrade_cta_clicked', { plan });
-  alert(`${plan === 'starter' ? 'Starter — $3/month' : 'Pro — $8/month'} billing is coming soon. Your current plan remains active.`);
+  notifyBillingComingSoon(btn.dataset.upgradePlan, 'upgrade_modal');
 }));
 
 let edit = null;
