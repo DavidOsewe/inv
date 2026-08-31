@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Invoice — Invoicedey</title>
+<title>Invoice — invoicedey</title>
 <style>
   :root { --blue:#2467E3; --text:#0F172A; --muted:#64748B; --line:#E2E8F0; --bg:#F8FAFC; }
   * { box-sizing:border-box; }
@@ -171,9 +171,31 @@ function esc(v) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
+/** Minor-unit exponent — must match app.html toMinor/fromMinor (Intl). */
+function currencyExponent(currency) {
+  const code = String(currency || 'USD').toUpperCase();
+  // ISO: most have 2; these typically have 0
+  if (['JPY', 'KRW', 'VND', 'XOF', 'XAF', 'CLP', 'ISK'].includes(code)) return 0;
+  try {
+    const d = new Intl.NumberFormat(undefined, { style: 'currency', currency: code }).resolvedOptions().maximumFractionDigits;
+    if (Number.isFinite(d)) return d;
+  } catch {}
+  return 2; // NGN, KES, GHS, RWF, USD, EUR, … → 2
+}
 function moneyMinor(value, currency) {
-  const digits = ['JPY','NGN'].includes(currency) ? 0 : 2;
-  return new Intl.NumberFormat('en-US', { style:'currency', currency:currency || 'USD', maximumFractionDigits:digits }).format((Number(value)||0) / Math.pow(10, digits));
+  const code = String(currency || 'USD').toUpperCase();
+  const digits = currencyExponent(code);
+  const major = (Number(value) || 0) / Math.pow(10, digits);
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: code,
+      maximumFractionDigits: digits,
+      minimumFractionDigits: digits === 0 ? 0 : Math.min(2, digits)
+    }).format(major);
+  } catch {
+    return code + ' ' + major.toLocaleString('en-US', { maximumFractionDigits: digits });
+  }
 }
 function formatDate(value) {
   if (!value) return '—';
@@ -214,17 +236,24 @@ async function trackPublic(eventName, metadata = {}) {
   }
 }
 function renderNotFound(message) {
-  document.getElementById('app').innerHTML = '<div class="state"><h1>Invoice unavailable</h1><p>' + esc(message) + '</p><a class="button primary" href="index.html">Create an invoice with Invoicedey</a></div>';
+  document.getElementById('app').innerHTML = '<div class="state"><h1>Invoice unavailable</h1><p>' + esc(message) + '</p><a class="button primary" href="index.html">Create an invoice with invoicedey</a></div>';
 }
 function render(data) {
   if (!data) { renderNotFound('This invoice link is invalid, expired, or no longer public.'); return; }
   const i=data.invoice, o=data.issuer||{}, c=data.client||{};
   const address = o.address?.text || c.billing_address?.address || '';
   const clientAddress = c.billing_address?.address || '';
-  const lines=(data.lines||[]).map(line=>'<tr><td>'+esc(line.description || 'Service')+'</td><td>'+esc(line.quantity ?? '')+'</td><td>'+esc(line.unit || '—')+'</td><td>'+moneyMinor(line.unit_amount_minor,i.currency)+'</td><td>'+moneyMinor(line.line_total_minor,i.currency)+'</td></tr>').join('');
+  const lines=(data.lines||[]).map(line=>{
+    const qty = Number(line.quantity ?? 0);
+    const unitMinor = Number(line.unit_amount_minor ?? 0);
+    let lineMinor = Number(line.line_total_minor ?? 0);
+    // Recompute if line_total missing or inconsistent with qty × rate
+    if (!lineMinor && unitMinor) lineMinor = Math.round(unitMinor * qty);
+    return '<tr><td>'+esc(line.description || 'Service')+'</td><td>'+esc(line.quantity ?? '')+'</td><td>'+esc(line.unit || '—')+'</td><td>'+moneyMinor(unitMinor,i.currency)+'</td><td>'+moneyMinor(lineMinor,i.currency)+'</td></tr>';
+  }).join('');
   const issuerContact=[o.email,o.phone,address].filter(Boolean).map(esc).join('<br>');
   const taxLabel=o.tax_label || 'Tax';
-  document.title=(i.invoice_number || 'Invoice')+' — Invoicedey';
+  document.title=(i.invoice_number || 'Invoice')+' — invoicedey';
   document.getElementById('app').innerHTML = `
     <div class="head">
       <div><div class="issuer">${esc(o.name || 'Business')}</div><div class="contact">${issuerContact}</div></div>
@@ -249,7 +278,7 @@ function render(data) {
     </div></div>
     ${o.payment_details ? '<div class="terms"><b>Payment instructions</b><br><span>'+esc(o.payment_details)+'</span></div>' : ''}
     ${o.tax_registration_number ? '<div class="terms"><b>Tax ID</b><br><span>'+esc(o.tax_registration_number)+'</span></div>' : ''}
-    <div class="viral">Need to create an invoice? <a id="publicFooterCta" href="index.html">Try Invoicedey — free.</a></div>
+    <div class="viral">Need to create an invoice? <a id="publicFooterCta" href="index.html">Try invoicedey — free.</a></div>
   `;
 }
 (async()=>{
