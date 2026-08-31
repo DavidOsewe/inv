@@ -363,6 +363,58 @@ input:focus:not(:focus-visible) {
 .view { display: none; }
 .view.active { display: block; }
 
+
+.dash-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px 24px;
+  margin: 4px 0 22px;
+  padding: 20px 22px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(1200px 200px at 10% -40%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 55%),
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, var(--card, var(--bg))) 0%, var(--card, var(--bg)) 100%);
+}
+.dash-greeting {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.dash-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  color: var(--text);
+}
+.dash-sub {
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  color: var(--muted);
+  max-width: 42ch;
+  line-height: 1.5;
+}
+.dash-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.card-accent {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+@media (max-width: 720px) {
+  .dash-hero { padding: 16px; }
+  .dash-title { font-size: 18px; }
+}
+
 .cards {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1632,8 +1684,20 @@ input:focus:not(:focus-visible) {
     </header>
 
     <section class="view active" id="dashboard">
+      <div class="dash-hero" id="dashHero">
+        <div class="dash-hero-text">
+          <div class="dash-greeting" id="dashGreeting">Welcome back</div>
+          <h1 class="dash-title" id="dashTitle">Your business at a glance</h1>
+          <p class="dash-sub" id="dashSub">Create invoices, track payments, stay on top of what’s due.</p>
+        </div>
+        <div class="dash-hero-actions">
+          <button class="button primary" type="button" onclick="newInvoice()">+ New invoice</button>
+          <button class="button" type="button" onclick="switchTo('clients')">Clients</button>
+          <button class="button" type="button" onclick="switchTo('plan')">Plan</button>
+        </div>
+      </div>
       <div class="cards">
-        <div class="card">
+        <div class="card card-accent">
           <small>Outstanding</small>
           <b id="outstanding">$0.00</b>
           <span class="mini" id="outstandingCount">0 unpaid invoices</span>
@@ -3895,7 +3959,30 @@ function dashboard() {
   $('#rate').textContent = issued ? Math.round(paid.reduce((n, i) => n + report(i), 0) / issued * 100) + '%' : '—';
   $('#outstandingCount').textContent = open.length + ' unpaid invoice' + (open.length === 1 ? '' : 's');
   $('#overdueCount').textContent = over.length ? over.length + ' needs a follow-up' : 'Nothing overdue';
-  $('#reportingLabel').textContent = 'Reported in ' + db.profile.reporting;
+  $('#reportingLabel').textContent = 'Reported in ' + (db.profile.reporting || 'USD');
+
+  // Hero greeting
+  try {
+    const hour = new Date().getHours();
+    const hello = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+    const biz = (db.profile.name || '').trim();
+    const greet = document.getElementById('dashGreeting');
+    const title = document.getElementById('dashTitle');
+    const sub = document.getElementById('dashSub');
+    if (greet) greet.textContent = hello + (biz ? ' · ' + biz : '');
+    if (title) {
+      if (over.length) title.textContent = over.length + ' overdue — worth a follow-up';
+      else if (open.length) title.textContent = open.length + ' open invoice' + (open.length === 1 ? '' : 's') + ' in flight';
+      else if (all.length) title.textContent = 'You’re clear — nothing outstanding';
+      else title.textContent = 'Ready when you are';
+    }
+    if (sub) {
+      if (over.length) sub.textContent = money(late) + ' past due. A short reminder often gets paid faster.';
+      else if (open.length) sub.textContent = money(out) + ' outstanding · reported in ' + (db.profile.reporting || 'USD') + '.';
+      else if (all.length) sub.textContent = 'Collected ' + money(got) + ' this month. Create the next invoice when you’re ready.';
+      else sub.textContent = 'Add your business details, save a client, then send your first invoice in minutes.';
+    }
+  } catch (e) {}
 
   const buckets = [['Not due', 0], ['1–30 days', 0], ['31–60 days', 0], ['60+ days', 0]];
   open.forEach(i => {
@@ -3914,7 +4001,7 @@ function dashboard() {
 
   if (!all.length) {
     $('#insightText').innerHTML = `<b style="color:var(--text)">Welcome to invoicedey</b><br>
-      Set up once, then invoice with confidence. Everything stays on this device until you export a backup.`;
+      Set up your profile once, then invoice with confidence. Sign in to sync across devices.`;
     $('#aging').innerHTML = '';
     $('#recent').innerHTML = `<div class="empty">
       <div class="empty-icon">✓</div>
@@ -4909,6 +4996,50 @@ document.addEventListener('input', (e) => {
   // Debounce-ish: save text fields as user types into data-p inputs
   if (e.target?.dataset?.p && e.target.tagName !== 'SELECT') {
     saveProfileField(e.target);
+  }
+});
+
+document.getElementById('saveProfile')?.addEventListener('click', async () => {
+  // Flush every data-p field from the form into db.profile
+  document.querySelectorAll('[data-p]').forEach(el => {
+    try { saveProfileField(el); } catch {}
+  });
+  const taxReg = document.getElementById('taxRegistered');
+  if (taxReg && db?.profile) {
+    db.profile.taxRegistered = taxReg.value === 'true' || taxReg.value === true;
+  }
+  save();
+  const btn = document.getElementById('saveProfile');
+  const prev = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+  }
+  try {
+    if (cloud.client && cloud.user) {
+      try {
+        const organizationId = await ensureCloudOrganization();
+        await syncOrganizationProfile(organizationId);
+        queueCloudSync();
+      } catch (e) {
+        console.warn('profile cloud sync', e.message || e);
+      }
+    }
+    toast('Profile saved');
+    if (btn) btn.textContent = 'Saved';
+    setTimeout(() => {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = prev || 'Save profile';
+      }
+    }, 1200);
+  } catch (err) {
+    console.error(err);
+    toast('Could not save profile');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = prev || 'Save profile';
+    }
   }
 });
 
