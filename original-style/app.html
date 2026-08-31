@@ -4084,17 +4084,67 @@ function displayCurrencyForCountry(country, bandFallbackCurrency) {
   return COUNTRY_CURRENCY[cc] || bandFallbackCurrency || 'USD';
 }
 
-/** Convert USD cents → local currency cents using FX_USD table */
+/** Convert USD cents → local currency minor units using FX_USD table */
 function usdCentsToLocal(usdCents, localCurrency) {
   const rate = FX_USD[localCurrency] || 1;
   return Math.round((Number(usdCents) || 0) * rate);
+}
+
+/** Convert minor units from one currency to another via USD */
+function convertCents(cents, fromCurrency, toCurrency) {
+  const from = String(fromCurrency || 'USD').toUpperCase();
+  const to = String(toCurrency || 'USD').toUpperCase();
+  if (from === to) return Math.round(Number(cents) || 0);
+  const fromRate = FX_USD[from] || 1; // units per 1 USD
+  const toRate = FX_USD[to] || 1;
+  const usdCents = (Number(cents) || 0) / fromRate;
+  return Math.round(usdCents * toRate);
+}
+
+/**
+ * Canonical USD amounts for plan × band (cents per billing period).
+ * LIC/LMC = annual; UMC/HIC = monthly.
+ */
+const PLAN_USD_CENTS = {
+  LIC: { starter: 360, pro: 1800, interval: 'annually' },
+  LMC: { starter: 480, pro: 2400, interval: 'annually' },
+  UMC: { starter: 300, pro: 800, interval: 'monthly' },
+  HIC: { starter: 500, pro: 1200, interval: 'monthly' }
+};
+
+/** Always show prices in the country's own currency (KE→KES, NG→NGN, GH→GHS). */
+function localizePlanPricing(cc, band, plan, interval, rawCents, rawCurrency) {
+  const displayCur = displayCurrencyForCountry(cc, 'USD');
+  const canon = PLAN_USD_CENTS[band] || PLAN_USD_CENTS.LMC;
+  const planKey = plan === 'pro' ? 'pro' : 'starter';
+  // Prefer canonical USD so every LMC country gets a fair conversion
+  const usdPeriod = canon[planKey];
+  const periodInterval = interval || canon.interval;
+  const chargeCents = displayCur === 'USD'
+    ? usdPeriod
+    : usdCentsToLocal(usdPeriod, displayCur);
+  const monthlyUsd = periodInterval === 'annually'
+    ? Math.round(usdPeriod / 12)
+    : usdPeriod;
+  return {
+    country: cc,
+    band,
+    plan,
+    interval: periodInterval,
+    chargeCurrency: displayCur,
+    chargeCents,
+    monthlyUsdCents: monthlyUsd,
+    // keep raw for debugging
+    _rawCurrency: rawCurrency,
+    _rawCents: rawCents
+  };
 }
 
 async function resolvePlanPricing(country, planId) {
   const cc = String(country || db?.profile?.taxCountry || 'NG').toUpperCase();
   const plan = String(planId || 'starter').toLowerCase();
 
-  // Prefer Supabase RPC when signed in / client available
+  // Prefer Supabase RPC for band + interval, then localize to country currency
   try {
     const client = cloud.client || await getSupabase();
     if (client) {
@@ -4105,22 +4155,13 @@ async function resolvePlanPricing(country, planId) {
       if (!error && data) {
         const row = Array.isArray(data) ? data[0] : data;
         if (row) {
+          const band = row.band_id || bandForCountry(cc);
           const interval = row.billing_interval || 'monthly';
-          const chargeCurrency = row.local_currency || row.currency || 'USD';
-          const chargeCents = row.local_price_cents != null ? row.local_price_cents : row.price_cents;
-          const monthlyUsd = row.effective_monthly_cents != null
-            ? row.effective_monthly_cents
-            : (interval === 'annually' ? Math.round((row.price_cents || 0) / 12) : row.price_cents);
-          return {
-            country: cc,
-            band: row.band_id,
-            plan,
-            interval,
-            chargeCurrency,
-            chargeCents: Number(chargeCents) || 0,
-            monthlyUsdCents: Number(monthlyUsd) || 0,
-            source: 'rpc'
-          };
+          const rawCurrency = row.local_currency || row.currency || 'USD';
+          const rawCents = row.local_price_cents != null ? row.local_price_cents : row.price_cents;
+          const localized = localizePlanPricing(cc, band, plan, interval, rawCents, rawCurrency);
+          localized.source = 'rpc';
+          return localized;
         }
       }
     }
@@ -4131,34 +4172,9 @@ async function resolvePlanPricing(country, planId) {
   // Client fallback
   const band = bandForCountry(cc);
   const fb = PRICING_FALLBACK[band] || PRICING_FALLBACK.LMC;
-  const row = fb[plan] || fb.starter;
-  const displayCur = displayCurrencyForCountry(cc, fb.currency);
-  let chargeCents = row.cents;
-  let chargeCurrency = fb.currency;
-  // Prefer showing user's local currency
-  if (displayCur !== fb.currency) {
-    const usdBase = row.usdCents != null ? row.usdCents : (fb.currency === 'USD' ? row.cents : row.usdCents);
-    if (usdBase != null && displayCur !== 'USD') {
-      chargeCents = usdCentsToLocal(usdBase, displayCur);
-      chargeCurrency = displayCur;
-    } else if (fb.currency === 'USD' && displayCur !== 'USD') {
-      chargeCents = usdCentsToLocal(row.cents, displayCur);
-      chargeCurrency = displayCur;
-    }
-  } else if (band === 'LMC' && displayCur === 'NGN' && row.usdCents) {
-    chargeCents = usdCentsToLocal(row.usdCents, 'NGN');
-    chargeCurrency = 'NGN';
-  }
-  return {
-    country: cc,
-    band,
-    plan,
-    interval: fb.interval,
-    chargeCurrency,
-    chargeCents,
-    monthlyUsdCents: row.monthlyCents || Math.round(row.cents / (fb.interval === 'annually' ? 12 : 1)),
-    source: 'fallback'
-  };
+  const localized = localizePlanPricing(cc, band, plan, fb.interval, null, fb.currency);
+  localized.source = 'fallback';
+  return localized;
 }
 
 function paintPlanTierPrice(el, pricing) {
