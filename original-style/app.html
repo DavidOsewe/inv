@@ -539,12 +539,16 @@ input:focus:not(:focus-visible) {
   letter-spacing: 0.4px;
 }
 .card b {
-  font-size: clamp(20px, 3vw, 24px);
+  font-size: clamp(18px, 2.6vw, 22px);
   font-weight: 800;
-  letter-spacing: -0.6px;
+  letter-spacing: -0.5px;
   display: block;
   margin: 8px 0 2px;
   color: var(--text);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .card .good { color: var(--green); }
 .card .late { color: var(--red); }
@@ -927,11 +931,18 @@ input:focus:not(:focus-visible) {
 }
 .barrow {
   display: grid;
-  grid-template-columns: 90px 1fr 90px;
+  grid-template-columns: 88px 1fr minmax(100px, auto);
   gap: 10px;
   align-items: center;
   margin: 12px 0;
   font-size: 13px;
+}
+.barrow > b.right,
+.barrow > .right {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  justify-self: end;
 }
 .track {
   height: 8px;
@@ -949,6 +960,11 @@ input:focus:not(:focus-visible) {
 .fill.b { background: #F97316; }
 .fill.c { background: var(--red); }
 .right { text-align: right; }
+.money-cell, td.right b, .table td.right {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 
 /* =========================================================
    COMPONENTS — Forms
@@ -1225,8 +1241,17 @@ input:focus:not(:focus-visible) {
   border-bottom: 1px solid #e5eaf0;
   border-right: 1px solid #e5eaf0;
   vertical-align: middle;
-  word-wrap: break-word;
   color: #0f172a;
+}
+.pitems td:first-child {
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.pitems td:not(:first-child) {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .pitems th:last-child,
 .pitems td:last-child {
@@ -1235,11 +1260,11 @@ input:focus:not(:focus-visible) {
 .pitems tbody tr:last-child td {
   border-bottom: 0;
 }
-.pitems .col-desc { width: 46%; }
-.pitems .col-qty { width: 10%; }
-.pitems .col-unit { width: 12%; }
-.pitems .col-rate { width: 16%; }
-.pitems .col-amount { width: 16%; }
+.pitems .col-desc { width: 38%; }
+.pitems .col-qty { width: 8%; }
+.pitems .col-unit { width: 10%; }
+.pitems .col-rate { width: 20%; }
+.pitems .col-amount { width: 24%; }
 .pitems th,
 .pitems td {
   text-align: left;
@@ -1253,8 +1278,8 @@ input:focus:not(:focus-visible) {
   font-weight: 600;
 }
 .pitems .right { text-align: right; }
- .total {
-  width: 320px;
+.total {
+  width: min(100%, 380px);
   margin: 20px 0 30px auto;
   border: 1px solid #dbe3ee;
   border-radius: 8px;
@@ -1263,9 +1288,9 @@ input:focus:not(:focus-visible) {
 }
 .total div {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, auto);
   align-items: baseline;
-  column-gap: 18px;
+  column-gap: 16px;
   padding: 6px 0;
   color: #64748b;
   font-size: 13px;
@@ -1276,6 +1301,7 @@ input:focus:not(:focus-visible) {
   color: #334155;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  font-weight: 600;
 }
 .total .grand {
   margin-top: 10px;
@@ -3932,15 +3958,33 @@ function report(i) {
 function formatRate(x) {
   const n = parseFloat(x);
   if (!Number.isFinite(n)) return '0';
-  // Plain entered figure — no currency symbol
-  return n % 1 === 0 ? String(n) : String(Math.round(n * 100) / 100);
+  // Grouped digits, no currency symbol (rate column)
+  try {
+    return new Intl.NumberFormat('en-US', {
+      maximumFractionDigits: n % 1 === 0 ? 0 : 2,
+      minimumFractionDigits: 0
+    }).format(n);
+  } catch {
+    return n % 1 === 0 ? String(n) : String(Math.round(n * 100) / 100);
+  }
 }
 function money(x, c) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: c || db.profile.reporting,
-    maximumFractionDigits: ['JPY','NGN'].includes(c) ? 0 : 2
-  }).format(x || 0);
+  const code = String(c || db?.profile?.reporting || 'USD').toUpperCase();
+  // Zero-decimal display currencies (match share page / ISO common cases)
+  const zeroDec = ['JPY', 'NGN', 'KES', 'GHS', 'RWF', 'UGX', 'TZS', 'XOF', 'XAF', 'VND', 'KRW', 'IDR'];
+  const maxFrac = zeroDec.includes(code) ? 0 : 2;
+  try {
+    // Use a format that stays on one line; avoid narrow-column wrapping mid-number
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: code,
+      maximumFractionDigits: maxFrac,
+      minimumFractionDigits: 0
+    }).format(Number(x) || 0);
+  } catch {
+    const n = Number(x) || 0;
+    return code + ' ' + n.toLocaleString('en-US', { maximumFractionDigits: maxFrac });
+  }
 }
 function toast(msg) {
   $('#toast').textContent = msg;
