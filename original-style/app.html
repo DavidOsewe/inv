@@ -1923,12 +1923,7 @@ input:focus:not(:focus-visible) {
         </div>
 
         <button class="button primary" id="saveProfile">Save profile</button>
-        <div class="backup-actions">
-          <button class="button" id="exportBackup">Download backup (JSON)</button>
-          <label class="button" style="display:inline-block;cursor:pointer">
-            <input type="file" id="importBackup" accept=".json,application/json" hidden>Restore backup
-          </label>
-        </div>
+        <p style="font-size:12px;color:var(--muted);margin:10px 0 0">Your data syncs to the cloud when signed in. Local browser storage is used as a cache.</p>
       </div>
     </section>
 
@@ -2165,12 +2160,12 @@ input:focus:not(:focus-visible) {
     <div id="upgradePlans" class="plan-tiers" style="margin-top:18px">
       <div class="plan-tier">
         <div class="plan-tier-name">Starter</div>
-        <div class="plan-tier-desc" style="margin:4px 0 0">$3/month · 50 invoices · 50 clients</div>
+        <div class="plan-tier-desc" id="upgradeStarterDesc" style="margin:4px 0 0">50 invoices · 50 clients</div>
         <button class="button primary" type="button" data-upgrade-plan="starter">Upgrade to Starter</button>
       </div>
       <div class="plan-tier featured">
         <div class="plan-tier-name">Pro</div>
-        <div class="plan-tier-desc" style="margin:4px 0 0">$8/month · Unlimited invoices &amp; clients</div>
+        <div class="plan-tier-desc" id="upgradeProDesc" style="margin:4px 0 0">Unlimited invoices &amp; clients</div>
         <button class="button" type="button" data-upgrade-plan="pro">Upgrade to Pro</button>
       </div>
     </div>
@@ -3398,11 +3393,31 @@ function updateGrowthMeter() {
   const remaining = Math.max(0, limit - getGrowthUsage().invoicesCreated);
   el.textContent = remaining + ' free invoice' + (remaining === 1 ? '' : 's') + ' remaining this month';
 }
-function showUpgradeModal(title, message) {
+async function showUpgradeModal(title, message) {
   const modal = document.getElementById('upgradeModal');
   if (!modal) return;
   document.getElementById('upgradeModalTitle').textContent = title;
   document.getElementById('upgradeModalMessage').textContent = message;
+  // Localised plan prices (same source as Plan page)
+  try {
+    const country = (db.profile?.taxCountry || 'NG').toUpperCase();
+    const [s, p] = await Promise.all([
+      resolvePlanPricing(country, 'starter'),
+      resolvePlanPricing(country, 'pro')
+    ]);
+    const fmt = (pr) => {
+      if (!pr) return '';
+      const amount = formatMoneyCents(pr.chargeCents, pr.chargeCurrency);
+      const period = pr.interval === 'annually' ? '/year' : '/month';
+      return amount + period;
+    };
+    const sEl = document.getElementById('upgradeStarterDesc');
+    const pEl = document.getElementById('upgradeProDesc');
+    if (sEl) sEl.textContent = fmt(s) + ' · 50 invoices · 50 clients';
+    if (pEl) pEl.textContent = fmt(p) + ' · Unlimited invoices & clients';
+  } catch (e) {
+    console.warn('upgrade modal pricing', e.message || e);
+  }
   modal.classList.add('show');
 }
 
@@ -3470,7 +3485,7 @@ function applyFeatureGates() {
     logoLabel.title = logoEnabled ? 'Upload your company logo' : 'Custom logo requires Starter';
   }
   if (logoInput) logoInput.disabled = !logoEnabled;
-  if (hint) hint.textContent = logoEnabled ? 'Custom logo is included in your plan.' : 'Custom company logo requires Starter ($3/month).';
+  if (hint) hint.textContent = logoEnabled ? 'Custom logo is included in your plan.' : 'Custom company logo requires the Starter plan.';
 
   document.querySelectorAll('[data-feature-gate]').forEach(btn => {
     btn.disabled = false;
@@ -5213,7 +5228,16 @@ function printInvoice() {
     toast('Invoice preview not found.');
     return;
   }
-  openPrintDocument(edit.number || 'Invoice', panel.innerHTML);
+  let body = panel.innerHTML;
+  // Clickable online view link when share token exists
+  if (edit.publicShareToken && edit.publicShareEnabled !== false) {
+    const shareUrl = window.location.origin + '/invoice.html?token=' + encodeURIComponent(edit.publicShareToken);
+    body += '<div class="share-link-box" style="margin-top:20px;padding:12px 14px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc">' +
+      '<div style="font-size:10px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#94a3b8;margin-bottom:6px">View online</div>' +
+      '<a href="' + shareUrl + '" target="_blank" rel="noopener noreferrer" style="color:#2467E3;font-size:13px;word-break:break-all">' + shareUrl + '</a>' +
+      '</div>';
+  }
+  openPrintDocument(edit.number || 'Invoice', body);
 }
 
 function buildReceiptHtml(inv, payment) {
@@ -5300,6 +5324,7 @@ function buildReceiptHtml(inv, payment) {
       <div class="grand"><span>${isFull ? 'Amount paid' : 'Balance due'}</span><span>${money(isFull ? totalPaid : bal, inv.currency)}</span></div>
     </div>
     <div class="terms">Thank you for your payment.${inv.number ? ' Reference: ' + inv.number + '.' : ''}</div>
+    <div class="viral-footer" style="margin-top:16px">Need to create an invoice? <a href="https://inv-pukka1.vercel.app/?utm_source=receipt_pdf&utm_medium=pdf&utm_campaign=viral_receipt" target="_blank" rel="noopener noreferrer"><strong>Try invoicedey — free.</strong></a></div>
   `;
 }
 
@@ -5612,6 +5637,11 @@ function buildReceiptDocument(inv, payment) {
   </div>
 
   <div class="foot">Thank you for your payment.${inv.number ? ' Reference: ' + esc(inv.number) + '.' : ''}</div>
+  ${inv.publicShareToken ? '<div style="margin-top:16px;padding:12px 14px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc"><div style="font-size:10px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#94a3b8;margin-bottom:6px">View invoice online</div><a href="' + (window.location.origin + '/invoice.html?token=' + encodeURIComponent(inv.publicShareToken)) + '" style="color:#2467E3;font-size:13px;word-break:break-all">' + (window.location.origin + '/invoice.html?token=' + encodeURIComponent(inv.publicShareToken)) + '</a></div>' : ''}
+  <div style="margin-top:18px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b">
+    Generated with invoicedey ·
+    <a href="https://inv-pukka1.vercel.app/?utm_source=receipt_pdf&utm_medium=pdf&utm_campaign=viral_receipt" style="color:#2467E3;font-weight:700;text-decoration:none">Try invoicedey — free</a>
+  </div>
 </div>
 </body>
 </html>`;
