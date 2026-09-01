@@ -2788,8 +2788,7 @@ async function ensureCloudOrganization() {
   if (cloud.organizationId) return cloud.organizationId;
   const { data: memberships, error } = await cloud.client
     .from('organization_members')
-    .select('organization_id, role, created_at')
-    .order('created_at', { ascending: true });
+    .select('organization_id, role');
   if (error) throw error;
 
   const rows = memberships || [];
