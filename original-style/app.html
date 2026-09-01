@@ -2762,24 +2762,83 @@ function cloudStatus(invoice) {
   return ['draft', 'sent', 'viewed', 'partially_paid', 'paid', 'overdue', 'void'].includes(value) ? value : 'draft';
 }
 
+function preferredOrgStorageKey(userId) {
+  return 'invoicedey-active-org-' + (userId || cloud.user?.id || 'anon');
+}
+
+function getPreferredOrganizationId() {
+  try {
+    const uid = cloud.user?.id;
+    if (!uid) return null;
+    return localStorage.getItem(preferredOrgStorageKey(uid)) || null;
+  } catch {
+    return null;
+  }
+}
+
+function setPreferredOrganizationId(organizationId) {
+  try {
+    const uid = cloud.user?.id;
+    if (!uid || !organizationId) return;
+    localStorage.setItem(preferredOrgStorageKey(uid), organizationId);
+  } catch {}
+}
+
 async function ensureCloudOrganization() {
   if (cloud.organizationId) return cloud.organizationId;
   const { data: memberships, error } = await cloud.client
     .from('organization_members')
-    .select('organization_id')
-    .limit(1);
+    .select('organization_id, role, created_at')
+    .order('created_at', { ascending: true });
   if (error) throw error;
-  if (memberships?.[0]?.organization_id) {
-    cloud.organizationId = memberships[0].organization_id;
+
+  const rows = memberships || [];
+  if (rows.length) {
+    const preferred = getPreferredOrganizationId();
+    const match = preferred && rows.find(r => r.organization_id === preferred);
+    // Prefer explicitly chosen org (e.g. after accepting a team invite).
+    // If none chosen yet and the user is a non-owner member of some org,
+    // prefer that shared team org over their personal (owner) org.
+    const teamMembership = rows.find(r => String(r.role || '').toLowerCase() === 'member');
+    const chosen = match || teamMembership || rows[0];
+    cloud.organizationId = chosen.organization_id;
+    // Persist so later sessions stay on the shared org
+    if (!preferred) setPreferredOrganizationId(cloud.organizationId);
     return cloud.organizationId;
   }
+
   const { data, error: createError } = await cloud.client.rpc('create_organization', {
     org_name: db.profile.name || 'My business',
     org_currency: db.profile.reporting || 'USD'
   });
   if (createError) throw createError;
   cloud.organizationId = data.id;
+  setPreferredOrganizationId(data.id);
   return cloud.organizationId;
+}
+
+/** Switch active org, clear local cache, and reload shared invoices/clients. */
+async function switchActiveOrganization(organizationId) {
+  if (!organizationId) return false;
+  setPreferredOrganizationId(organizationId);
+  cloud.organizationId = organizationId;
+  // Team data is org-scoped in the cloud — start from a clean local slate
+  // so we do not mix the member's personal draft data with the shared org.
+  db.clients = [];
+  db.invoices = [];
+  try {
+    const loaded = await hydrateFromCloud();
+    cloud.hydrated = true;
+    persistDb();
+    if (typeof dashboard === 'function') dashboard();
+    if (typeof loadTeamPanel === 'function') {
+      try { await loadTeamPanel(); } catch {}
+    }
+    return !!loaded;
+  } catch (e) {
+    console.warn('switch org', e.message || e);
+    return false;
+  }
 }
 
 async function syncOrganizationProfile(organizationId) {
@@ -3386,19 +3445,45 @@ async function hydrateFromCloud() {
   } catch (e) {
     console.warn('org currency hydrate', e.message || e);
   }
+  // Load clients directly (not only those attached to invoices)
+  try {
+    const { data: remoteClients, error: clientsErr } = await cloud.client
+      .from('clients')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .order('created_at', { ascending: true });
+    if (clientsErr) throw clientsErr;
+    if (remoteClients?.length) {
+      db.clients = remoteClients.map(c => ({
+        id: c.id,
+        cloudId: c.id,
+        name: c.name || '',
+        email: c.email || '',
+        address: c.billing_address?.address || c.billing_address?.text || '',
+        taxId: c.tax_id || ''
+      }));
+    }
+  } catch (e) {
+    console.warn('clients hydrate', e.message || e);
+  }
+
   const { data: remoteInvoices, error } = await cloud.client.from('invoices')
     .select('*, clients(*), invoice_line_items(*), payments(*)')
     .eq('organization_id', organizationId)
     .order('created_at', { ascending: false });
   if (error) throw error;
-  if (!remoteInvoices?.length) return false;
+  if (!remoteInvoices?.length) {
+    // Still count as loaded when the org has clients but no invoices yet
+    return (db.clients || []).length > 0;
+  }
+  // Merge any clients found on invoices that were missing from the clients table query
   db.clients = remoteInvoices.reduce((list, invoice) => {
     if (invoice.clients && !list.some(client => client.cloudId === invoice.clients.id)) list.push({
       id: invoice.clients.id, cloudId: invoice.clients.id, name: invoice.clients.name,
       email: invoice.clients.email || '', address: invoice.clients.billing_address?.address || '', taxId: invoice.clients.tax_id || ''
     });
     return list;
-  }, []);
+  }, db.clients || []);
   db.invoices = remoteInvoices.map(invoice => ({
     id: invoice.id, cloudId: invoice.id, number: invoice.invoice_number, client: invoice.clients?.id || '',
     publicShareToken: invoice.public_share_token || '',
@@ -6778,13 +6863,21 @@ async function maybeAcceptInviteFromUrl() {
     if (!token || !cloud.client || !cloud.user) return;
     const { data, error } = await cloud.client.rpc('accept_organization_invite', { p_token: token });
     if (error) throw error;
-    toast('You joined the team');
+    const payload = typeof data === 'string' ? JSON.parse(data) : data;
+    const joinedOrgId = payload?.organization_id || null;
     const url = new URL(location.href);
     url.searchParams.delete('invite');
     history.replaceState({}, '', url.pathname + url.search);
-    await loadTeamPanel();
+    if (joinedOrgId) {
+      toast('You joined the team — loading shared invoices…');
+      await switchActiveOrganization(joinedOrgId);
+    } else {
+      toast('You joined the team');
+      await loadTeamPanel();
+    }
   } catch (e) {
     console.warn('accept invite', e.message || e);
+    if (typeof toast === 'function') toast(e.message || 'Could not accept invite');
   }
 }
 
