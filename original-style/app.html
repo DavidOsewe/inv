@@ -3794,6 +3794,9 @@ document.getElementById('upgradeLater')?.addEventListener('click', () => documen
 const BILLING_PROVIDER = 'paystack';
 const BILLING_READY = false; // flip to true once Edge Function + keys are live
 
+// TEMP: unlock Team panel + invite flow without Pro plan. Set false before shipping.
+const TEAM_TEST_OVERRIDE = true;
+
 function formatPlanPriceLine(planId, pricing) {
   const label = planId === 'pro' ? 'Pro' : 'Starter';
   if (!pricing || pricing.chargeCents == null) return label;
@@ -6648,7 +6651,9 @@ async function loadTeamPanel() {
   const lead = document.getElementById('teamSectionLead');
   if (!locked || !panel) return;
 
-  const canTeam = hasFeature('team_collaboration') || String(entitlements?.plan || '').toLowerCase() === 'pro';
+  const canTeam = TEAM_TEST_OVERRIDE ||
+    hasFeature('team_collaboration') ||
+    String(entitlements?.plan || '').toLowerCase() === 'pro';
   if (!canTeam) {
     locked.style.display = '';
     panel.style.display = 'none';
@@ -6657,7 +6662,11 @@ async function loadTeamPanel() {
   }
   locked.style.display = 'none';
   panel.style.display = '';
-  if (lead) lead.textContent = 'Invite your team. Members share invoices and clients for this business.';
+  if (lead) {
+    lead.textContent = TEAM_TEST_OVERRIDE
+      ? 'TEST MODE — Team unlocked without Pro. Invite your team; members share invoices and clients for this business.'
+      : 'Invite your team. Members share invoices and clients for this business.';
+  }
 
   const membersEl = document.getElementById('teamMembersList');
   const invitesEl = document.getElementById('teamInvitesList');
@@ -6719,7 +6728,7 @@ document.getElementById('teamInviteBtn')?.addEventListener('click', async () => 
     toast('Enter a valid email');
     return;
   }
-  if (!(hasFeature('team_collaboration') || String(entitlements?.plan || '').toLowerCase() === 'pro')) {
+  if (!(TEAM_TEST_OVERRIDE || hasFeature('team_collaboration') || String(entitlements?.plan || '').toLowerCase() === 'pro')) {
     showUpgradeModal('Invite team is a Pro feature', 'Upgrade to Pro to invite colleagues to your business.');
     return;
   }
