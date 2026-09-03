@@ -2843,6 +2843,17 @@ async function switchActiveOrganization(organizationId) {
 async function syncOrganizationProfile(organizationId) {
   if (!cloud.client || !organizationId) return;
   try {
+    // Only owners may update the shared business profile.
+    // Members hydrate the name from cloud; pushing would overwrite the owner.
+    const { data: memRows } = await cloud.client
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', organizationId)
+      .eq('user_id', cloud.user.id)
+      .limit(1);
+    const role = String(memRows?.[0]?.role || '').toLowerCase();
+    if (role && role !== 'owner') return;
+
     const { error } = await cloud.client.from('organizations').update({
       name: db.profile.name || 'My business',
       currency: db.profile.reporting || 'USD',
@@ -3419,30 +3430,28 @@ async function hydrateFromCloud() {
     db.profile.taxLabel = remoteTaxProfile.tax_label || db.profile.taxLabel || 'Tax';
     db.profile.defaultTax = Number(remoteTaxProfile.default_tax_rate ?? db.profile.defaultTax ?? 0);
   }
-  // Prefer organization currency from cloud when present
+  // Adopt shared organization identity (name, currency, contact) from cloud.
+  // Team members must show the business name, not their personal default profile.
   try {
     const { data: orgRow } = await cloud.client.from('organizations')
-      .select('currency, name')
+      .select('currency, name, contact_email, phone, tax_registration_number, address, payment_details, tax_label')
       .eq('id', organizationId)
       .maybeSingle();
-    if (orgRow?.currency) {
-      // Only adopt cloud currency if local is still the blank default,
-      // OR cloud matches a non-USD choice the user already saved (re-hydrate).
-      const localRep = String(db.profile.reporting || 'USD').toUpperCase();
-      const cloudCur = String(orgRow.currency).toUpperCase();
-      if (localRep === 'USD' && cloudCur !== 'USD') {
-        db.profile.reporting = cloudCur;
-      } else if (localRep !== 'USD') {
-        // keep local user preference — will push on next sync
-      } else {
-        db.profile.reporting = cloudCur || localRep;
+    if (orgRow) {
+      if (orgRow.name) db.profile.name = orgRow.name;
+      if (orgRow.currency) db.profile.reporting = String(orgRow.currency).toUpperCase();
+      if (orgRow.contact_email) db.profile.email = orgRow.contact_email;
+      if (orgRow.phone != null && orgRow.phone !== '') db.profile.phone = orgRow.phone;
+      if (orgRow.tax_registration_number) db.profile.taxId = orgRow.tax_registration_number;
+      if (orgRow.tax_label) db.profile.taxLabel = orgRow.tax_label;
+      if (orgRow.payment_details) db.profile.paymentDetails = orgRow.payment_details;
+      const addr = orgRow.address;
+      if (addr) {
+        db.profile.address = typeof addr === 'string' ? addr : (addr.text || addr.address || db.profile.address || '');
       }
     }
-    if (orgRow?.name && !(db.profile.name || '').trim()) {
-      db.profile.name = orgRow.name;
-    }
   } catch (e) {
-    console.warn('org currency hydrate', e.message || e);
+    console.warn('org profile hydrate', e.message || e);
   }
   // Load clients directly (not only those attached to invoices)
   try {
