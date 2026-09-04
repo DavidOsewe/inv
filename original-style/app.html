@@ -851,35 +851,103 @@ input:focus:not(:focus-visible) {
 .team-invite-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 10px;
   align-items: flex-end;
-  margin-bottom: 4px;
+  margin-bottom: 0;
+}
+.team-invite-box {
+  padding: 14px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2, var(--panel));
+  margin-bottom: 16px;
+}
+.team-invite-box .team-help {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 10px 0 0;
+  line-height: 1.5;
 }
 .team-list {
   display: grid;
   gap: 8px;
 }
+.team-block-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 8px;
+}
+.team-block { margin-top: 4px; }
+.team-block + .team-block { margin-top: 18px; }
 .team-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 11px 14px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--panel);
   font-size: 13px;
 }
-.team-row b { color: var(--text); }
-.team-role {
+.team-row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.team-row-main b {
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-row-sub {
   font-size: 11px;
+  color: var(--muted);
+}
+.team-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.team-role {
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--muted);
-  background: var(--panel-2);
-  padding: 3px 8px;
+  background: var(--panel-2, color-mix(in srgb, var(--text) 6%, var(--panel)));
+  padding: 4px 9px;
   border-radius: 999px;
+  white-space: nowrap;
+}
+.team-role.is-owner {
+  color: color-mix(in srgb, var(--accent) 85%, var(--text));
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+.team-empty {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 12px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  line-height: 1.5;
+}
+.team-member-note {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
 }
 .team-locked {
   padding: 14px 16px;
@@ -887,6 +955,7 @@ input:focus:not(:focus-visible) {
   border: 1px dashed color-mix(in srgb, var(--accent) 35%, var(--line));
   background: color-mix(in srgb, var(--accent) 6%, var(--panel));
 }
+#teamInviteForm[hidden], #teamOwnerOnly[hidden] { display: none !important; }
 
 .plan-note {
   font-size: 12px;
@@ -1985,7 +2054,7 @@ input:focus:not(:focus-visible) {
       <div class="insight stack-gap" id="teamSection">
         <h3>Team</h3>
         <p class="section-sub" id="teamSectionLead" style="margin:4px 0 14px">
-          Pro lets you invite colleagues to the same business — shared invoices and clients.
+          Share this business with colleagues — same invoices and clients.
         </p>
         <div id="teamLocked" class="team-locked" style="display:none">
           <p style="margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.55">
@@ -1994,26 +2063,29 @@ input:focus:not(:focus-visible) {
           <button class="button primary" type="button" data-plan-page-upgrade="pro">Upgrade to Pro</button>
         </div>
         <div id="teamPanel" style="display:none">
-          <div class="team-invite-row">
-            <div class="field" style="flex:1;margin:0;min-width:180px">
-              <label>Invite by email</label>
-              <input id="teamInviteEmail" type="email" placeholder="colleague@company.com" autocomplete="email">
-            </div>
-            <div class="field" style="width:140px;margin:0">
-              <label>Role</label>
-              <select id="teamInviteRole">
-                <option value="member">Member</option>
-              </select>
-            </div>
-            <div style="align-self:flex-end">
-              <button class="button primary" type="button" id="teamInviteBtn">Send invite</button>
-            </div>
+          <div id="teamMemberNote" class="team-member-note" hidden>
+            You’re a member of this business. You can work on shared invoices and clients. Billing stays with the owner.
           </div>
-          <p style="font-size:12px;color:var(--muted);margin:8px 0 16px">
-            Members can manage invoices and clients. Billing and plan stay with the owner. You’ll get a link to share (email delivery comes later).
-          </p>
+          <div id="teamInviteForm" class="team-invite-box" hidden>
+            <div class="team-invite-row">
+              <div class="field" style="flex:1;margin:0;min-width:180px">
+                <label>Invite by email</label>
+                <input id="teamInviteEmail" type="email" placeholder="colleague@company.com" autocomplete="email">
+              </div>
+              <div class="field" style="width:130px;margin:0">
+                <label>Role</label>
+                <select id="teamInviteRole">
+                  <option value="member">Member</option>
+                </select>
+              </div>
+              <div style="align-self:flex-end">
+                <button class="button primary" type="button" id="teamInviteBtn">Send invite</button>
+              </div>
+            </div>
+            <p class="team-help">We’ll create a link you can share. They must sign in with the invited email. Billing stays with you.</p>
+          </div>
           <div id="teamMembersList" class="team-list"></div>
-          <div id="teamInvitesList" class="team-list" style="margin-top:12px"></div>
+          <div id="teamInvitesList" class="team-list"></div>
         </div>
       </div>
     </section>
@@ -6750,33 +6822,22 @@ async function loadTeamPanel() {
   const locked = document.getElementById('teamLocked');
   const panel = document.getElementById('teamPanel');
   const lead = document.getElementById('teamSectionLead');
+  const inviteForm = document.getElementById('teamInviteForm');
+  const memberNote = document.getElementById('teamMemberNote');
   if (!locked || !panel) return;
-
-  const canTeam = TEAM_TEST_OVERRIDE ||
-    hasFeature('team_collaboration') ||
-    String(entitlements?.plan || '').toLowerCase() === 'pro';
-  if (!canTeam) {
-    locked.style.display = '';
-    panel.style.display = 'none';
-    if (lead) lead.textContent = 'Pro lets you invite colleagues to the same business — shared invoices and clients.';
-    return;
-  }
-  locked.style.display = 'none';
-  panel.style.display = '';
-  if (lead) {
-    lead.textContent = TEAM_TEST_OVERRIDE
-      ? 'TEST MODE — Team unlocked without Pro. Invite your team; members share invoices and clients for this business.'
-      : 'Invite your team. Members share invoices and clients for this business.';
-  }
 
   const membersEl = document.getElementById('teamMembersList');
   const invitesEl = document.getElementById('teamInvitesList');
-  if (membersEl) membersEl.innerHTML = '<div style="color:var(--muted);font-size:13px">Loading team…</div>';
+  if (membersEl) membersEl.innerHTML = '<div class="team-empty">Loading team…</div>';
   if (invitesEl) invitesEl.innerHTML = '';
+  if (inviteForm) inviteForm.hidden = true;
+  if (memberNote) memberNote.hidden = true;
 
   try {
     if (!cloud.client || !cloud.user) {
-      if (membersEl) membersEl.innerHTML = '<div style="color:var(--muted);font-size:13px">Sign in to manage your team.</div>';
+      locked.style.display = '';
+      panel.style.display = 'none';
+      if (lead) lead.textContent = 'Pro lets you invite colleagues to the same business — shared invoices and clients.';
       return;
     }
     const organizationId = await ensureCloudOrganization();
@@ -6788,36 +6849,87 @@ async function loadTeamPanel() {
     const members = payload?.members || [];
     const invites = payload?.invites || [];
 
+    const myId = cloud.user?.id;
+    const myMembership = members.find(m => m.user_id === myId);
+    const isOwner = String(myMembership?.role || '').toLowerCase() === 'owner';
+    const isTeamMember = String(myMembership?.role || '').toLowerCase() === 'member';
+    const canTeam = TEAM_TEST_OVERRIDE ||
+      hasFeature('team_collaboration') ||
+      String(entitlements?.plan || '').toLowerCase() === 'pro' ||
+      isTeamMember;
+
+    if (!canTeam) {
+      locked.style.display = '';
+      panel.style.display = 'none';
+      if (lead) lead.textContent = 'Pro lets you invite colleagues to the same business — shared invoices and clients.';
+      return;
+    }
+    locked.style.display = 'none';
+    panel.style.display = '';
+    if (lead) {
+      lead.textContent = isOwner
+        ? 'Invite colleagues to this business. They’ll share invoices and clients with you.'
+        : 'You’re on a shared business workspace.';
+    }
+
+    if (inviteForm) inviteForm.hidden = !isOwner;
+    if (memberNote) memberNote.hidden = isOwner;
+
     if (membersEl) {
       if (!members.length) {
-        membersEl.innerHTML = '<div style="color:var(--muted);font-size:13px">You are the only member so far.</div>';
+        membersEl.innerHTML = '<div class="team-empty">No members yet.</div>';
       } else {
-        membersEl.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Members</div>' +
-          members.map(m => {
-            const email = m.email || m.user_id || 'Member';
-            const role = m.role || 'member';
-            return `<div class="team-row"><span><b>${email}</b></span><span class="team-role">${role}</span></div>`;
-          }).join('');
+        const rows = members.map(m => {
+          const email = m.email || 'Member';
+          const role = String(m.role || 'member').toLowerCase();
+          const isMe = m.user_id === myId;
+          const roleClass = role === 'owner' ? 'team-role is-owner' : 'team-role';
+          const sub = isMe ? 'You' : '';
+          return `<div class="team-row">
+            <div class="team-row-main">
+              <b title="${email}">${email}</b>
+              ${sub ? `<span class="team-row-sub">${sub}</span>` : ''}
+            </div>
+            <div class="team-row-actions"><span class="${roleClass}">${role}</span></div>
+          </div>`;
+        }).join('');
+        membersEl.innerHTML = `<div class="team-block"><div class="team-block-title">Members · ${members.length}</div>${rows}</div>`;
       }
     }
+
     if (invitesEl) {
-      if (!invites.length) {
+      if (!isOwner || !invites.length) {
         invitesEl.innerHTML = '';
       } else {
-        invitesEl.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Pending invites</div>' +
-          invites.map(inv => {
-            const link = window.location.origin + '/app.html?invite=' + encodeURIComponent(inv.token || '');
-            return `<div class="team-row">
-              <span><b>${inv.email}</b><div style="font-size:11px;color:var(--muted);margin-top:2px">Pending</div></span>
+        // Dedupe by email (keep newest-looking first from API order)
+        const seen = new Set();
+        const unique = [];
+        for (const inv of invites) {
+          const key = String(inv.email || '').toLowerCase();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          unique.push(inv);
+        }
+        const rows = unique.map(inv => {
+          const email = inv.email || 'Invite';
+          const link = window.location.origin + '/app.html?invite=' + encodeURIComponent(inv.token || '');
+          return `<div class="team-row">
+            <div class="team-row-main">
+              <b title="${email}">${email}</b>
+              <span class="team-row-sub">Waiting to join</span>
+            </div>
+            <div class="team-row-actions">
               <button class="button small" type="button" data-copy-invite="${link}">Copy link</button>
-            </div>`;
-          }).join('');
+            </div>
+          </div>`;
+        }).join('');
+        invitesEl.innerHTML = `<div class="team-block"><div class="team-block-title">Pending · ${unique.length}</div>${rows}</div>`;
       }
     }
   } catch (e) {
     console.warn('team panel', e.message || e);
     if (membersEl) {
-      membersEl.innerHTML = '<div style="color:var(--muted);font-size:13px">Team data will appear after you run the team SQL migration and upgrade to Pro.</div>';
+      membersEl.innerHTML = '<div class="team-empty">Couldn’t load team. Check your connection and try again.</div>';
     }
   }
 }
