@@ -3872,7 +3872,12 @@ const FEATURE_REQUIREMENTS = {
   priority_support: { label: 'Priority support', plan: 'pro' }
 };
 
+// TEMP: unlock paid feature gates (logo, team, etc.) without a real plan. Set false before shipping.
+const PLAN_TEST_OVERRIDE = true;
+const TEAM_TEST_OVERRIDE = PLAN_TEST_OVERRIDE; // alias used by team panel
+
 function hasFeature(feature) {
+  if (typeof PLAN_TEST_OVERRIDE !== 'undefined' && PLAN_TEST_OVERRIDE) return true;
   return !!entitlements?.features?.[feature];
 }
 
@@ -3963,8 +3968,6 @@ document.getElementById('upgradeLater')?.addEventListener('click', () => documen
 const BILLING_PROVIDER = 'paystack';
 const BILLING_READY = false; // flip to true once Edge Function + keys are live
 
-// TEMP: unlock Team panel + invite flow without Pro plan. Set false before shipping.
-const TEAM_TEST_OVERRIDE = true;
 
 function formatPlanPriceLine(planId, pricing) {
   const label = planId === 'pro' ? 'Pro' : 'Starter';
@@ -6913,6 +6916,7 @@ async function loadTeamPanel() {
         const rows = unique.map(inv => {
           const email = inv.email || 'Invite';
           const link = window.location.origin + '/app.html?invite=' + encodeURIComponent(inv.token || '');
+          const invId = inv.id || '';
           return `<div class="team-row">
             <div class="team-row-main">
               <b title="${email}">${email}</b>
@@ -6920,6 +6924,7 @@ async function loadTeamPanel() {
             </div>
             <div class="team-row-actions">
               <button class="button small" type="button" data-copy-invite="${link}">Copy link</button>
+              <button class="button small" type="button" data-revoke-invite="${invId}" title="Revoke invite">Revoke</button>
             </div>
           </div>`;
         }).join('');
@@ -6976,13 +6981,37 @@ document.getElementById('teamInviteBtn')?.addEventListener('click', async () => 
   }
 });
 
-document.addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-copy-invite]');
-  if (!btn) return;
-  const link = btn.getAttribute('data-copy-invite');
-  navigator.clipboard.writeText(link).then(() => toast('Invite link copied')).catch(() => {
-    window.prompt('Copy invite link:', link);
-  });
+document.addEventListener('click', async (e) => {
+  const copyBtn = e.target.closest('[data-copy-invite]');
+  if (copyBtn) {
+    const link = copyBtn.getAttribute('data-copy-invite');
+    navigator.clipboard.writeText(link).then(() => toast('Invite link copied')).catch(() => {
+      window.prompt('Copy invite link:', link);
+    });
+    return;
+  }
+
+  const revokeBtn = e.target.closest('[data-revoke-invite]');
+  if (!revokeBtn) return;
+  const inviteId = revokeBtn.getAttribute('data-revoke-invite');
+  if (!inviteId) return;
+  if (!confirm('Revoke this invite? The link will stop working.')) return;
+  revokeBtn.disabled = true;
+  try {
+    if (!cloud.client || !cloud.user) throw new Error('Sign in first');
+    const { error } = await cloud.client
+      .from('organization_invites')
+      .update({ status: 'revoked' })
+      .eq('id', inviteId)
+      .eq('status', 'pending');
+    if (error) throw error;
+    toast('Invite revoked');
+    await loadTeamPanel();
+  } catch (err) {
+    console.error(err);
+    toast(err.message || 'Could not revoke invite');
+    revokeBtn.disabled = false;
+  }
 });
 
 const PENDING_INVITE_KEY = 'invoicedey-pending-invite';
