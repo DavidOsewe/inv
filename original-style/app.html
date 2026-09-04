@@ -6899,12 +6899,19 @@ async function loadTeamPanel() {
           const isMe = m.user_id === myId;
           const roleClass = role === 'owner' ? 'team-role is-owner' : 'team-role';
           const sub = isMe ? 'You' : '';
+          const canRemove = isOwner && !isMe && m.user_id;
+          const removeBtn = canRemove
+            ? `<button class="button small" type="button" data-remove-member="${m.user_id}" data-remove-email="${String(email).replace(/"/g, '&quot;')}">Remove</button>`
+            : '';
           return `<div class="team-row">
             <div class="team-row-main">
               <b title="${email}">${email}</b>
               ${sub ? `<span class="team-row-sub">${sub}</span>` : ''}
             </div>
-            <div class="team-row-actions"><span class="${roleClass}">${role}</span></div>
+            <div class="team-row-actions">
+              <span class="${roleClass}">${role}</span>
+              ${removeBtn}
+            </div>
           </div>`;
         }).join('');
         membersEl.innerHTML = `<div class="team-block"><div class="team-block-title">Members · ${members.length}</div>${rows}</div>`;
@@ -7039,6 +7046,31 @@ document.addEventListener('click', async (e) => {
     console.error(err);
     toast(err.message || 'Could not revoke invite');
     revokeBtn.disabled = false;
+  }
+});
+
+document.addEventListener('click', async (e) => {
+  const removeBtn = e.target.closest('[data-remove-member]');
+  if (!removeBtn) return;
+  const userId = removeBtn.getAttribute('data-remove-member');
+  const email = removeBtn.getAttribute('data-remove-email') || 'this member';
+  if (!userId) return;
+  if (!confirm(`Remove ${email} from this business? They will lose access to shared invoices and clients.`)) return;
+  removeBtn.disabled = true;
+  try {
+    if (!cloud.client || !cloud.user) throw new Error('Sign in first');
+    const organizationId = await ensureCloudOrganization();
+    const { data, error } = await cloud.client.rpc('remove_organization_member', {
+      p_organization_id: organizationId,
+      p_user_id: userId
+    });
+    if (error) throw error;
+    toast('Member removed');
+    await loadTeamPanel();
+  } catch (err) {
+    console.error(err);
+    toast(err.message || 'Could not remove member');
+    removeBtn.disabled = false;
   }
 });
 
