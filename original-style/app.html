@@ -3433,12 +3433,16 @@ async function hydrateFromCloud() {
   // Adopt shared organization identity (name, currency, contact) from cloud.
   // Team members must show the business name, not their personal default profile.
   try {
-    const { data: orgRow } = await cloud.client.from('organizations')
-      .select('currency, name, contact_email, phone, tax_registration_number, address, payment_details, tax_label')
+    const { data: orgRow, error: orgErr } = await cloud.client.from('organizations')
+      .select('*')
       .eq('id', organizationId)
       .maybeSingle();
+    if (orgErr) console.warn('org profile hydrate', orgErr.message || orgErr);
     if (orgRow) {
-      if (orgRow.name) db.profile.name = orgRow.name;
+      // Always take the shared business name when the org has one
+      if (orgRow.name && String(orgRow.name).trim()) {
+        db.profile.name = String(orgRow.name).trim();
+      }
       if (orgRow.currency) db.profile.reporting = String(orgRow.currency).toUpperCase();
       if (orgRow.contact_email) db.profile.email = orgRow.contact_email;
       if (orgRow.phone != null && orgRow.phone !== '') db.profile.phone = orgRow.phone;
@@ -5706,7 +5710,11 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
         await track('signup_completed', { source: 'auth_session', funnel_stage: 'signup' });
       }
       await syncProfile(client, session.user);
+      // Accept team invite before first hydrate when possible so preferred org is set.
+      // startCloudSync still runs after so local user boundary is correct; switch re-hydrates.
+      try { await maybeAcceptInviteFromUrl(); } catch (e) { console.warn('invite accept', e.message || e); }
       await startCloudSync(client, session.user);
+      // If invite was accepted above before cloud.user fully wired, retry once.
       try { await maybeAcceptInviteFromUrl(); } catch (e) { console.warn('invite accept', e.message || e); }
       if (document.getElementById('profile')?.classList.contains('active')) profile();
     }
@@ -6798,7 +6806,7 @@ async function loadTeamPanel() {
       } else {
         invitesEl.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Pending invites</div>' +
           invites.map(inv => {
-            const link = window.location.origin + '/index.html?invite=' + encodeURIComponent(inv.token || '');
+            const link = window.location.origin + '/app.html?invite=' + encodeURIComponent(inv.token || '');
             return `<div class="team-row">
               <span><b>${inv.email}</b><div style="font-size:11px;color:var(--muted);margin-top:2px">Pending</div></span>
               <button class="button small" type="button" data-copy-invite="${link}">Copy link</button>
@@ -6839,7 +6847,7 @@ document.getElementById('teamInviteBtn')?.addEventListener('click', async () => 
     const row = Array.isArray(data) ? data[0] : data;
     const token = row?.token;
     if (token) {
-      const link = window.location.origin + '/index.html?invite=' + encodeURIComponent(token);
+      const link = window.location.origin + '/app.html?invite=' + encodeURIComponent(token);
       try { await navigator.clipboard.writeText(link); } catch {}
       toast('Invite created — link copied');
     } else {
@@ -6865,27 +6873,68 @@ document.addEventListener('click', (e) => {
   });
 });
 
+const PENDING_INVITE_KEY = 'invoicedey-pending-invite';
+
+function stashPendingInvite(token) {
+  if (!token) return;
+  try { localStorage.setItem(PENDING_INVITE_KEY, token); } catch {}
+}
+
+function readPendingInvite() {
+  const fromUrl = new URLSearchParams(location.search).get('invite');
+  if (fromUrl) {
+    stashPendingInvite(fromUrl);
+    return fromUrl;
+  }
+  try { return localStorage.getItem(PENDING_INVITE_KEY) || null; } catch { return null; }
+}
+
+function clearPendingInvite() {
+  try { localStorage.removeItem(PENDING_INVITE_KEY); } catch {}
+  try {
+    const url = new URL(location.href);
+    if (url.searchParams.has('invite')) {
+      url.searchParams.delete('invite');
+      history.replaceState({}, '', url.pathname + url.search + url.hash);
+    }
+  } catch {}
+}
+
+// Capture invite token as early as possible (before auth finishes).
+try {
+  const earlyInvite = new URLSearchParams(location.search).get('invite');
+  if (earlyInvite) stashPendingInvite(earlyInvite);
+} catch {}
+
 async function maybeAcceptInviteFromUrl() {
   try {
-    const token = new URLSearchParams(location.search).get('invite');
-    if (!token || !cloud.client || !cloud.user) return;
+    const token = readPendingInvite();
+    if (!token || !cloud.client || !cloud.user) return false;
     const { data, error } = await cloud.client.rpc('accept_organization_invite', { p_token: token });
     if (error) throw error;
     const payload = typeof data === 'string' ? JSON.parse(data) : data;
     const joinedOrgId = payload?.organization_id || null;
-    const url = new URL(location.href);
-    url.searchParams.delete('invite');
-    history.replaceState({}, '', url.pathname + url.search);
+    clearPendingInvite();
     if (joinedOrgId) {
       toast('You joined the team — loading shared invoices…');
       await switchActiveOrganization(joinedOrgId);
-    } else {
-      toast('You joined the team');
-      await loadTeamPanel();
+      return true;
     }
+    toast('You joined the team');
+    await loadTeamPanel();
+    return true;
   } catch (e) {
-    console.warn('accept invite', e.message || e);
-    if (typeof toast === 'function') toast(e.message || 'Could not accept invite');
+    const msg = e?.message || String(e || 'Could not accept invite');
+    console.warn('accept invite', msg);
+    // Keep token stashed if user simply needs to sign in with the right email
+    if (/sign in with/i.test(msg)) {
+      if (typeof toast === 'function') toast(msg);
+      return false;
+    }
+    // Expired / already used — drop token so it does not loop
+    if (/not found|expired|already/i.test(msg)) clearPendingInvite();
+    if (typeof toast === 'function') toast(msg);
+    return false;
   }
 }
 

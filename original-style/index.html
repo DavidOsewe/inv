@@ -24,9 +24,28 @@ function captureAttribution(){
  let old={}; try{old=JSON.parse(localStorage.getItem('invoicedey-attribution-v3')||'{}')}catch{}
  const a={...old}; if(ref)a.referral_code=ref; if(src)a.source=src; if(med)a.medium=med; if(camp)a.campaign=camp; if(Object.keys(a).length){a.landing_page='/signup.html';a.last_touch=true;a.touched_at=new Date().toISOString();localStorage.setItem('invoicedey-attribution-v3',JSON.stringify(a))}
 }
+// Persist team invite token across magic-link redirect
+(function(){
+  const inv=qs.get('invite');
+  if(inv){try{localStorage.setItem('invoicedey-pending-invite',inv)}catch{}}
+})();
+// If already signed in and invite present, go straight to app to accept
+(async function(){
+  try{
+    const inv=qs.get('invite')||localStorage.getItem('invoicedey-pending-invite');
+    const {data:{session}}=await sb.auth.getSession();
+    if(session?.user && inv){
+      location.replace('app.html?invite='+encodeURIComponent(inv));
+      return;
+    }
+  }catch{}
+})();
 captureAttribution();
+try{const em=qs.get('email'); if(em){const el=document.getElementById('email'); if(el)el.value=em}}catch{}
 document.getElementById('signupForm').addEventListener('submit',async e=>{e.preventDefault();const email=document.getElementById('email').value.trim();const name=document.getElementById('name').value.trim();if(!email)return;btn.disabled=true;btn.textContent='Sending…';
- const redirect=new URL('app.html',location.href); qs.forEach((v,k)=>{if(['ref','utm_source','utm_medium','utm_campaign','utm_content','utm_term'].includes(k))redirect.searchParams.set(k,v)});
+ const redirect=new URL('app.html',location.href); qs.forEach((v,k)=>{if(['ref','utm_source','utm_medium','utm_campaign','utm_content','utm_term','invite'].includes(k))redirect.searchParams.set(k,v)});
+ // Always carry pending invite into the post-auth redirect
+ try{const inv=qs.get('invite')||localStorage.getItem('invoicedey-pending-invite'); if(inv)redirect.searchParams.set('invite',inv)}catch{}
  const {error}=await sb.auth.signInWithOtp({email,options:{emailRedirectTo:redirect.toString(),data:{full_name:name}}});
  if(error){setStatus(error.message,false);btn.disabled=false;btn.textContent='Send magic link'}else{setStatus('Magic link sent. Check your email and return here to finish signing in.');btn.textContent='Link sent'}
 });
