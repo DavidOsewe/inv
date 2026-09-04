@@ -3874,6 +3874,8 @@ const FEATURE_REQUIREMENTS = {
 
 // TEMP: unlock paid feature gates (logo, team, etc.) without a real plan. Set false before shipping.
 const PLAN_TEST_OVERRIDE = true;
+const INVOICEDEY_BUILD = '2026-09-04-team-logo-revoke';
+try { console.info('[invoicedey]', INVOICEDEY_BUILD, 'PLAN_TEST_OVERRIDE=', PLAN_TEST_OVERRIDE); } catch {}
 const TEAM_TEST_OVERRIDE = PLAN_TEST_OVERRIDE; // alias used by team panel
 
 function hasFeature(feature) {
@@ -3928,10 +3930,19 @@ function applyFeatureGates() {
   const logoEnabled = hasFeature('custom_logo');
   if (logoLabel) {
     logoLabel.style.opacity = logoEnabled ? '1' : '.65';
+    logoLabel.style.pointerEvents = logoEnabled ? '' : 'none';
     logoLabel.title = logoEnabled ? 'Upload your company logo' : 'Custom logo requires Starter';
   }
-  if (logoInput) logoInput.disabled = !logoEnabled;
-  if (hint) hint.textContent = logoEnabled ? 'Custom logo is included in your plan.' : 'Custom company logo requires the Starter plan.';
+  if (logoInput) {
+    logoInput.disabled = !logoEnabled;
+    logoInput.removeAttribute(logoEnabled ? 'disabled' : 'data-keep');
+    if (logoEnabled) logoInput.disabled = false;
+  }
+  if (hint) {
+    hint.textContent = logoEnabled
+      ? (PLAN_TEST_OVERRIDE ? 'Custom logo unlocked (test mode).' : 'Custom logo is included in your plan.')
+      : 'Custom company logo requires the Starter plan.';
+  }
 
   document.querySelectorAll('[data-feature-gate]').forEach(btn => {
     btn.disabled = false;
@@ -5699,7 +5710,7 @@ document.getElementById('growthLater')?.addEventListener('click', () => {
 });
 
 document.getElementById('logoFile')?.addEventListener('change', async (e) => {
-  if (!requireFeature('custom_logo', 'profile_logo')) {
+  if (!(PLAN_TEST_OVERRIDE || requireFeature('custom_logo', 'profile_logo'))) {
     e.target.value = '';
     return;
   }
@@ -6994,17 +7005,34 @@ document.addEventListener('click', async (e) => {
   const revokeBtn = e.target.closest('[data-revoke-invite]');
   if (!revokeBtn) return;
   const inviteId = revokeBtn.getAttribute('data-revoke-invite');
-  if (!inviteId) return;
+  if (!inviteId) {
+    toast('Missing invite id — refresh and try again');
+    return;
+  }
   if (!confirm('Revoke this invite? The link will stop working.')) return;
   revokeBtn.disabled = true;
   try {
     if (!cloud.client || !cloud.user) throw new Error('Sign in first');
-    const { error } = await cloud.client
-      .from('organization_invites')
-      .update({ status: 'revoked' })
-      .eq('id', inviteId)
-      .eq('status', 'pending');
-    if (error) throw error;
+    // Prefer security-definer RPC (bypasses tricky RLS edge cases)
+    let revoked = false;
+    try {
+      const { data, error } = await cloud.client.rpc('revoke_organization_invite', { p_invite_id: inviteId });
+      if (!error) revoked = true;
+      else console.warn('revoke rpc', error.message || error);
+    } catch (rpcErr) {
+      console.warn('revoke rpc missing?', rpcErr.message || rpcErr);
+    }
+    if (!revoked) {
+      const { data, error } = await cloud.client
+        .from('organization_invites')
+        .update({ status: 'revoked' })
+        .eq('id', inviteId)
+        .eq('status', 'pending')
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data?.id) throw new Error('Revoke blocked (RLS) or invite already used. Run fix_revoke_invite.sql.');
+    }
     toast('Invite revoked');
     await loadTeamPanel();
   } catch (err) {
