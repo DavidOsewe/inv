@@ -7060,13 +7060,32 @@ document.addEventListener('click', async (e) => {
   try {
     if (!cloud.client || !cloud.user) throw new Error('Sign in first');
     const organizationId = await ensureCloudOrganization();
+    // Prefer RPC; fall back to direct delete if SQL migration not applied yet
+    let removed = false;
     const { data, error } = await cloud.client.rpc('remove_organization_member', {
       p_organization_id: organizationId,
       p_user_id: userId
     });
-    if (error) throw error;
-    toast('Member removed');
-    await loadTeamPanel();
+    if (!error) {
+      removed = true;
+    } else {
+      console.warn('remove rpc', error.message || error);
+      const { data: delRows, error: delErr } = await cloud.client
+        .from('organization_members')
+        .delete()
+        .eq('organization_id', organizationId)
+        .eq('user_id', userId)
+        .select('user_id');
+      if (delErr) throw delErr;
+      if (!delRows?.length) {
+        throw new Error('Could not remove member. Run fix_remove_member.sql in Supabase, then try again.');
+      }
+      removed = true;
+    }
+    if (removed) {
+      toast('Member removed');
+      await loadTeamPanel();
+    }
   } catch (err) {
     console.error(err);
     toast(err.message || 'Could not remove member');
