@@ -497,6 +497,10 @@ input:focus:not(:focus-visible) {
   box-shadow: 0 -8px 28px rgba(0,0,0,.12);
 }
 .editor-sticky-bar.show { display: flex; }
+@media (min-width: 641px) {
+  .editor-sticky-bar,
+  .editor-sticky-bar.show { display: none !important; }
+}
 .editor-sticky-stats {
   display: flex;
   flex-wrap: wrap;
@@ -6160,7 +6164,9 @@ function updateLineAmount(n) {
 function updateEditorStickyBar() {
   const bar = document.getElementById('editorStickyBar');
   const onEditor = document.getElementById('editor')?.classList.contains('active');
-  if (!bar || !edit || !onEditor) {
+  // Sticky bar is a phone affordance only — desktop/tablet keep in-form actions
+  const phone = typeof isPhoneLayout === 'function' ? isPhoneLayout() : (window.matchMedia && window.matchMedia('(max-width: 640px)').matches);
+  if (!bar || !edit || !onEditor || !phone) {
     if (bar) bar.classList.remove('show');
     return;
   }
