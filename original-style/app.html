@@ -1880,6 +1880,7 @@ input:focus:not(:focus-visible) {
     <nav class="nav">
       <button class="active" data-view="dashboard"><span>⌂</span> Home</button>
       <button data-view="invoices"><span>▤</span> Invoices</button>
+      <button data-view="receipts"><span>◈</span> Receipts</button>
       <button data-view="clients"><span>♙</span> Clients</button>
       <button data-view="profile"><span>⚙</span> Profile</button>
       <button data-view="plan"><span>◆</span> Plan</button>
@@ -2003,6 +2004,29 @@ input:focus:not(:focus-visible) {
         <div class="search-bar" style="margin:0;flex:1;max-width:520px"><input type="search" id="clientSearch" placeholder="Search clients by name or email…"></div>
       </div>
       <div id="clientList"></div>
+    </section>
+
+    <section class="view" id="receipts">
+      <div class="section-head">
+        <div>
+          <h2>Receipts</h2>
+          <div class="client-count" id="receiptCount">Payment confirmations</div>
+        </div>
+      </div>
+      <div id="receiptsLocked" class="team-locked" style="display:none">
+        <p style="margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.55">
+          <b>Payment receipts</b> are included with <b>Starter</b>. Download proof of payment for any recorded payment.
+        </p>
+        <button class="button primary" type="button" data-plan-page-upgrade="starter">Upgrade to Starter</button>
+      </div>
+      <div id="receiptsPanel" style="display:none">
+        <div class="client-toolbar">
+          <div class="search-bar" style="margin:0;flex:1;max-width:520px">
+            <input type="search" id="receiptSearch" placeholder="Search by client, invoice, or note…">
+          </div>
+        </div>
+        <div id="receiptList"></div>
+      </div>
     </section>
 
     <section class="view" id="plan">
@@ -4415,11 +4439,12 @@ function switchTo(v) {
   const h = {
     dashboard: ['Invoice control centre', 'Know what has been paid and what needs attention.'],
     invoices: ['Invoices', 'Simple invoicing. Nothing you do not need.'],
+    receipts: ['Receipts', 'Download payment confirmations for your records.'],
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
     plan: ['Plan & billing', 'Manage your plan, usage and feature access.'],
     editor: ['Invoice editor', 'Create a clear invoice your client can pay.']
-  }[v];
+  }[v] || ['invoicedey', ''];
   $('#heading').textContent = h[0];
   $('#subheading').textContent = h[1];
   const bottomNav = document.querySelector('.bottom-nav');
@@ -4434,6 +4459,7 @@ function switchTo(v) {
   updateGrowthMeter();
   if (v === 'dashboard') dashboard();
   if (v === 'invoices') invoices();
+  if (v === 'receipts') receiptsView();
   if (v === 'clients') clients();
   if (v === 'profile') profile();
   if (v === 'plan') planView();
@@ -4674,6 +4700,85 @@ function invoices() {
     return;
   }
   $('#invoiceList').innerHTML = renderInvoiceRows(list, { showActions: true });
+}
+
+function collectPaymentReceipts() {
+  const rows = [];
+  for (const inv of db.invoices || []) {
+    ensurePayments(inv);
+    const pays = inv.payments || [];
+    for (const p of pays) {
+      rows.push({
+        paymentId: p.id,
+        invoiceId: inv.id,
+        invoiceNumber: inv.number || '—',
+        clientName: client(inv.client)?.name || '—',
+        amount: Number(p.amount) || 0,
+        currency: inv.currency,
+        date: p.date || '',
+        method: p.method || '',
+        note: p.note || ''
+      });
+    }
+  }
+  rows.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  return rows;
+}
+
+function receiptsView() {
+  const locked = document.getElementById('receiptsLocked');
+  const panel = document.getElementById('receiptsPanel');
+  const listEl = document.getElementById('receiptList');
+  const countEl = document.getElementById('receiptCount');
+  if (!locked || !panel || !listEl) return;
+
+  const can = hasFeature('payment_receipts');
+  if (!can) {
+    locked.style.display = '';
+    panel.style.display = 'none';
+    if (countEl) countEl.textContent = 'Starter feature';
+    return;
+  }
+  locked.style.display = 'none';
+  panel.style.display = '';
+
+  const query = (document.getElementById('receiptSearch')?.value || '').trim().toLowerCase();
+  const all = collectPaymentReceipts();
+  const list = all.filter(r => !query || [r.clientName, r.invoiceNumber, r.note, r.method].some(v => String(v || '').toLowerCase().includes(query)));
+  if (countEl) countEl.textContent = `${all.length} receipt${all.length === 1 ? '' : 's'}`;
+
+  if (!all.length) {
+    listEl.innerHTML = `<div class="empty">
+      <div class="empty-icon">◈</div>
+      <h3>No receipts yet</h3>
+      <p>Record a payment on an invoice, then download a receipt from here or the invoice editor.</p>
+      <div class="empty-actions">
+        <button class="button primary" type="button" onclick="switchTo('invoices')">Go to invoices</button>
+      </div>
+    </div>`;
+    return;
+  }
+  if (!list.length) {
+    listEl.innerHTML = `<div class="empty"><div class="empty-icon">⌕</div><h3>No matching receipts</h3><p>Try a different client or invoice number.</p></div>`;
+    return;
+  }
+
+  listEl.innerHTML = `<table class="table">
+    <thead><tr><th>Date</th><th>Client</th><th>Invoice</th><th>Method</th><th class="right">Amount</th><th class="right">Actions</th></tr></thead>
+    <tbody>${list.map(r => {
+      const d = r.date ? new Date(r.date + 'T12:00:00').toLocaleDateString() : '—';
+      return `<tr>
+        <td>${d}</td>
+        <td><b>${r.clientName}</b></td>
+        <td>${r.invoiceNumber}</td>
+        <td style="color:var(--muted);font-size:12px">${r.method || '—'}${r.note ? `<div class="client-meta">${r.note}</div>` : ''}</td>
+        <td class="right"><b>${money(r.amount, r.currency)}</b></td>
+        <td class="right">
+          <button class="button small" type="button" data-receipt-pay-global="${r.invoiceId}" data-payment-id="${r.paymentId}">Download</button>
+        </td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
 }
 
 function clients() {
@@ -5589,6 +5694,7 @@ document.addEventListener('input', e => {
   }
   if (e.target.id === 'invoiceSearch') invoices();
   if (e.target.id === 'clientSearch') clients();
+  if (e.target.id === 'receiptSearch') receiptsView();
 });
 
 // Normalize qty/rate to numbers when leaving the field
@@ -6654,6 +6760,13 @@ function addPaymentToEdit(amount, date, note, method) {
       e.preventDefault();
       e.stopPropagation();
       printReceipt(rc.dataset.receipt);
+      return;
+    }
+    const rpg = e.target.closest('[data-receipt-pay-global]');
+    if (rpg) {
+      e.preventDefault();
+      e.stopPropagation();
+      printReceipt(rpg.getAttribute('data-receipt-pay-global'), rpg.getAttribute('data-payment-id'));
       return;
     }
     const rp = e.target.closest('[data-receipt-pay]');
