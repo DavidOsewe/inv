@@ -4759,6 +4759,81 @@ function invoices() {
 }
 
 /* ---------- Recurring invoices (Pro, V1) ---------- */
+/* ---------- Date validation ---------- */
+function isValidIsoDate(value) {
+  const s = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const y = Number(s.slice(0, 4));
+  const m = Number(s.slice(5, 7));
+  const d = Number(s.slice(8, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && (dt.getUTCMonth() + 1) === m && dt.getUTCDate() === d;
+}
+
+function parseIsoDate(value) {
+  if (!isValidIsoDate(value)) return null;
+  const s = String(value).trim();
+  return new Date(s + 'T12:00:00');
+}
+
+/** @returns negative if a < b, 0 if equal, positive if a > b; null if invalid */
+function compareIsoDates(a, b) {
+  if (!isValidIsoDate(a) || !isValidIsoDate(b)) return null;
+  return String(a).trim().localeCompare(String(b).trim());
+}
+
+function validateInvoiceDates(issue, due) {
+  const errors = [];
+  if (!issue) errors.push('Issue date is required.');
+  else if (!isValidIsoDate(issue)) errors.push('Issue date must be a real calendar date (YYYY-MM-DD).');
+  if (!due) errors.push('Due date is required.');
+  else if (!isValidIsoDate(due)) errors.push('Due date must be a real calendar date (YYYY-MM-DD).');
+  if (isValidIsoDate(issue) && isValidIsoDate(due) && compareIsoDates(due, issue) < 0) {
+    errors.push('Due date cannot be before the issue date.');
+  }
+  return errors;
+}
+
+/**
+ * Recurring next-run rules:
+ * - required + valid calendar date
+ * - not more than 5 years ahead (typo guard)
+ * - past dates allowed but flagged (will generate on next app open)
+ */
+function validateRecurringNextDate(next, { todayIso = today } = {}) {
+  const result = { ok: false, errors: [], warnings: [] };
+  if (!next || !String(next).trim()) {
+    result.errors.push('Pick a next invoice date.');
+    return result;
+  }
+  if (!isValidIsoDate(next)) {
+    result.errors.push('Next invoice date must be a real calendar date.');
+    return result;
+  }
+  const max = advanceScheduleDate(todayIso, 'yearly');
+  // rough +4 more years
+  let maxCap = todayIso;
+  for (let i = 0; i < 5; i++) maxCap = advanceScheduleDate(maxCap, 'yearly');
+  if (compareIsoDates(next, maxCap) > 0) {
+    result.errors.push('Next invoice date cannot be more than 5 years in the future.');
+    return result;
+  }
+  if (compareIsoDates(next, todayIso) < 0) {
+    result.warnings.push('Date is in the past — invoices may generate the next time you open the app.');
+  }
+  result.ok = true;
+  return result;
+}
+
+function markDateField(el, invalid) {
+  if (!el) return;
+  el.classList.toggle('invalid', !!invalid);
+  if (invalid) el.setAttribute('aria-invalid', 'true');
+  else el.removeAttribute('aria-invalid');
+}
+
 function advanceScheduleDate(isoDate, interval) {
   const d = new Date((isoDate || today) + 'T12:00:00');
   if (Number.isNaN(d.getTime())) return today;
@@ -5049,10 +5124,15 @@ function openRecurringModal() {
   const dateEl = document.getElementById('recurringNextDate');
   const hint = document.getElementById('recurringModalHint');
   if (intervalEl) intervalEl.value = 'monthly';
-  if (dateEl) dateEl.value = advanceScheduleDate(today, 'monthly');
+  if (dateEl) {
+    dateEl.value = advanceScheduleDate(today, 'monthly');
+    dateEl.min = today; // prefer today+; user can still type past in some browsers
+    dateEl.classList.remove('invalid');
+  }
   const cname = client(edit.client)?.name || 'this client';
   if (hint) {
     hint.textContent = 'Based on “' + (edit.title || edit.number || 'invoice') + '” for ' + cname + '. Generated invoices start as drafts.';
+    hint.style.color = '';
   }
   document.getElementById('recurringModal')?.classList.add('show');
 }
@@ -5060,7 +5140,38 @@ function openRecurringModal() {
 function syncRecurringNextFromInterval() {
   const unit = document.getElementById('recurringInterval')?.value || 'monthly';
   const dateEl = document.getElementById('recurringNextDate');
-  if (dateEl) dateEl.value = advanceScheduleDate(today, unit);
+  if (dateEl) {
+    dateEl.value = advanceScheduleDate(today, unit);
+    dateEl.classList.remove('invalid');
+  }
+  const hint = document.getElementById('recurringModalHint');
+  if (hint && edit) {
+    const cname = client(edit.client)?.name || 'this client';
+    hint.style.color = '';
+    hint.textContent = 'Based on “' + (edit.title || edit.number || 'invoice') + '” for ' + cname + '. Generated invoices start as drafts.';
+  }
+}
+
+function validateRecurringModalFields() {
+  const dateEl = document.getElementById('recurringNextDate');
+  const hint = document.getElementById('recurringModalHint');
+  const next = dateEl?.value || '';
+  const result = validateRecurringNextDate(next, { todayIso: today });
+  markDateField(dateEl, !result.ok);
+  if (hint) {
+    if (!result.ok) {
+      hint.style.color = 'var(--red-text)';
+      hint.textContent = result.errors[0] || 'Invalid date.';
+    } else if (result.warnings.length) {
+      hint.style.color = 'var(--muted)';
+      hint.textContent = result.warnings[0];
+    } else if (edit) {
+      hint.style.color = '';
+      const cname = client(edit.client)?.name || 'this client';
+      hint.textContent = 'Based on “' + (edit.title || edit.number || 'invoice') + '” for ' + cname + '. Generated invoices start as drafts.';
+    }
+  }
+  return result;
 }
 
 function confirmRecurringModal() {
@@ -5074,8 +5185,9 @@ function confirmRecurringModal() {
     toast('Pick a valid interval.');
     return;
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(next)) {
-    toast('Pick a next invoice date.');
+  const dateCheck = validateRecurringModalFields();
+  if (!dateCheck.ok) {
+    toast(dateCheck.errors[0] || 'Fix the next invoice date.');
     return;
   }
   const n = db.invoices.findIndex(i => i.id === edit.id);
@@ -5812,18 +5924,11 @@ function validateInvoice(requireSent) {
     errors.push('Invoice number is required.');
     $('#number')?.classList.add('invalid');
   }
-  if (!edit.issue) {
-    errors.push('Issue date is required.');
-    $('#issue')?.classList.add('invalid');
-  }
-  if (!edit.due) {
-    errors.push('Due date is required.');
-    $('#due')?.classList.add('invalid');
-  }
-  if (edit.issue && edit.due && edit.due < edit.issue) {
-    errors.push('Due date cannot be before the issue date.');
-    $('#due')?.classList.add('invalid');
-  }
+  const dateErrors = validateInvoiceDates(edit.issue, edit.due);
+  for (const msg of dateErrors) errors.push(msg);
+  if (!edit.issue || !isValidIsoDate(edit.issue)) markDateField($('#issue'), true);
+  if (!edit.due || !isValidIsoDate(edit.due)) markDateField($('#due'), true);
+  else if (isValidIsoDate(edit.issue) && compareIsoDates(edit.due, edit.issue) < 0) markDateField($('#due'), true);
   if (requireSent && !edit.client) {
     errors.push('Select a client before marking as sent.');
     $('#client')?.classList.add('invalid');
@@ -6093,6 +6198,13 @@ document.addEventListener('input', e => {
   if (e.target.id === 'invoiceSearch') invoices();
   if (e.target.id === 'clientSearch') clients();
   if (e.target.id === 'receiptSearch') receiptsView();
+  if (e.target.id === 'issue' || e.target.id === 'due') {
+    const issue = $('#issue')?.value || edit?.issue;
+    const due = $('#due')?.value || edit?.due;
+    const errs = validateInvoiceDates(issue, due);
+    markDateField($('#issue'), errs.some(x => /issue/i.test(x)));
+    markDateField($('#due'), errs.some(x => /due/i.test(x)));
+  }
 });
 
 // Normalize qty/rate to numbers when leaving the field
@@ -6235,6 +6347,8 @@ document.getElementById('recurringModalCancel')?.addEventListener('click', () =>
 });
 document.getElementById('recurringModalConfirm')?.addEventListener('click', () => confirmRecurringModal());
 document.getElementById('recurringInterval')?.addEventListener('change', () => syncRecurringNextFromInterval());
+document.getElementById('recurringNextDate')?.addEventListener('change', () => validateRecurringModalFields());
+document.getElementById('recurringNextDate')?.addEventListener('input', () => validateRecurringModalFields());
 document.getElementById('recurringModal')?.addEventListener('click', (e) => {
   if (e.target.id === 'recurringModal') e.target.classList.remove('show');
 });
