@@ -656,6 +656,25 @@ input:focus:not(:focus-visible) {
   .dash-title { font-size: 18px; }
 }
 
+
+#dashCards.cards-three {
+  grid-template-columns: repeat(3, 1fr);
+}
+@media (max-width: 900px) {
+  #dashCards.cards-three { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 640px) {
+  #dashCards.cards-three { grid-template-columns: 1fr 1fr; }
+}
+.dash-currency-note {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+.card.card-merged-overdue small::after {
+  content: none;
+}
+
 .cards {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -2143,28 +2162,26 @@ input:focus:not(:focus-visible) {
           <p class="dash-sub" id="dashSub">Create invoices, track payments, stay on top of what’s due.</p>
         </div>
         <div class="dash-hero-actions">
-          <button class="button primary" type="button" onclick="newInvoice()">+ New invoice</button>
           <button class="button" type="button" onclick="switchTo('clients')">Clients</button>
-          <button class="button" type="button" onclick="switchTo('plan')">Plan</button>
         </div>
       </div>
-      <div class="cards">
-        <div class="card card-accent">
+      <div class="cards" id="dashCards">
+        <div class="card card-accent" id="cardOutstanding">
           <small>Outstanding</small>
           <b id="outstanding">$0.00</b>
           <span class="mini" id="outstandingCount">0 unpaid invoices</span>
         </div>
-        <div class="card">
+        <div class="card" id="cardOverdue">
           <small>Overdue</small>
           <b class="late" id="overdue">$0.00</b>
           <span class="mini" id="overdueCount">Nothing overdue</span>
         </div>
-        <div class="card">
+        <div class="card" id="cardCollected">
           <small>Collected this month</small>
           <b class="good" id="collected">$0.00</b>
-          <span class="mini">Paid invoices</span>
+          <span class="mini" id="collectedMini">In reporting currency</span>
         </div>
-        <div class="card">
+        <div class="card" id="cardRate" style="display:none">
           <small>Collection rate</small>
           <b id="rate">—</b>
           <span class="mini">By invoice value</span>
@@ -2172,24 +2189,24 @@ input:focus:not(:focus-visible) {
       </div>
       <div id="nextAction" class="next-action" style="display:none"></div>
       <div class="section-head">
-        <h2>Aging analysis</h2>
-        <small id="reportingLabel" style="color:var(--muted)"></small>
-      </div>
-      <div class="insights">
-        <div class="insight">
-          <h3>Open invoice aging</h3>
-          <div id="aging"></div>
-        </div>
-        <div class="insight">
-          <h3>invoicedey insight</h3>
-          <div id="insightText" style="color:var(--muted);line-height:1.7"></div>
-        </div>
-      </div>
-      <div class="section-head">
         <h2>Recent invoices</h2>
         <button class="button text" data-view="invoices">View all →</button>
       </div>
       <div id="recent"></div>
+      <div class="section-head" id="agingSectionHead" style="margin-top:28px">
+        <h2>Aging</h2>
+        <small id="reportingLabel" style="color:var(--muted)"></small>
+      </div>
+      <div class="insights" id="dashInsights">
+        <div class="insight">
+          <h3>Open balances by age</h3>
+          <div id="aging"></div>
+        </div>
+        <div class="insight" id="insightCard">
+          <h3>Summary</h3>
+          <div id="insightText" style="color:var(--muted);line-height:1.7"></div>
+        </div>
+      </div>
     </section>
 
     <section class="view" id="invoices">
@@ -4885,12 +4902,16 @@ function renderInvoiceRows(arr, options = {}) {
           : paid > 0
             ? `<br><small style="color:var(--muted)">Bal ${money(bal, i.currency)}</small>`
             : '';
+        const repCur = db.profile.reporting || 'USD';
+        const repNote = (options.showReporting && i.currency && i.currency !== repCur)
+          ? `<br><small style="color:var(--muted)">≈ ${money(report(i))} ${repCur}</small>`
+          : '';
         return `<tr data-open="${i.id}">
           <td><b>${i.number || '—'}</b><br><small style="color:var(--muted)">${i.title || 'Untitled'}</small></td>
           <td>${client(i.client)?.name || '—'}</td>
           <td class="${due.cls}">${due.text}</td>
           <td><span class="badge ${st.toLowerCase()}">${st}</span></td>
-          <td class="right"><b>${money(tot, i.currency)}</b>${amtExtra}</td>
+          <td class="right"><b>${money(tot, i.currency)}</b>${amtExtra}${repNote}</td>
           ${showActions ? `<td class="actions" onclick="event.stopPropagation()">
             ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
             ${paid > 0 ? `<button class="button small" data-receipt="${i.id}" title="${hasFeature('payment_receipts') ? 'Download receipt' : 'Receipts require Starter'}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
@@ -4930,6 +4951,7 @@ function renderInvoiceRows(arr, options = {}) {
           <span class="${due.cls}">${due.text}</span>
           <span><b>${money(tot, i.currency)}</b></span>
           ${balLine ? `<span>${balLine}</span>` : ''}
+          ${(options.showReporting && i.currency && i.currency !== (db.profile.reporting || 'USD')) ? `<span>≈ ${money(report(i))} ${db.profile.reporting || 'USD'}</span>` : ''}
         </div>
         ${actions}
       </div>`;
@@ -4956,13 +4978,46 @@ function dashboard() {
     .reduce((n, i) => n + report(i), 0);
   const issued = all.reduce((n, i) => n + report(i), 0);
 
+  const rep = db.profile.reporting || 'USD';
+  const allOverdue = open.length > 0 && over.length === open.length;
+  const nearlySame = open.length > 0 && Math.abs(out - late) < 0.02;
+
   $('#outstanding').textContent = money(out);
   $('#overdue').textContent = money(late);
   $('#collected').textContent = money(got);
-  $('#rate').textContent = issued ? Math.round(paid.reduce((n, i) => n + report(i), 0) / issued * 100) + '%' : '—';
-  $('#outstandingCount').textContent = open.length + ' unpaid invoice' + (open.length === 1 ? '' : 's');
-  $('#overdueCount').textContent = over.length ? over.length + ' needs a follow-up' : 'Nothing overdue';
-  $('#reportingLabel').textContent = 'Reported in ' + (db.profile.reporting || 'USD');
+  const paidValue = paid.reduce((n, i) => n + report(i), 0);
+  const ratePct = issued ? Math.round(paidValue / issued * 100) : null;
+  $('#rate').textContent = ratePct != null ? ratePct + '%' : '—';
+
+  // Outstanding vs overdue messaging — avoid twin identical cards looking broken
+  const outEl = document.getElementById('outstandingCount');
+  const overEl = document.getElementById('overdueCount');
+  const cardOverdue = document.getElementById('cardOverdue');
+  if (outEl) {
+    if (!open.length) outEl.textContent = 'Nothing unpaid';
+    else if (allOverdue) outEl.textContent = open.length + ' unpaid · all overdue';
+    else outEl.textContent = open.length + ' unpaid invoice' + (open.length === 1 ? '' : 's');
+  }
+  if (overEl) {
+    if (!over.length) overEl.textContent = 'Nothing overdue';
+    else if (allOverdue || nearlySame) overEl.textContent = 'Same as outstanding';
+    else overEl.textContent = over.length + ' need' + (over.length === 1 ? 's' : '') + ' a follow-up';
+  }
+  if (cardOverdue) {
+    cardOverdue.style.opacity = (allOverdue || nearlySame) && over.length ? '0.92' : '';
+  }
+
+  const collMini = document.getElementById('collectedMini');
+  if (collMini) collMini.textContent = 'Reported in ' + rep;
+
+  // Show collection rate only when there is meaningful volume
+  const cardRate = document.getElementById('cardRate');
+  const dashCards = document.getElementById('dashCards');
+  const showRate = issued > 0 && all.length >= 3;
+  if (cardRate) cardRate.style.display = showRate ? '' : 'none';
+  if (dashCards) dashCards.classList.toggle('cards-three', !showRate);
+
+  $('#reportingLabel').textContent = 'Amounts below in ' + rep;
 
   // Hero greeting
   try {
@@ -5025,11 +5080,20 @@ function dashboard() {
     return;
   }
 
-  $('#insightText').innerHTML = over.length
-    ? `<b style="color:var(--red-text)">${over.length} invoice${over.length > 1 ? 's are' : ' is'} overdue.</b><br>
-       Following up on ${over[0].number} is your clearest next action. ${money(late)} is currently past its due date.`
-    : `<b style="color:var(--green-text)">You are all caught up.</b><br>
-       There are no overdue sent invoices. Keep invoices clear and mark payments as they arrive.`;
+  const insightEl = document.getElementById('insightText');
+  if (insightEl) {
+    if (over.length) {
+      insightEl.innerHTML = `<b style="color:var(--red-text)">${over.length} overdue · ${money(late)}</b><br>
+        ${allOverdue ? 'Every open balance is past due.' : (open.length - over.length) + ' still within terms.'}
+        Focus the Next action above, then work the rest by age.`;
+    } else if (open.length) {
+      insightEl.innerHTML = `<b>${open.length} open · ${money(out)}</b><br>
+        Nothing overdue. Collect on time and mark payments as they land.`;
+    } else {
+      insightEl.innerHTML = `<b style="color:var(--green-text)">All clear.</b><br>
+        No unpaid balances. Create the next invoice when you’re ready.`;
+    }
+  }
 
   // Next action card
   const na = document.getElementById('nextAction');
@@ -5074,7 +5138,12 @@ function dashboard() {
     }
   }
 
-  $('#recent').innerHTML = renderInvoiceRows(all.slice(0, 5));
+  $('#recent').innerHTML = renderInvoiceRows(all.slice(0, 5), { showActions: false, showReporting: true });
+  const agingHead = document.getElementById('agingSectionHead');
+  const insights = document.getElementById('dashInsights');
+  const showAging = open.length > 0;
+  if (agingHead) agingHead.style.display = showAging ? '' : 'none';
+  if (insights) insights.style.display = showAging ? '' : 'none';
 }
 
 function invoices() {
