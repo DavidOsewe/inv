@@ -1916,10 +1916,10 @@ input:focus:not(:focus-visible) {
         <h1 id="heading">Invoice control centre</h1>
         <p id="subheading">Know what has been paid and what needs attention.</p>
       </div>
-      <div class="buttons">
-        <button class="button" onclick="printInvoice();return false;">Print / save PDF</button>
-        <button class="button" id="shareInvoiceBtn" type="button" onclick="shareInvoice();return false;" style="display:none">Share invoice</button>
-        <button class="button" id="headerReceiptBtn" type="button" onclick="printReceipt();return false;" style="display:none">Receipt PDF</button>
+      <div class="buttons" id="headerActions">
+        <button class="button" id="headerPdfBtn" type="button" onclick="printInvoice();return false;" style="display:none">Download PDF</button>
+        <button class="button" id="shareInvoiceBtn" type="button" onclick="shareInvoice();return false;" style="display:none">Share</button>
+        <button class="button" id="headerReceiptBtn" type="button" onclick="printReceipt();return false;" style="display:none">Receipt</button>
         <button class="button primary" id="new">+ Create invoice</button>
       </div>
     </header>
@@ -2377,7 +2377,8 @@ input:focus:not(:focus-visible) {
             <div class="pay-row-actions">
               <button class="button primary" type="button" id="addPayment">Add payment</button>
               <button class="button" type="button" id="payInFull">Record full payment</button>
-              <button class="button" type="button" id="downloadReceipt" style="display:none">Download receipt PDF</button>
+              <button class="button" type="button" id="downloadReceipt" style="display:none">Download receipt</button>
+              <button class="button" type="button" id="downloadReceiptLocked" style="display:none" onclick="requireFeature('payment_receipts','receipt_pdf')">Receipt · Starter</button>
             </div>
             <ul class="pay-list" id="payList"></ul>
           </div>
@@ -3731,7 +3732,7 @@ const DEFAULT_ENTITLEMENTS = {
   status: 'active',
   limits: { clients: 5, invoices: 3, team_members: 1, invoice_history_days: 30 },
   features: {
-    api_access: false, custom_logo: false, advanced_tax: false, advanced_reports: false,
+    api_access: false, custom_logo: false, payment_receipts: false, advanced_tax: false, advanced_reports: false,
     priority_support: false, recurring_invoices: false, team_collaboration: false
   },
   anonymous: true,
@@ -3864,6 +3865,7 @@ async function showUpgradeModal(title, message) {
 
 const FEATURE_REQUIREMENTS = {
   custom_logo: { label: 'Custom company logo', plan: 'starter' },
+  payment_receipts: { label: 'Payment receipts', plan: 'starter' },
   advanced_tax: { label: 'Advanced tax tools', plan: 'starter' },
   advanced_reports: { label: 'Advanced reports', plan: 'pro' },
   recurring_invoices: { label: 'Recurring invoices', plan: 'pro' },
@@ -4386,6 +4388,25 @@ function status(i) {
   return 'Sent';
 }
 
+function updateHeaderActions(view) {
+  const isEditor = view === 'editor';
+  const pdfBtn = document.getElementById('headerPdfBtn');
+  const shareBtn = document.getElementById('shareInvoiceBtn');
+  const receiptBtn = document.getElementById('headerReceiptBtn');
+  const newBtn = document.getElementById('new');
+
+  if (pdfBtn) pdfBtn.style.display = isEditor ? '' : 'none';
+  if (shareBtn) shareBtn.style.display = isEditor ? '' : 'none';
+
+  // Receipt only on editor, when invoice has payments, and Starter+ (or test override)
+  const canReceipt = hasFeature('payment_receipts');
+  const showReceipt = isEditor && canReceipt && !!(edit && amountPaid(edit) > 0);
+  if (receiptBtn) receiptBtn.style.display = showReceipt ? '' : 'none';
+
+  // Primary CTA: create invoice on most pages; hide on editor (save lives in the form)
+  if (newBtn) newBtn.style.display = isEditor ? 'none' : '';
+}
+
 function switchTo(v) {
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('active', x.id === v));
   document.querySelectorAll('.nav button, .bottom-nav button').forEach(x => {
@@ -4409,8 +4430,7 @@ function switchTo(v) {
   }
   const backBtn = document.getElementById('editorBack');
   if (backBtn) backBtn.style.display = v === 'editor' ? '' : 'none';
-  const shareBtn = document.getElementById('shareInvoiceBtn');
-  if (shareBtn) shareBtn.style.display = v === 'editor' ? '' : 'none';
+  updateHeaderActions(v);
   updateGrowthMeter();
   if (v === 'dashboard') dashboard();
   if (v === 'invoices') invoices();
@@ -4483,7 +4503,7 @@ function renderInvoiceRows(arr, options = {}) {
           <td class="right"><b>${money(tot, i.currency)}</b>${amtExtra}</td>
           ${showActions ? `<td class="actions" onclick="event.stopPropagation()">
             ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
-            ${paid > 0 ? `<button class="button small" data-receipt="${i.id}">PDF</button>` : ''}
+            ${paid > 0 ? `<button class="button small" data-receipt="${i.id}" title="${hasFeature('payment_receipts') ? 'Download receipt' : 'Receipts require Starter'}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
             <button class="button small danger" data-delete-invoice="${i.id}">Delete</button>
           </td>` : ''}
         </tr>`;
@@ -4959,6 +4979,7 @@ async function planView() {
     ['invoices', `${fmtLimit(invoiceLimit)} invoices / month`],
     ['clients', `${fmtLimit(clientLimit)} clients`],
     ['custom_logo', 'Custom company logo'],
+    ['payment_receipts', 'Payment receipts'],
     ['advanced_tax', 'Advanced tax tools'],
     ['advanced_reports', 'Advanced reports'],
     ['recurring_invoices', 'Recurring invoices'],
@@ -6497,6 +6518,10 @@ async function generateReceiptPdf(invoiceId, paymentId) {
 }
 
 function printReceipt(invoiceId, paymentId) {
+  if (!hasFeature('payment_receipts')) {
+    requireFeature('payment_receipts', 'receipt_pdf');
+    return;
+  }
   return generateReceiptPdf(invoiceId, paymentId);
 }
 
@@ -6531,7 +6556,7 @@ function renderPayments() {
           return `<li>
             <span><b>${money(p.amount, cur)}</b> · ${d}${p.method ? ' · ' + p.method : ''}${p.note ? ' · ' + p.note : ''}</span>
             <span class="pay-actions">
-              <button class="button small" type="button" data-receipt-pay="${p.id}">PDF</button>
+              <button class="button small" type="button" data-receipt-pay="${p.id}">Receipt</button>
               <button class="button small danger" type="button" data-del-pay="${p.id}">Remove</button>
             </span>
           </li>`;
@@ -6543,11 +6568,19 @@ function renderPayments() {
 }
 
 function updateReceiptButtons() {
-  const show = !!(edit && amountPaid(edit) > 0);
+  const hasPay = !!(edit && amountPaid(edit) > 0);
+  const canReceipt = hasFeature('payment_receipts');
+  const show = hasPay && canReceipt;
   const a = document.getElementById('downloadReceipt');
   const b = document.getElementById('headerReceiptBtn');
-  if (a) a.style.display = show ? '' : 'none';
+  if (a) {
+    a.style.display = show ? '' : 'none';
+    a.title = canReceipt ? 'Download payment receipt' : 'Payment receipts require Starter';
+  }
   if (b) b.style.display = show ? '' : 'none';
+  // Editor-only helper: if paid but gated, show locked button once
+  const locked = document.getElementById('downloadReceiptLocked');
+  if (locked) locked.style.display = (hasPay && !canReceipt) ? '' : 'none';
 }
 
 function addPaymentToEdit(amount, date, note, method) {
