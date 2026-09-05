@@ -507,12 +507,147 @@ input:focus:not(:focus-visible) {
 .editor-sticky-stats b { color: var(--text); font-size: 14px; font-weight: 800; }
 .editor-sticky-stats .bal b { color: var(--accent); }
 .editor-sticky-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-@media (max-width: 720px) {
-  .editor-sticky-bar { bottom: 72px; }
-  .table th:nth-child(3), .table td:nth-child(3) { /* due still visible */ }
+/* Mobile / responsive list cards */
+.mobile-list { display: none; flex-direction: column; gap: 10px; }
+.mobile-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 14px 12px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: border-color var(--ease), box-shadow var(--ease);
+}
+.mobile-card:active { border-color: var(--blue); }
+.mobile-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.mobile-card-title { font-weight: 800; font-size: 14px; letter-spacing: -0.2px; }
+.mobile-card-sub { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+.mobile-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.mobile-card-meta b { color: var(--text); font-weight: 700; }
+.mobile-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.mobile-card-actions .button { min-height: 34px; font-size: 12px; }
+
+/* Preview bottom sheet (phone) */
+.preview-sheet-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 55;
+}
+.preview-sheet-backdrop.show { display: block; }
+.preview-sheet {
+  display: none;
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  max-height: min(92vh, 900px);
+  z-index: 56;
+  background: var(--panel);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -12px 40px rgba(15,23,42,0.2);
+  flex-direction: column;
+  overflow: hidden;
+}
+.preview-sheet.show { display: flex; }
+.preview-sheet-handle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.preview-sheet-handle .grab {
+  width: 40px; height: 4px; border-radius: 99px;
+  background: var(--line-strong);
+  margin: 0 auto 8px;
+  display: block;
+}
+.preview-sheet-body {
+  overflow: auto;
+  padding: 12px 14px calc(20px + var(--safe-bottom));
+  -webkit-overflow-scrolling: touch;
+}
+.preview-sheet-body .preview {
+  box-shadow: none;
+  border-radius: 10px;
 }
 
-@media (max-width: 720px) {
+/* Icon-only sidebar (tablet) */
+.side.compact {
+  width: 72px;
+  padding: 20px 8px;
+}
+.side.compact .logo {
+  font-size: 0;
+  padding: 0;
+  text-align: center;
+  height: 28px;
+  margin-bottom: 4px;
+}
+.side.compact .logo::first-letter { font-size: 20px; font-weight: 800; color: var(--blue); }
+.side.compact .nav-section,
+.side.compact .side-note,
+.side.compact .account-email,
+.side.compact .account-copy,
+.side.compact #themeLabel,
+.side.compact .account-name { display: none !important; }
+.side.compact .nav button {
+  justify-content: center;
+  padding: 12px 8px;
+  font-size: 0;
+  gap: 0;
+}
+.side.compact .nav button span {
+  font-size: 20px;
+  width: auto;
+}
+.side.compact .nav button.active::before { display: none; }
+.side.compact .theme-toggle { justify-content: center; padding: 10px; }
+.side.compact .account-card { padding: 8px; justify-content: center; }
+.side.compact .account-avatar { margin: 0; }
+
+@media (max-width: 640px) {
+  #editor.view.active .form {
+    padding-bottom: 96px;
+  }
+  .editor-sticky-bar {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: calc(64px + var(--safe-bottom));
+    margin: 0;
+    z-index: 35;
+  }
+  /* On phone, keep inline preview rail collapsed; sheet handles preview */
+  #editorLayout:not(.preview-collapsed) .preview-rail {
+    display: none;
+  }
+  #editorLayout {
+    grid-template-columns: 1fr !important;
+  }
+  .table.desktop-table { display: none; }
+  .mobile-list { display: flex; }
   .dash-hero { padding: 16px; }
   .dash-title { font-size: 18px; }
 }
@@ -1079,18 +1214,59 @@ input:focus:not(:focus-visible) {
 /* =========================================================
    COMPONENTS — Forms
    ========================================================= */
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 14px;
+  flex-wrap: wrap;
+}
+.editor-toolbar .editor-back {
+  margin: 0;
+}
+.editor-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
 .form-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 0.9fr) minmax(380px, 1.1fr);
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 40%);
+  gap: 20px;
   align-items: start;
+  transition: grid-template-columns 0.2s ease;
+}
+.form-layout.preview-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+.form-layout.preview-collapsed .preview-rail {
+  display: none;
 }
 .form {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 28px;
+  padding: 24px 26px;
   min-width: 0;
+  max-width: 920px;
+}
+.form-layout.preview-collapsed .form {
+  max-width: 960px;
+}
+.preview-rail {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 88px);
+  overflow: auto;
+  min-width: 0;
+  padding-bottom: 12px;
+}
+.preview-rail::-webkit-scrollbar { width: 8px; }
+.preview-rail::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 99px;
 }
 .form h2 {
   margin: 0 0 18px;
@@ -1233,13 +1409,12 @@ input:focus:not(:focus-visible) {
   background: #fff;
   color: #0f172a;
   border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 48px 44px;
-  min-height: 640px;
-  max-width: 720px;
-  margin-left: auto;
-  margin-right: auto;
-  box-shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  padding: 28px 26px;
+  min-height: 0;
+  max-width: none;
+  margin: 0;
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.07);
   min-width: 0;
 }
 [data-theme="dark"] .preview {
@@ -1506,7 +1681,7 @@ input:focus:not(:focus-visible) {
 .referral-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .referral-code-box { flex: 1 1 190px; min-width: 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; font-weight: 700; letter-spacing: .4px; color: var(--text); }
 .referral-link-box { margin-top: 8px; padding: 9px 11px; background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 11px; line-height: 1.35; word-break: break-all; }
-@media(max-width: 1000px){ .account-email { display:none; } .account-card { padding: 9px; } }
+@media(max-width: 900px){ .account-email { display:none; } .account-card { padding: 9px; } }
 .client-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
 .client-count { color:var(--muted); font-size:12px; }
 .client-actions { display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap; align-items:center; }
@@ -1640,9 +1815,10 @@ input:focus:not(:focus-visible) {
 }
 
 .preview-toggle {
-  display: none;
-  width: 100%;
-  margin-bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 /* =========================================================
@@ -1661,14 +1837,19 @@ input:focus:not(:focus-visible) {
   .cards { grid-template-columns: repeat(2, 1fr); }
   .form-layout {
     grid-template-columns: 1fr;
-    gap: 20px;
+    gap: 16px;
+  }
+  .form-layout:not(.preview-collapsed) .preview-rail {
+    position: static;
+    max-height: none;
   }
   .preview {
     max-width: none;
     margin: 0;
     min-height: auto;
-    padding: 32px 28px;
+    padding: 24px 20px;
   }
+  .form { max-width: none; }
   .insights { grid-template-columns: 1fr; }
   .table th:nth-child(3),
   .table td:nth-child(3) { display: none; }
@@ -1677,8 +1858,33 @@ input:focus:not(:focus-visible) {
 /* —— Tablet —— */
 @media (max-width: 900px) {
   .side {
-    width: 200px;
+    width: 72px;
+    padding: 20px 8px;
   }
+  .side .logo {
+    font-size: 0;
+    padding: 0;
+    text-align: center;
+    height: 28px;
+  }
+  .side .logo::first-letter { font-size: 20px; font-weight: 800; color: var(--blue); }
+  .side .nav-section,
+  .side .side-note,
+  .side .account-email,
+  .side .account-copy,
+  .side #themeLabel,
+  .side .account-name { display: none !important; }
+  .side .nav button {
+    justify-content: center;
+    padding: 12px 8px;
+    font-size: 0;
+    gap: 0;
+  }
+  .side .nav button span { font-size: 20px; width: auto; }
+  .side .nav button.active::before { display: none; }
+  .side .theme-toggle { justify-content: center; padding: 10px; }
+  .side .account-card { padding: 8px; justify-content: center; }
+  .side .account-avatar { margin: 0; }
   .main {
     padding: 24px 20px;
   }
@@ -1750,14 +1956,13 @@ input:focus:not(:focus-visible) {
     display: block;
   }
 
-  .form { padding: 16px; }
+  .form { padding: 16px; max-width: none; }
   .preview {
-    display: none;
     min-height: auto;
-    padding: 20px;
+    padding: 18px 16px;
   }
-  .preview.show-mobile { display: block; }
-  .preview-toggle { display: block; width: 100%; }
+  .editor-toolbar-actions { width: 100%; }
+  .preview-toggle { flex: 1; justify-content: center; }
 
   /* Invoice table: hide unit + rate columns on small screens */
   .pitems th:nth-child(3),
@@ -2318,8 +2523,13 @@ input:focus:not(:focus-visible) {
     </section>
 
     <section class="view" id="editor">
-      <button type="button" class="editor-back" id="editorBack">← Back to invoices</button>
-      <div class="form-layout">
+      <div class="editor-toolbar">
+        <button type="button" class="editor-back" id="editorBack">← Back to invoices</button>
+        <div class="editor-toolbar-actions">
+          <button class="button preview-toggle" type="button" id="togglePreview" aria-pressed="true" title="Toggle invoice preview">Hide preview</button>
+        </div>
+      </div>
+      <div class="form-layout" id="editorLayout">
         <div class="form">
           <h2 id="editorHeading">Create invoice</h2>
           <div class="form-error-banner" id="editorErrors"></div>
@@ -2438,8 +2648,7 @@ input:focus:not(:focus-visible) {
           </p>
         </div>
 
-        <button class="button preview-toggle" id="togglePreview">Show invoice preview</button>
-
+        <aside class="preview-rail" id="previewRail" aria-label="Invoice preview">
         <article class="preview" id="previewPanel">
           <div class="phead">
             <div style="display:flex;gap:12px;align-items:flex-start">
@@ -2502,9 +2711,35 @@ input:focus:not(:focus-visible) {
             <span id="pTerms"></span>
           </div>
         </article>
+        </aside>
       </div>
     </section>
   </main>
+</div>
+
+
+<div class="editor-sticky-bar" id="editorStickyBar">
+  <div class="editor-sticky-stats">
+    <span>Total <b id="stickyTotal">—</b></span>
+    <span>Paid <b id="stickyPaid">—</b></span>
+    <span class="bal">Balance <b id="stickyBalance">—</b></span>
+  </div>
+  <div class="editor-sticky-actions">
+    <button class="button" type="button" id="stickySave">Save draft</button>
+    <button class="button primary" type="button" id="stickySend">Mark as sent</button>
+  </div>
+</div>
+
+<div class="preview-sheet-backdrop" id="previewSheetBackdrop" hidden></div>
+<div class="preview-sheet" id="previewSheet" role="dialog" aria-label="Invoice preview" hidden>
+  <div class="preview-sheet-handle">
+    <div style="flex:1">
+      <span class="grab" aria-hidden="true"></span>
+      <b style="font-size:14px">Invoice preview</b>
+    </div>
+    <button class="button small" type="button" id="previewSheetClose">Close</button>
+  </div>
+  <div class="preview-sheet-body" id="previewSheetBody"></div>
 </div>
 
 <nav class="bottom-nav">
@@ -4466,6 +4701,71 @@ function status(i) {
   return 'Sent';
 }
 
+
+function isPhoneLayout() {
+  return !!(window.matchMedia && window.matchMedia('(max-width: 640px)').matches);
+}
+
+function closePreviewSheet() {
+  const sheet = document.getElementById('previewSheet');
+  const backdrop = document.getElementById('previewSheetBackdrop');
+  if (sheet) {
+    sheet.classList.remove('show');
+    sheet.hidden = true;
+  }
+  if (backdrop) {
+    backdrop.classList.remove('show');
+    backdrop.hidden = true;
+  }
+}
+
+function openPreviewSheet() {
+  const sheet = document.getElementById('previewSheet');
+  const body = document.getElementById('previewSheetBody');
+  const panel = document.getElementById('previewPanel');
+  const backdrop = document.getElementById('previewSheetBackdrop');
+  if (!sheet || !body || !panel) return;
+  try { preview(); } catch {}
+  body.innerHTML = panel.innerHTML;
+  sheet.hidden = false;
+  sheet.classList.add('show');
+  if (backdrop) {
+    backdrop.hidden = false;
+    backdrop.classList.add('show');
+  }
+}
+
+function setEditorPreviewCollapsed(collapsed) {
+  const layout = document.getElementById('editorLayout');
+  const btn = document.getElementById('togglePreview');
+  const on = !!collapsed;
+  if (layout) layout.classList.toggle('preview-collapsed', on);
+  if (btn) {
+    if (isPhoneLayout()) {
+      btn.textContent = 'Preview';
+      btn.setAttribute('aria-pressed', 'false');
+      btn.title = 'Open invoice preview';
+    } else {
+      btn.textContent = on ? 'Show preview' : 'Hide preview';
+      btn.setAttribute('aria-pressed', on ? 'false' : 'true');
+      btn.title = on ? 'Show invoice preview' : 'Hide invoice preview';
+    }
+  }
+  try { localStorage.setItem('invoicedey-preview-collapsed', on ? '1' : '0'); } catch {}
+}
+
+function toggleEditorPreview() {
+  if (isPhoneLayout()) {
+    const sheet = document.getElementById('previewSheet');
+    if (sheet && sheet.classList.contains('show')) closePreviewSheet();
+    else openPreviewSheet();
+    return;
+  }
+  const layout = document.getElementById('editorLayout');
+  const isCollapsed = layout ? layout.classList.contains('preview-collapsed') : false;
+  setEditorPreviewCollapsed(!isCollapsed);
+}
+
 function updateHeaderActions(view) {
   const isEditor = view === 'editor';
   const pdfBtn = document.getElementById('headerPdfBtn');
@@ -4511,6 +4811,10 @@ function switchTo(v) {
   const backBtn = document.getElementById('editorBack');
   if (backBtn) backBtn.style.display = v === 'editor' ? '' : 'none';
   updateHeaderActions(v);
+  if (v !== 'editor') {
+    document.getElementById('editorStickyBar')?.classList.remove('show');
+    try { closePreviewSheet(); } catch {}
+  }
   updateGrowthMeter();
   if (v === 'dashboard') dashboard();
   if (v === 'invoices') invoices();
@@ -4554,7 +4858,7 @@ function renderInvoiceRows(arr, options = {}) {
       </div>
     </div>`;
   }
-  return `<table class="table">
+  const table = `<table class="table desktop-table">
     <thead>
       <tr>
         <th>Invoice</th>
@@ -4592,7 +4896,45 @@ function renderInvoiceRows(arr, options = {}) {
       }).join('')}
     </tbody>
   </table>`;
+
+  const cards = `<div class="mobile-list" role="list">
+    ${arr.map(i => {
+      const st = status(i);
+      const due = relativeDueLabel(i.due);
+      const tot = total(i);
+      const paid = amountPaid(i);
+      const bal = balanceDue(i);
+      const balLine = bal <= 0.001 && paid > 0
+        ? '<span style="color:var(--green-text)">Paid in full</span>'
+        : paid > 0
+          ? 'Bal ' + money(bal, i.currency)
+          : '';
+      const actions = showActions ? `<div class="mobile-card-actions" onclick="event.stopPropagation()">
+          ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
+          ${paid > 0 ? `<button class="button small" data-receipt="${i.id}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
+          <button class="button small danger" data-delete-invoice="${i.id}">Delete</button>
+        </div>` : '';
+      return `<div class="mobile-card" role="listitem" data-open="${i.id}">
+        <div class="mobile-card-top">
+          <div>
+            <div class="mobile-card-title">${i.number || '—'}</div>
+            <div class="mobile-card-sub">${i.title || 'Untitled'} · ${client(i.client)?.name || 'No client'}</div>
+          </div>
+          <span class="badge ${st.toLowerCase()}">${st}</span>
+        </div>
+        <div class="mobile-card-meta">
+          <span class="${due.cls}">${due.text}</span>
+          <span><b>${money(tot, i.currency)}</b></span>
+          ${balLine ? `<span>${balLine}</span>` : ''}
+        </div>
+        ${actions}
+      </div>`;
+    }).join('')}
+  </div>`;
+
+  return table + cards;
 }
+
 
 function dashboard() {
   const all = db.invoices;
@@ -5317,28 +5659,58 @@ function clients() {
     return;
   }
 
-  $('#clientList').innerHTML = `<table class="table">
-    <thead><tr><th>Client</th><th>Email</th><th>Address</th><th class="right">Invoices</th><th class="right">Actions</th></tr></thead>
-    <tbody>${list.map(c => {
-      const invs = db.invoices.filter(i => i.client === c.id);
-      const count = invs.length;
-      const outstanding = invs.reduce((n, i) => {
-        syncPaidFlag(i);
-        return n + (balanceDue(i) > 0.001 && i.status !== 'Draft' ? balanceDue(i) * ((fx[i.currency] ?? 1) / (fx[db.profile.reporting] ?? 1)) : 0);
-      }, 0);
-      const initials = String(c.name || '?').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase();
-      return `<tr>
+  const rows = list.map(c => {
+    const invs = db.invoices.filter(i => i.client === c.id);
+    const count = invs.length;
+    const outstanding = invs.reduce((n, i) => {
+      syncPaidFlag(i);
+      return n + (balanceDue(i) > 0.001 && i.status !== 'Draft' ? balanceDue(i) * ((fx[i.currency] ?? 1) / (fx[db.profile.reporting] ?? 1)) : 0);
+    }, 0);
+    const initials = String(c.name || '?').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase();
+    const owe = outstanding > 0.001
+      ? `<div class="client-meta" style="color:var(--red-text)">Owes ${money(outstanding)}</div>`
+      : count ? `<div class="client-meta">Settled</div>` : '';
+    const delBtn = (c.isUnassigned || c.name === 'Unassigned')
+      ? ''
+      : `<button class="button danger" type="button" data-delete-client="${c.id}" style="padding:7px 10px;font-size:12px">Delete</button>`;
+    const tableRow = `<tr>
         <td><div style="display:flex;align-items:center;gap:10px"><span class="account-avatar" style="width:32px;height:32px;flex-basis:32px;font-size:11px;border-radius:10px">${initials || '?'}</span><div><b>${c.name}</b>${c.taxId ? `<div class="client-meta">${c.taxId}</div>` : ''}</div></div></td>
         <td>${c.email || '—'}</td>
         <td style="max-width:220px;white-space:pre-line;font-size:12px;color:var(--muted)">${c.address || '—'}</td>
-        <td class="right"><b>${count}</b>${outstanding > 0.001 ? `<div class="client-meta" style="color:var(--red-text)">Owes ${money(outstanding)}</div>` : count ? `<div class="client-meta">Settled</div>` : ''}</td>
+        <td class="right"><b>${count}</b>${owe}</td>
         <td><div class="client-actions">
-          <button class="button" type="button" data-edit-client="${c.id}" title="Edit client" aria-label="Edit ${c.name}" style="padding:7px 10px;font-size:12px">Edit</button>
-          ${c.isUnassigned || c.name === 'Unassigned' ? '' : `<button class="button danger" type="button" data-delete-client="${c.id}" title="Delete client" aria-label="Delete ${c.name}" style="padding:7px 10px;font-size:12px">Delete</button>`}
+          <button class="button" type="button" data-edit-client="${c.id}" style="padding:7px 10px;font-size:12px">Edit</button>
+          ${delBtn}
         </div></td>
       </tr>`;
-    }).join('')}</tbody>
-  </table>`;
+    const card = `<div class="mobile-card" role="listitem">
+        <div class="mobile-card-top">
+          <div style="display:flex;gap:10px;align-items:center;min-width:0">
+            <span class="account-avatar" style="width:36px;height:36px;flex:0 0 36px;font-size:12px;border-radius:10px">${initials || '?'}</span>
+            <div style="min-width:0">
+              <div class="mobile-card-title">${c.name}</div>
+              <div class="mobile-card-sub">${c.email || 'No email'}${c.taxId ? ' · ' + c.taxId : ''}</div>
+            </div>
+          </div>
+        </div>
+        <div class="mobile-card-meta">
+          <span><b>${count}</b> invoice${count === 1 ? '' : 's'}</span>
+          ${outstanding > 0.001 ? `<span style="color:var(--red-text)">Owes ${money(outstanding)}</span>` : count ? '<span>Settled</span>' : ''}
+        </div>
+        ${c.address ? `<div class="mobile-card-sub" style="margin-bottom:8px;white-space:pre-line">${c.address}</div>` : ''}
+        <div class="mobile-card-actions">
+          <button class="button small" type="button" data-edit-client="${c.id}">Edit</button>
+          ${delBtn}
+        </div>
+      </div>`;
+    return { tableRow, card };
+  });
+
+  $('#clientList').innerHTML = `<table class="table desktop-table">
+    <thead><tr><th>Client</th><th>Email</th><th>Address</th><th class="right">Invoices</th><th class="right">Actions</th></tr></thead>
+    <tbody>${rows.map(r => r.tableRow).join('')}</tbody>
+  </table>
+  <div class="mobile-list" role="list">${rows.map(r => r.card).join('')}</div>`;
 }
 
 /* ---------- Localised pricing (World Bank bands) ---------- */
@@ -5744,8 +6116,14 @@ function editor() {
   $('#client').innerHTML = '<option value="">Select client…</option>' +
     db.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   $('#client').value = edit.client || '';
-  $('#previewPanel').classList.remove('show-mobile');
-  $('#togglePreview').textContent = 'Show invoice preview';
+  // Keep user's preview preference; default open on wide screens
+  try {
+    const preferCollapsed = localStorage.getItem('invoicedey-preview-collapsed') === '1';
+    const narrow = window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+    setEditorPreviewCollapsed(preferCollapsed || (narrow && localStorage.getItem('invoicedey-preview-collapsed') === null));
+  } catch {
+    setEditorPreviewCollapsed(false);
+  }
   lines();
   preview();
 }
@@ -5781,7 +6159,8 @@ function updateLineAmount(n) {
 
 function updateEditorStickyBar() {
   const bar = document.getElementById('editorStickyBar');
-  if (!bar || !edit) {
+  const onEditor = document.getElementById('editor')?.classList.contains('active');
+  if (!bar || !edit || !onEditor) {
     if (bar) bar.classList.remove('show');
     return;
   }
@@ -6342,6 +6721,9 @@ $('#send').onclick = () => persist('Sent');
 document.getElementById('stickySave')?.addEventListener('click', () => persist('Draft'));
 document.getElementById('stickySend')?.addEventListener('click', () => persist('Sent'));
 document.getElementById('makeRecurringBtn')?.addEventListener('click', () => openRecurringModal());
+document.getElementById('togglePreview')?.addEventListener('click', () => toggleEditorPreview());
+document.getElementById('previewSheetClose')?.addEventListener('click', () => closePreviewSheet());
+document.getElementById('previewSheetBackdrop')?.addEventListener('click', () => closePreviewSheet());
 document.getElementById('recurringModalCancel')?.addEventListener('click', () => {
   document.getElementById('recurringModal')?.classList.remove('show');
 });
