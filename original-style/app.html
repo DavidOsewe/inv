@@ -2545,6 +2545,33 @@ input:focus:not(:focus-visible) {
   </div>
 </div>
 
+<div class="modalback" id="recurringModal">
+  <div class="modal" style="max-width:420px">
+    <h2>Make recurring</h2>
+    <p style="color:var(--muted);font-size:13px;line-height:1.55;margin:0 0 16px">
+      We’ll create the next invoice automatically when the date is due (when you open invoicedey).
+    </p>
+    <div class="field">
+      <label>Repeat every</label>
+      <select id="recurringInterval">
+        <option value="weekly">Week</option>
+        <option value="monthly" selected>Month</option>
+        <option value="quarterly">Quarter</option>
+        <option value="yearly">Year</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Next invoice date</label>
+      <input id="recurringNextDate" type="date">
+    </div>
+    <p id="recurringModalHint" style="font-size:12px;color:var(--muted);margin:0 0 8px;line-height:1.45"></p>
+    <div class="buttons" style="justify-content:flex-end;margin-top:18px;gap:10px">
+      <button class="button" type="button" id="recurringModalCancel">Cancel</button>
+      <button class="button primary" type="button" id="recurringModalConfirm">Create schedule</button>
+    </div>
+  </div>
+</div>
+
 <div class="modalback" id="upgradeModal">
   <div class="modal" style="max-width:620px">
     <h2 id="upgradeModalTitle">You’ve reached your plan limit</h2>
@@ -4995,7 +5022,7 @@ function recurringView() {
   });
 }
 
-function promptMakeRecurring() {
+function openRecurringModal() {
   if (!hasFeature('recurring_invoices')) {
     requireFeature('recurring_invoices', 'make_recurring');
     return;
@@ -5004,7 +5031,6 @@ function promptMakeRecurring() {
     toast('Open an invoice first.');
     return;
   }
-  // Ensure current form fields are on edit
   try {
     edit.client = $('#client')?.value || edit.client;
     edit.title = $('#title')?.value || edit.title;
@@ -5019,21 +5045,39 @@ function promptMakeRecurring() {
     toast('Select a client before making this recurring.');
     return;
   }
-  const interval = prompt('Interval: weekly, monthly, quarterly, or yearly', 'monthly');
-  if (interval === null) return;
-  const unit = String(interval || '').trim().toLowerCase();
+  const intervalEl = document.getElementById('recurringInterval');
+  const dateEl = document.getElementById('recurringNextDate');
+  const hint = document.getElementById('recurringModalHint');
+  if (intervalEl) intervalEl.value = 'monthly';
+  if (dateEl) dateEl.value = advanceScheduleDate(today, 'monthly');
+  const cname = client(edit.client)?.name || 'this client';
+  if (hint) {
+    hint.textContent = 'Based on “' + (edit.title || edit.number || 'invoice') + '” for ' + cname + '. Generated invoices start as drafts.';
+  }
+  document.getElementById('recurringModal')?.classList.add('show');
+}
+
+function syncRecurringNextFromInterval() {
+  const unit = document.getElementById('recurringInterval')?.value || 'monthly';
+  const dateEl = document.getElementById('recurringNextDate');
+  if (dateEl) dateEl.value = advanceScheduleDate(today, unit);
+}
+
+function confirmRecurringModal() {
+  if (!edit) {
+    document.getElementById('recurringModal')?.classList.remove('show');
+    return;
+  }
+  const unit = String(document.getElementById('recurringInterval')?.value || 'monthly').toLowerCase();
+  const next = String(document.getElementById('recurringNextDate')?.value || '').trim();
   if (!['weekly', 'monthly', 'quarterly', 'yearly'].includes(unit)) {
-    toast('Use weekly, monthly, quarterly, or yearly.');
+    toast('Pick a valid interval.');
     return;
   }
-  const defaultNext = advanceScheduleDate(today, unit);
-  const next = prompt('Next invoice date (YYYY-MM-DD)', defaultNext);
-  if (next === null) return;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(next).trim())) {
-    toast('Use date format YYYY-MM-DD.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(next)) {
+    toast('Pick a next invoice date.');
     return;
   }
-  // Persist invoice if new so client/lines stick
   const n = db.invoices.findIndex(i => i.id === edit.id);
   if (n < 0) {
     persist('Draft');
@@ -5046,9 +5090,14 @@ function promptMakeRecurring() {
   const sch = createRecurringSchedule({
     invoice: db.invoices.find(i => i.id === edit.id) || edit,
     interval: unit,
-    nextRun: String(next).trim()
+    nextRun: next
   });
+  document.getElementById('recurringModal')?.classList.remove('show');
   if (sch) switchTo('recurring');
+}
+
+function promptMakeRecurring() {
+  openRecurringModal();
 }
 
 function collectPaymentReceipts() {
@@ -6180,7 +6229,15 @@ $('#save').onclick = () => persist('Draft');
 $('#send').onclick = () => persist('Sent');
 document.getElementById('stickySave')?.addEventListener('click', () => persist('Draft'));
 document.getElementById('stickySend')?.addEventListener('click', () => persist('Sent'));
-document.getElementById('makeRecurringBtn')?.addEventListener('click', () => promptMakeRecurring());
+document.getElementById('makeRecurringBtn')?.addEventListener('click', () => openRecurringModal());
+document.getElementById('recurringModalCancel')?.addEventListener('click', () => {
+  document.getElementById('recurringModal')?.classList.remove('show');
+});
+document.getElementById('recurringModalConfirm')?.addEventListener('click', () => confirmRecurringModal());
+document.getElementById('recurringInterval')?.addEventListener('change', () => syncRecurringNextFromInterval());
+document.getElementById('recurringModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'recurringModal') e.target.classList.remove('show');
+});
 
 document.getElementById('growthLater')?.addEventListener('click', () => {
   document.getElementById('growthModal')?.classList.remove('show');
