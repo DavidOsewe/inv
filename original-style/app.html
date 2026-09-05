@@ -1881,6 +1881,7 @@ input:focus:not(:focus-visible) {
       <button class="active" data-view="dashboard"><span>⌂</span> Home</button>
       <button data-view="invoices"><span>▤</span> Invoices</button>
       <button data-view="receipts"><span>◈</span> Receipts</button>
+      <button data-view="recurring"><span>↻</span> Recurring</button>
       <button data-view="clients"><span>♙</span> Clients</button>
       <button data-view="profile"><span>⚙</span> Profile</button>
       <button data-view="plan"><span>◆</span> Plan</button>
@@ -2026,6 +2027,27 @@ input:focus:not(:focus-visible) {
           </div>
         </div>
         <div id="receiptList"></div>
+      </div>
+    </section>
+
+    <section class="view" id="recurring">
+      <div class="section-head">
+        <div>
+          <h2>Recurring invoices</h2>
+          <div class="client-count" id="recurringCount">Auto-create invoices on a schedule</div>
+        </div>
+      </div>
+      <div id="recurringLocked" class="team-locked" style="display:none">
+        <p style="margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.55">
+          <b>Recurring invoices</b> are included with <b>Pro</b>. Schedule weekly, monthly, or yearly invoices from a template.
+        </p>
+        <button class="button primary" type="button" data-plan-page-upgrade="pro">Upgrade to Pro</button>
+      </div>
+      <div id="recurringPanel" style="display:none">
+        <p style="font-size:13px;color:var(--muted);margin:0 0 14px;line-height:1.55">
+          Open any invoice and choose <b>Make recurring</b>, or schedules below will generate the next invoice when the date is due (on app open).
+        </p>
+        <div id="recurringList"></div>
       </div>
     </section>
 
@@ -2409,9 +2431,10 @@ input:focus:not(:focus-visible) {
           <div class="buttons" style="margin-top:18px;flex-wrap:wrap">
             <button class="button" id="save">Save draft</button>
             <button class="button primary" id="send">Mark as sent</button>
+            <button class="button" type="button" id="makeRecurringBtn">Make recurring</button>
           </div>
           <p style="margin-top:14px;font-size:12px;color:var(--muted)">
-            Record partial or full payments. Each payment can generate a receipt.
+            Record partial or full payments. Each payment can generate a receipt. Pro can turn this invoice into a recurring schedule.
           </p>
         </div>
 
@@ -3657,6 +3680,8 @@ async function startCloudSync(client, user) {
       // push records belonging to another disposable email/account.
       await pushCloudState();
     }
+    try { await pullRecurringFromCloud(); } catch (e) { console.warn('recurring pull', e.message || e); }
+    try { await processDueRecurringSchedules(); } catch (e) { console.warn('recurring process', e.message || e); }
     dashboard();
   } catch (error) {
     console.warn('cloud sync setup', error.message || error);
@@ -3684,7 +3709,8 @@ const defaultDB = {
     paymentDetails: 'Bank transfer\nAccount name: Your Company\nIBAN / Account: \nReference: Invoice number'
   },
   clients: [],
-  invoices: []
+  invoices: [],
+  recurring: []
 };
 const LEGACY_DB_KEY = 'invoicedey-v2';
 const ANON_DB_KEY = 'invoicedey-anonymous-v1';
@@ -3694,6 +3720,7 @@ let activeUserId = null;
 let db = structuredClone(defaultDB);
 
 function normalizeDbProfile() {
+  if (!Array.isArray(db.recurring)) db.recurring = [];
   // Migrate older profiles — never overwrite an explicit reporting currency
   if (db.profile) {
     db.profile.taxId = db.profile.taxId ?? '';
@@ -4440,6 +4467,7 @@ function switchTo(v) {
     dashboard: ['Invoice control centre', 'Know what has been paid and what needs attention.'],
     invoices: ['Invoices', 'Simple invoicing. Nothing you do not need.'],
     receipts: ['Receipts', 'Download payment confirmations for your records.'],
+    recurring: ['Recurring invoices', 'Schedules that create the next invoice when due.'],
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
     plan: ['Plan & billing', 'Manage your plan, usage and feature access.'],
@@ -4460,6 +4488,7 @@ function switchTo(v) {
   if (v === 'dashboard') dashboard();
   if (v === 'invoices') invoices();
   if (v === 'receipts') receiptsView();
+  if (v === 'recurring') recurringView();
   if (v === 'clients') clients();
   if (v === 'profile') profile();
   if (v === 'plan') planView();
@@ -4700,6 +4729,326 @@ function invoices() {
     return;
   }
   $('#invoiceList').innerHTML = renderInvoiceRows(list, { showActions: true });
+}
+
+/* ---------- Recurring invoices (Pro, V1) ---------- */
+function advanceScheduleDate(isoDate, interval) {
+  const d = new Date((isoDate || today) + 'T12:00:00');
+  if (Number.isNaN(d.getTime())) return today;
+  const unit = String(interval || 'monthly').toLowerCase();
+  if (unit === 'weekly') d.setDate(d.getDate() + 7);
+  else if (unit === 'quarterly') d.setMonth(d.getMonth() + 3);
+  else if (unit === 'yearly') d.setFullYear(d.getFullYear() + 1);
+  else d.setMonth(d.getMonth() + 1); // monthly default
+  return d.toISOString().slice(0, 10);
+}
+
+function daysBetween(a, b) {
+  const da = new Date((a || today) + 'T12:00:00');
+  const db = new Date((b || today) + 'T12:00:00');
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return 0;
+  return Math.round((db - da) / 86400000);
+}
+
+function templateFromInvoice(inv) {
+  return {
+    client: inv.client || '',
+    currency: inv.currency || db.profile.reporting || 'USD',
+    tax: Number(inv.tax) || 0,
+    taxLabel: inv.taxLabel || db.profile.taxLabel || 'Tax',
+    taxId: inv.taxId || db.profile.taxId || '',
+    title: inv.title || '',
+    note: inv.note || 'Thank you for your business.',
+    terms: inv.terms || db.profile.paymentDetails || '',
+    lines: (inv.lines || []).map(l => ({
+      desc: l.desc || '',
+      qty: Number(l.qty) || 1,
+      unit: l.unit || '',
+      rate: Number(l.rate) || 0
+    })),
+    netDays: Math.max(0, daysBetween(inv.issue, inv.due))
+  };
+}
+
+function createRecurringSchedule({ invoice, interval, nextRun }) {
+  if (!hasFeature('recurring_invoices')) {
+    requireFeature('recurring_invoices', 'make_recurring');
+    return null;
+  }
+  if (!invoice) {
+    toast('Save an invoice first.');
+    return null;
+  }
+  if (!invoice.client) {
+    toast('Choose a client before making this recurring.');
+    return null;
+  }
+  const unit = String(interval || 'monthly').toLowerCase();
+  if (!['weekly', 'monthly', 'quarterly', 'yearly'].includes(unit)) {
+    toast('Pick a valid interval.');
+    return null;
+  }
+  const schedule = {
+    id: crypto.randomUUID(),
+    clientId: invoice.client,
+    interval: unit,
+    nextRun: nextRun || advanceScheduleDate(today, unit),
+    active: true,
+    template: templateFromInvoice(invoice),
+    sourceInvoiceId: invoice.id,
+    lastGeneratedAt: null,
+    lastInvoiceNumber: null,
+    createdAt: new Date().toISOString()
+  };
+  if (!Array.isArray(db.recurring)) db.recurring = [];
+  db.recurring.unshift(schedule);
+  save();
+  schedulePushRecurringCloud(schedule).catch(() => {});
+  toast('Recurring schedule created (' + unit + ').');
+  return schedule;
+}
+
+async function schedulePushRecurringCloud(schedule) {
+  if (!cloud.client || !cloud.user) return;
+  try {
+    const organizationId = await ensureCloudOrganization();
+    await cloud.client.from('recurring_invoice_schedules').upsert({
+      id: schedule.id,
+      organization_id: organizationId,
+      client_id: null, // local client ids may not match cloud; template holds client
+      interval_unit: schedule.interval,
+      next_run_date: schedule.nextRun,
+      active: !!schedule.active,
+      template: { ...schedule.template, local_client_id: schedule.clientId },
+      last_generated_at: schedule.lastGeneratedAt,
+      last_invoice_number: schedule.lastInvoiceNumber,
+      created_by: cloud.user.id,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'id' });
+  } catch (e) {
+    console.warn('recurring cloud sync', e.message || e);
+  }
+}
+
+async function pullRecurringFromCloud() {
+  if (!cloud.client || !cloud.user) return;
+  try {
+    const organizationId = await ensureCloudOrganization();
+    const { data, error } = await cloud.client
+      .from('recurring_invoice_schedules')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    if (!data?.length) return;
+    const byId = new Map((db.recurring || []).map(r => [r.id, r]));
+    for (const row of data) {
+      const tpl = row.template || {};
+      const local = {
+        id: row.id,
+        clientId: tpl.local_client_id || row.client_id || '',
+        interval: row.interval_unit || 'monthly',
+        nextRun: row.next_run_date,
+        active: row.active !== false,
+        template: tpl,
+        sourceInvoiceId: tpl.source_invoice_id || null,
+        lastGeneratedAt: row.last_generated_at,
+        lastInvoiceNumber: row.last_invoice_number,
+        createdAt: row.created_at
+      };
+      byId.set(local.id, local);
+    }
+    db.recurring = Array.from(byId.values());
+    save();
+  } catch (e) {
+    console.warn('recurring pull', e.message || e);
+  }
+}
+
+function invoiceFromTemplate(template, issueDate) {
+  const num = nextInvoiceNumber();
+  const issue = issueDate || today;
+  const net = Math.max(0, Number(template.netDays) || 0);
+  const dueD = new Date(issue + 'T12:00:00');
+  dueD.setDate(dueD.getDate() + net);
+  const due = dueD.toISOString().slice(0, 10);
+  return {
+    id: crypto.randomUUID(),
+    number: num.number,
+    _nextAfterSave: num.next,
+    currency: template.currency || db.profile.reporting || 'USD',
+    tax: Number(template.tax) || 0,
+    taxLabel: template.taxLabel || db.profile.taxLabel || 'Tax',
+    taxId: template.taxId || '',
+    issue,
+    due,
+    client: template.client || template.local_client_id || '',
+    title: template.title || '',
+    note: template.note || 'Thank you for your business.',
+    terms: template.terms || '',
+    paid: false,
+    payments: [],
+    paidAt: '',
+    status: 'Draft',
+    publicShareToken: '',
+    publicShareEnabled: false,
+    lines: (template.lines || []).map(l => ({
+      desc: l.desc || '',
+      qty: Number(l.qty) || 1,
+      unit: l.unit || '',
+      rate: Number(l.rate) || 0
+    })),
+    recurringScheduleId: template._scheduleId || null
+  };
+}
+
+async function processDueRecurringSchedules() {
+  if (!hasFeature('recurring_invoices')) return 0;
+  if (!Array.isArray(db.recurring) || !db.recurring.length) return 0;
+  let created = 0;
+  const maxCatchUp = 3; // avoid runaway loops if app was offline for months
+  for (const sch of db.recurring) {
+    if (!sch.active) continue;
+    let guard = 0;
+    while (sch.nextRun && sch.nextRun <= today && guard < maxCatchUp) {
+      if (!(await canCreateFreeInvoice())) break;
+      const tpl = { ...(sch.template || {}), _scheduleId: sch.id, client: sch.clientId || sch.template?.client };
+      const inv = invoiceFromTemplate(tpl, sch.nextRun > today ? today : sch.nextRun);
+      // Use schedule date as issue when catching up
+      inv.issue = sch.nextRun;
+      const net = Math.max(0, Number(sch.template?.netDays) || 0);
+      const dueD = new Date(inv.issue + 'T12:00:00');
+      dueD.setDate(dueD.getDate() + net);
+      inv.due = dueD.toISOString().slice(0, 10);
+
+      const toSave = structuredClone(inv);
+      delete toSave._nextAfterSave;
+      db.invoices.unshift(toSave);
+      if (inv._nextAfterSave) db.profile.nextInvoiceNumber = inv._nextAfterSave;
+      recordFreeInvoiceCreated();
+
+      sch.lastGeneratedAt = new Date().toISOString();
+      sch.lastInvoiceNumber = inv.number;
+      sch.nextRun = advanceScheduleDate(sch.nextRun, sch.interval);
+      created += 1;
+      guard += 1;
+      schedulePushRecurringCloud(sch).catch(() => {});
+    }
+  }
+  if (created) {
+    save();
+    toast(created === 1 ? '1 recurring invoice created.' : created + ' recurring invoices created.');
+  }
+  return created;
+}
+
+function recurringView() {
+  const locked = document.getElementById('recurringLocked');
+  const panel = document.getElementById('recurringPanel');
+  const listEl = document.getElementById('recurringList');
+  const countEl = document.getElementById('recurringCount');
+  if (!locked || !panel || !listEl) return;
+
+  const can = hasFeature('recurring_invoices');
+  if (!can) {
+    locked.style.display = '';
+    panel.style.display = 'none';
+    if (countEl) countEl.textContent = 'Pro feature';
+    return;
+  }
+  locked.style.display = 'none';
+  panel.style.display = '';
+
+  processDueRecurringSchedules().then(() => {
+    const all = db.recurring || [];
+    if (countEl) countEl.textContent = `${all.length} schedule${all.length === 1 ? '' : 's'}`;
+    if (!all.length) {
+      listEl.innerHTML = `<div class="empty">
+        <div class="empty-icon">↻</div>
+        <h3>No recurring schedules</h3>
+        <p>Open an invoice, save it with a client, then click <b>Make recurring</b>.</p>
+        <div class="empty-actions">
+          <button class="button primary" type="button" onclick="switchTo('invoices')">Go to invoices</button>
+        </div>
+      </div>`;
+      return;
+    }
+    listEl.innerHTML = `<table class="table">
+      <thead><tr><th>Client</th><th>Interval</th><th>Next run</th><th>Last invoice</th><th>Status</th><th class="right">Actions</th></tr></thead>
+      <tbody>${all.map(sch => {
+        const cname = client(sch.clientId)?.name || client(sch.template?.client)?.name || '—';
+        const title = sch.template?.title ? `<div class="client-meta">${sch.template.title}</div>` : '';
+        const status = sch.active ? 'Active' : 'Paused';
+        return `<tr>
+          <td><b>${cname}</b>${title}</td>
+          <td style="text-transform:capitalize">${sch.interval || 'monthly'}</td>
+          <td>${sch.nextRun || '—'}</td>
+          <td>${sch.lastInvoiceNumber || '—'}</td>
+          <td><span class="badge ${sch.active ? 'sent' : 'draft'}">${status}</span></td>
+          <td class="right">
+            <button class="button small" type="button" data-recurring-toggle="${sch.id}">${sch.active ? 'Pause' : 'Resume'}</button>
+            <button class="button small danger" type="button" data-recurring-delete="${sch.id}">Delete</button>
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  });
+}
+
+function promptMakeRecurring() {
+  if (!hasFeature('recurring_invoices')) {
+    requireFeature('recurring_invoices', 'make_recurring');
+    return;
+  }
+  if (!edit) {
+    toast('Open an invoice first.');
+    return;
+  }
+  // Ensure current form fields are on edit
+  try {
+    edit.client = $('#client')?.value || edit.client;
+    edit.title = $('#title')?.value || edit.title;
+    edit.note = $('#note')?.value || edit.note;
+    edit.terms = $('#terms')?.value || edit.terms;
+    edit.currency = $('#currency')?.value || edit.currency;
+    edit.tax = Number($('#tax')?.value ?? edit.tax) || 0;
+    edit.issue = $('#issue')?.value || edit.issue;
+    edit.due = $('#due')?.value || edit.due;
+  } catch {}
+  if (!edit.client) {
+    toast('Select a client before making this recurring.');
+    return;
+  }
+  const interval = prompt('Interval: weekly, monthly, quarterly, or yearly', 'monthly');
+  if (interval === null) return;
+  const unit = String(interval || '').trim().toLowerCase();
+  if (!['weekly', 'monthly', 'quarterly', 'yearly'].includes(unit)) {
+    toast('Use weekly, monthly, quarterly, or yearly.');
+    return;
+  }
+  const defaultNext = advanceScheduleDate(today, unit);
+  const next = prompt('Next invoice date (YYYY-MM-DD)', defaultNext);
+  if (next === null) return;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(next).trim())) {
+    toast('Use date format YYYY-MM-DD.');
+    return;
+  }
+  // Persist invoice if new so client/lines stick
+  const n = db.invoices.findIndex(i => i.id === edit.id);
+  if (n < 0) {
+    persist('Draft');
+  } else {
+    const toSave = structuredClone(edit);
+    delete toSave._nextAfterSave;
+    db.invoices[n] = toSave;
+    save();
+  }
+  const sch = createRecurringSchedule({
+    invoice: db.invoices.find(i => i.id === edit.id) || edit,
+    interval: unit,
+    nextRun: String(next).trim()
+  });
+  if (sch) switchTo('recurring');
 }
 
 function collectPaymentReceipts() {
@@ -5831,6 +6180,7 @@ $('#save').onclick = () => persist('Draft');
 $('#send').onclick = () => persist('Sent');
 document.getElementById('stickySave')?.addEventListener('click', () => persist('Draft'));
 document.getElementById('stickySend')?.addEventListener('click', () => persist('Sent'));
+document.getElementById('makeRecurringBtn')?.addEventListener('click', () => promptMakeRecurring());
 
 document.getElementById('growthLater')?.addEventListener('click', () => {
   document.getElementById('growthModal')?.classList.remove('show');
@@ -6767,6 +7117,34 @@ function addPaymentToEdit(amount, date, note, method) {
       e.preventDefault();
       e.stopPropagation();
       printReceipt(rpg.getAttribute('data-receipt-pay-global'), rpg.getAttribute('data-payment-id'));
+      return;
+    }
+    const rToggle = e.target.closest('[data-recurring-toggle]');
+    if (rToggle) {
+      e.preventDefault();
+      const id = rToggle.getAttribute('data-recurring-toggle');
+      const sch = (db.recurring || []).find(x => x.id === id);
+      if (sch) {
+        sch.active = !sch.active;
+        save();
+        schedulePushRecurringCloud(sch).catch(() => {});
+        toast(sch.active ? 'Schedule resumed' : 'Schedule paused');
+        recurringView();
+      }
+      return;
+    }
+    const rDel = e.target.closest('[data-recurring-delete]');
+    if (rDel) {
+      e.preventDefault();
+      const id = rDel.getAttribute('data-recurring-delete');
+      if (!confirm('Delete this recurring schedule? Existing invoices stay.')) return;
+      db.recurring = (db.recurring || []).filter(x => x.id !== id);
+      save();
+      if (cloud.client) {
+        cloud.client.from('recurring_invoice_schedules').delete().eq('id', id).then(() => {}).catch(() => {});
+      }
+      toast('Schedule deleted');
+      recurringView();
       return;
     }
     const rp = e.target.closest('[data-receipt-pay]');
