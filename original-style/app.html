@@ -4313,7 +4313,7 @@ document.getElementById('upgradeLater')?.addEventListener('click', () => documen
  * Until then, startPaystackCheckout falls back to a clear “setup in progress” message.
  */
 const BILLING_PROVIDER = 'paystack';
-const BILLING_READY = true; // flip true after: SQL + secrets + edge functions + webhook URL
+const BILLING_READY = true; // functions deployed — keep secrets + webhook configured
 
 
 function formatPlanPriceLine(planId, pricing) {
@@ -4362,10 +4362,32 @@ async function createPaystackCheckoutSession(planId, source) {
     }
   });
 
-  if (error) throw error;
-  const payload = typeof data === 'string' ? JSON.parse(data) : data;
+  // Prefer body from failed responses (Supabase puts JSON on error.context)
+  let payload = data;
+  if (typeof payload === 'string') {
+    try { payload = JSON.parse(payload); } catch { payload = { message: payload }; }
+  }
+  if (error) {
+    let detail = error.message || 'Edge Function error';
+    try {
+      const ctx = error.context;
+      if (ctx && typeof ctx.json === 'function') {
+        const body = await ctx.json();
+        detail = body?.message || body?.error || detail;
+        payload = body;
+      } else if (error.context?.body) {
+        const body = typeof error.context.body === 'string'
+          ? JSON.parse(error.context.body)
+          : error.context.body;
+        detail = body?.message || body?.error || detail;
+        payload = body;
+      }
+    } catch (_) {}
+    console.warn('create-checkout-session failed', detail, payload || error);
+    throw new Error(detail);
+  }
   if (!payload?.authorization_url && !payload?.access_code) {
-    throw new Error(payload?.message || 'Checkout session could not be created');
+    throw new Error(payload?.message || payload?.error || 'Checkout session could not be created');
   }
   return payload;
 }
