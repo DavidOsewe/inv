@@ -17,19 +17,26 @@
 <body>
   <div class="box">
     <h1>Payment received</h1>
-    <p>We’re confirming your Paystack payment and activating your plan. This usually takes a few seconds.</p>
+    <p id="statusMsg">We’re confirming your Paystack payment and activating your plan…</p>
     <p class="ref" id="refLine" hidden></p>
-    <a class="button" href="/app.html">Return to invoicedey</a>
+    <a class="button" id="returnLink" href="/app.html?billing=1">Return to invoicedey</a>
   </div>
   <script>
     (function () {
       var params = new URLSearchParams(window.location.search);
       var ref = params.get('reference') || params.get('trxref') || '';
+      var link = document.getElementById('returnLink');
+      var qs = 'billing=1';
       if (ref) {
+        qs += '&reference=' + encodeURIComponent(ref);
         var el = document.getElementById('refLine');
         el.hidden = false;
         el.textContent = 'Reference: ' + ref;
       }
+      link.href = '/app.html?' + qs;
+      setTimeout(function () {
+        window.location.replace('/app.html?' + qs);
+      }, 1200);
     })();
   </script>
 </body>

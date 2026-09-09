@@ -4210,9 +4210,79 @@ const FEATURE_REQUIREMENTS = {
 
 // TEMP: unlock paid feature gates (logo, team, etc.) without a real plan. Set false before shipping.
 const PLAN_TEST_OVERRIDE = true;
-const INVOICEDEY_BUILD = '2026-09-08-billing-ready';
+const INVOICEDEY_BUILD = '2026-09-09-plan-activate-fix';
 try { console.info('[invoicedey]', INVOICEDEY_BUILD, 'PLAN_TEST_OVERRIDE=', PLAN_TEST_OVERRIDE); } catch {}
 const TEAM_TEST_OVERRIDE = PLAN_TEST_OVERRIDE; // alias used by team panel
+
+function clearTierCache() {
+  try {
+    localStorage.removeItem(TIER_CACHE_KEY + (activeUserId ? '-' + activeUserId : '-anon'));
+    localStorage.removeItem(TIER_CACHE_KEY + '-anon');
+    if (cloud?.user?.id) localStorage.removeItem(TIER_CACHE_KEY + '-' + cloud.user.id);
+  } catch {}
+}
+
+/**
+ * After Paystack redirect: verify payment (webhook fallback) and refresh entitlements.
+ * URL: /app.html?billing=1&reference=...
+ */
+async function maybeConfirmBillingFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('billing') !== '1' && !params.get('reference') && !params.get('trxref')) {
+    return false;
+  }
+  const reference = (params.get('reference') || params.get('trxref') || '').trim();
+
+  try {
+    const clean = window.location.pathname + (window.location.hash || '');
+    history.replaceState(null, document.title, clean);
+  } catch {}
+
+  if (!cloud.user) return false;
+
+  clearTierCache();
+  entitlementPromise = null;
+
+  let activated = false;
+  if (reference) {
+    try {
+      const client = cloud.client || await getSupabase();
+      const { data, error } = await client.functions.invoke('confirm-paystack-payment', {
+        body: { reference }
+      });
+      if (error) {
+        console.warn('confirm-paystack-payment', error.message || error);
+      } else {
+        const payload = typeof data === 'string' ? JSON.parse(data) : data;
+        if (payload?.ok) {
+          activated = true;
+          track('billing_confirmed', { plan: payload.plan || null, reference, source: 'confirm_edge' });
+        } else {
+          console.warn('confirm-paystack-payment not ok', payload);
+        }
+      }
+    } catch (e) {
+      console.warn('confirm billing', e.message || e);
+    }
+  }
+
+  clearTierCache();
+  entitlementPromise = null;
+  const e = await getEntitlements(true);
+  updateGrowthMeter();
+  if (typeof planView === 'function' && document.getElementById('plan')?.classList.contains('active')) {
+    try { await planView(); } catch {}
+  }
+
+  const plan = String(e?.plan || 'free').toLowerCase();
+  if (plan === 'starter' || plan === 'pro') {
+    toast((e.plan_name || plan) + ' plan is active. You’re all set.');
+    track('plan_active_after_payment', { plan, reference: reference || null, activated });
+  } else if (reference) {
+    toast('Payment received — plan activation may take a few seconds. Open Plan & billing to refresh.');
+  }
+  return true;
+}
 
 function hasFeature(feature) {
   if (typeof PLAN_TEST_OVERRIDE !== 'undefined' && PLAN_TEST_OVERRIDE) return true;
@@ -4353,7 +4423,7 @@ async function createPaystackCheckoutSession(planId, source) {
       currency: pricing?.chargeCurrency,
       interval: pricing?.interval,
       paystack_plan_code: pricing?.paystackPlanCode || pricing?._paystackPlanCode || null,
-      callback_url: (window.location.origin || '') + '/payment-success.html',
+      callback_url: (window.location.origin || '') + '/payment-success.html?billing=1',
       metadata: {
         product: 'invoicedey',
         plan: planId,
@@ -6929,6 +6999,8 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
       await startCloudSync(client, session.user);
       // If invite was accepted above before cloud.user fully wired, retry once.
       try { await maybeAcceptInviteFromUrl(); } catch (e) { console.warn('invite accept', e.message || e); }
+      // After Paystack return: verify + activate plan, then refresh entitlements
+      try { await maybeConfirmBillingFromUrl(); } catch (e) { console.warn('billing confirm', e.message || e); }
       if (document.getElementById('profile')?.classList.contains('active')) profile();
     }
   }
