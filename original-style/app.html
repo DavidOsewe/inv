@@ -4313,7 +4313,7 @@ document.getElementById('upgradeLater')?.addEventListener('click', () => documen
  * Until then, startPaystackCheckout falls back to a clear “setup in progress” message.
  */
 const BILLING_PROVIDER = 'paystack';
-const BILLING_READY = false; // flip true after: SQL + secrets + edge functions + webhook URL
+const BILLING_READY = true; // flip true after: SQL + secrets + edge functions + webhook URL
 
 
 function formatPlanPriceLine(planId, pricing) {
