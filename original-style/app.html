@@ -4210,7 +4210,7 @@ const FEATURE_REQUIREMENTS = {
 
 // TEMP: unlock paid feature gates (logo, team, etc.) without a real plan. Set false before shipping.
 const PLAN_TEST_OVERRIDE = true;
-const INVOICEDEY_BUILD = '2026-09-04-team-logo-revoke';
+const INVOICEDEY_BUILD = '2026-09-08-billing-ready';
 try { console.info('[invoicedey]', INVOICEDEY_BUILD, 'PLAN_TEST_OVERRIDE=', PLAN_TEST_OVERRIDE); } catch {}
 const TEAM_TEST_OVERRIDE = PLAN_TEST_OVERRIDE; // alias used by team panel
 
@@ -4313,7 +4313,7 @@ document.getElementById('upgradeLater')?.addEventListener('click', () => documen
  * Until then, startPaystackCheckout falls back to a clear “setup in progress” message.
  */
 const BILLING_PROVIDER = 'paystack';
-const BILLING_READY = false; // flip to true once Edge Function + keys are live
+const BILLING_READY = false; // flip true after: SQL + secrets + edge functions + webhook URL
 
 
 function formatPlanPriceLine(planId, pricing) {
