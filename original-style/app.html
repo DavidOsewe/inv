@@ -4195,6 +4195,10 @@ async function showUpgradeModal(title, message) {
     console.warn('upgrade modal pricing', e.message || e);
   }
   modal.classList.add('show');
+  try {
+    const e = await getEntitlements();
+    paintUpgradeButtons(e?.plan || 'free');
+  } catch (_) {}
 }
 
 const FEATURE_REQUIREMENTS = {
@@ -4385,6 +4389,47 @@ document.getElementById('upgradeLater')?.addEventListener('click', () => documen
 const BILLING_PROVIDER = 'paystack';
 const BILLING_READY = true; // functions deployed — keep secrets + webhook configured
 
+const PLAN_RANK = { free: 0, starter: 1, pro: 2 };
+
+function planRank(plan) {
+  return PLAN_RANK[String(plan || 'free').toLowerCase()] ?? 0;
+}
+
+/** True if target is a real upgrade (strictly higher tier). */
+function canUpgradeTo(targetPlan, currentPlan) {
+  return planRank(targetPlan) > planRank(currentPlan);
+}
+
+/**
+ * Update all upgrade CTAs: disable / relabel when already on that plan or higher.
+ */
+function paintUpgradeButtons(currentPlan) {
+  const cur = String(currentPlan || entitlements?.plan || 'free').toLowerCase();
+  document.querySelectorAll('[data-plan-page-upgrade], [data-upgrade-plan]').forEach((btn) => {
+    const target = String(btn.dataset.planPageUpgrade || btn.dataset.upgradePlan || '').toLowerCase();
+    if (!target) return;
+    const label = target === 'pro' ? 'Pro' : 'Starter';
+    if (planRank(cur) >= planRank(target)) {
+      btn.disabled = true;
+      btn.textContent = cur === target ? 'Current plan' : (target === 'starter' ? 'Included in Pro' : 'Current plan');
+      btn.classList.remove('primary');
+      btn.setAttribute('aria-disabled', 'true');
+      btn.title = cur === target
+        ? 'You are already on this plan'
+        : 'Your Pro plan already includes Starter';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Upgrade to ' + label;
+      btn.removeAttribute('aria-disabled');
+      btn.title = '';
+      if (target === 'starter' || btn.classList.contains('primary')) {
+        /* keep existing primary on starter CTAs */
+      }
+    }
+  });
+}
+
+
 
 function formatPlanPriceLine(planId, pricing) {
   const label = planId === 'pro' ? 'Pro' : 'Starter';
@@ -4466,6 +4511,24 @@ async function startPaystackCheckout(plan, source) {
   const planId = String(plan || 'starter').toLowerCase();
   const label = planId === 'pro' ? 'Pro' : 'Starter';
   track('upgrade_cta_clicked', { plan: planId, source: source || 'unknown', provider: BILLING_PROVIDER });
+
+  // Block duplicate / downgrade purchases
+  try {
+    const e = await getEntitlements(true);
+    const current = String(e?.plan || 'free').toLowerCase();
+    if (!canUpgradeTo(planId, current)) {
+      track('upgrade_blocked_already_on_plan', { plan: planId, current, source: source || 'unknown' });
+      paintUpgradeButtons(current);
+      if (current === planId) {
+        alert('You are already on the ' + (e?.plan_name || label) + ' plan. No need to purchase again.');
+      } else {
+        alert('Your ' + (e?.plan_name || current) + ' plan already includes ' + label + '.');
+      }
+      return;
+    }
+  } catch (err) {
+    console.warn('upgrade guard', err.message || err);
+  }
 
   let pricing = null;
   try {
@@ -6144,6 +6207,7 @@ async function planView() {
   }).join('');
   renderFeatureAccess();
   applyFeatureGates();
+  paintUpgradeButtons(plan);
 
   // Localised prices from business country (profile taxCountry)
   try {
