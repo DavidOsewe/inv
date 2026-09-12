@@ -12,6 +12,8 @@
     .ref { font-size: 12px; color: #94A3B8; word-break: break-all; margin-top: 12px; }
     a.button { display: inline-block; margin-top: 20px; background: #2467E3; color: #fff; text-decoration: none; padding: 12px 20px; border-radius: 10px; font-weight: 700; }
     a.button:hover { background: #1d56c4; }
+    .links { margin-top: 20px; font-size: 12px; color: #94A3B8; }
+    .links a { color: #2467E3; }
   </style>
 </head>
 <body>
@@ -20,6 +22,10 @@
     <p id="statusMsg">We’re confirming your Paystack payment and activating your plan…</p>
     <p class="ref" id="refLine" hidden></p>
     <a class="button" id="returnLink" href="/app.html?billing=1">Return to invoicedey</a>
+    <p class="links">
+      Need help? <a href="mailto:support@invoicedey.com?subject=invoicedey%20payment%20help">support@invoicedey.com</a>
+      · <a href="/refunds.html">Refund policy</a>
+    </p>
   </div>
   <script>
     (function () {

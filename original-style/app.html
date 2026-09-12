@@ -2315,6 +2315,21 @@ input:focus:not(:focus-visible) {
             </div>
           </div>
           <p class="plan-note" id="planBillingNote">Billing is coming soon. Your current plan remains active.</p>
+          <div id="billingManageBox" class="stack-gap" style="margin-top:16px;display:none">
+            <h3 style="margin:0 0 8px;font-size:15px">Manage billing</h3>
+            <p id="billingManageNote" class="section-sub" style="margin:0 0 12px">Cancel renewal anytime. You keep access until the end of the paid period.</p>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              <button class="button" type="button" id="btnCancelRenewal">Cancel renewal</button>
+              <a class="button" id="btnBillingSupport" href="mailto:support@invoicedey.com?subject=invoicedey%20billing">Contact support</a>
+            </div>
+            <p id="billingCancelStatus" class="section-sub" style="margin:10px 0 0;display:none"></p>
+          </div>
+          <p class="section-sub" style="margin:16px 0 0;font-size:12px">
+            <a href="/terms.html" target="_blank" rel="noopener">Terms</a> ·
+            <a href="/privacy.html" target="_blank" rel="noopener">Privacy</a> ·
+            <a href="/refunds.html" target="_blank" rel="noopener">Refunds</a> ·
+            <a href="mailto:support@invoicedey.com">support@invoicedey.com</a>
+          </p>
         </div>
       </div>
       <div class="insight stack-gap">
@@ -4388,6 +4403,55 @@ document.getElementById('upgradeLater')?.addEventListener('click', () => documen
  */
 const BILLING_PROVIDER = 'paystack';
 const BILLING_READY = true; // functions deployed — keep secrets + webhook configured
+const SUPPORT_EMAIL = 'support@invoicedey.com';
+
+async function cancelPlanRenewal() {
+  if (!cloud.user) {
+    toast('Sign in to manage billing.');
+    return;
+  }
+  const e = await getEntitlements(true);
+  const plan = String(e?.plan || 'free').toLowerCase();
+  if (plan === 'free') {
+    toast('You are on the Free plan.');
+    return;
+  }
+  if (!confirm('Cancel automatic renewal? You will keep ' + (e.plan_name || plan) + ' until the end of the current period.')) {
+    return;
+  }
+  const btn = document.getElementById('btnCancelRenewal');
+  if (btn) btn.disabled = true;
+  try {
+    const organizationId = await ensureCloudOrganization();
+    const client = cloud.client || await getSupabase();
+    const { data, error } = await client.functions.invoke('cancel-subscription', {
+      body: { organization_id: organizationId }
+    });
+    if (error) throw error;
+    const payload = typeof data === 'string' ? JSON.parse(data) : data;
+    const status = document.getElementById('billingCancelStatus');
+    if (status) {
+      status.style.display = 'block';
+      status.textContent = payload?.ok
+        ? ('Renewal cancelled. Access continues' + (payload.plan_renews_at ? ' until ' + new Date(payload.plan_renews_at).toLocaleDateString() : ' until the end of your paid period') + '.')
+        : (payload?.message || payload?.error || 'Could not cancel. Email ' + SUPPORT_EMAIL);
+    }
+    track('billing_cancel_requested', { plan, ok: !!payload?.ok });
+    toast(payload?.ok ? 'Renewal cancelled.' : (payload?.message || 'Cancel failed'));
+    await getEntitlements(true);
+    if (typeof planView === 'function') planView();
+  } catch (err) {
+    console.warn('cancel renewal', err.message || err);
+    toast('Could not cancel renewal. Email ' + SUPPORT_EMAIL);
+    track('billing_cancel_failed', { error: String(err.message || err) });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+document.getElementById('btnCancelRenewal')?.addEventListener('click', () => {
+  cancelPlanRenewal();
+});
 
 const PLAN_RANK = { free: 0, starter: 1, pro: 2 };
 
@@ -6208,6 +6272,14 @@ async function planView() {
   renderFeatureAccess();
   applyFeatureGates();
   paintUpgradeButtons(plan);
+
+  const manageBox = document.getElementById('billingManageBox');
+  if (manageBox) {
+    const paid = plan === 'starter' || plan === 'pro';
+    manageBox.style.display = paid ? 'block' : 'none';
+    const supportBtn = document.getElementById('btnBillingSupport');
+    if (supportBtn) supportBtn.setAttribute('href', 'mailto:' + SUPPORT_EMAIL + '?subject=' + encodeURIComponent('invoicedey billing — ' + plan));
+  }
 
   // Localised prices from business country (profile taxCountry)
   try {
