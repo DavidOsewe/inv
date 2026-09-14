@@ -2288,9 +2288,10 @@ input:focus:not(:focus-visible) {
       <div class="section-head">
         <div>
           <h2>Books</h2>
-          <p class="section-sub">Full small-business accounting — general ledger, journals, payables, and reports. Invoices and payments post in automatically; you can run the books without them.</p>
+          <p class="section-sub">Accounting for your business — ledger, bank reconcile, AR/AP, and reports. Invoices feed the books; the books stand on their own.</p>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <button class="button" type="button" id="btnBooksSetup">Opening balances</button>
           <button class="button" type="button" id="btnExportBooks">Export</button>
           <button class="button" type="button" id="btnManualJournal">Manual journal</button>
           <button class="button" type="button" id="btnAddBill">Supplier bill</button>
@@ -2309,6 +2310,8 @@ input:focus:not(:focus-visible) {
         <button type="button" class="button small" data-books-tab="coa">Accounts</button>
         <button type="button" class="button small" data-books-tab="trial">Trial balance</button>
         <button type="button" class="button small" data-books-tab="cash">Bank &amp; cash</button>
+        <button type="button" class="button small" data-books-tab="reconcile">Reconcile</button>
+        <button type="button" class="button small" data-books-tab="recurringj">Recurring journals</button>
       </div>
 
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center">
@@ -2404,6 +2407,50 @@ input:focus:not(:focus-visible) {
           <div class="card"><small>Outstanding AR</small><b id="booksOutstanding">—</b></div>
         </div>
         <div class="insight" style="margin-top:16px"><h3>Bank &amp; cash movements</h3><div id="booksList"></div></div>
+      </div>
+      <div id="booksPanelRecurringJ" hidden>
+        <div class="insight">
+          <h3>Recurring journals</h3>
+          <p class="section-sub">Rent, subscriptions, retainers — post the same balanced entry on a schedule when you open Books.</p>
+          <button type="button" class="button primary" id="btnAddRecurringJournal" style="margin-bottom:12px">New recurring journal</button>
+          <div id="booksRecurringJList"></div>
+        </div>
+      </div>
+      <div id="booksPanelReconcile" hidden>
+        <div class="insight">
+          <h3>Bank reconciliation</h3>
+          <p class="section-sub">Enter the balance on your bank statement, import a CSV, and tick book lines that match until the difference is zero.</p>
+          <div class="two" style="gap:12px;margin-bottom:12px">
+            <div class="field">
+              <label>Bank account</label>
+              <select id="reconAccount"></select>
+            </div>
+            <div class="field">
+              <label>Statement balance</label>
+              <input id="reconStatementBal" type="number" step="0.01" placeholder="0">
+            </div>
+            <div class="field">
+              <label>Statement date</label>
+              <input id="reconStatementDate" type="date">
+            </div>
+            <div class="field">
+              <label>Import statement CSV</label>
+              <input id="reconCsvFile" type="file" accept=".csv,text/csv">
+              <div style="font-size:11px;color:var(--muted);margin-top:4px">Columns: date, description, amount (or debit/credit). We’ll auto-tick matching book lines.</div>
+            </div>
+          </div>
+          <div id="reconImportPreview" style="margin-bottom:12px"></div>
+          <div class="cards stack-gap" style="margin-bottom:12px">
+            <div class="card"><small>Book balance</small><b id="reconBookBal">—</b></div>
+            <div class="card"><small>Cleared in books</small><b id="reconCleared">—</b></div>
+            <div class="card"><small>Difference</small><b id="reconDiff">—</b><span class="mini" id="reconDiffHint">Statement − cleared</span></div>
+          </div>
+          <div id="reconLines"></div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="button primary" id="reconSave">Save reconciliation</button>
+            <button type="button" class="button" id="reconClearTicks">Clear ticks</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -2975,6 +3022,48 @@ input:focus:not(:focus-visible) {
 </div>
 
 
+
+
+
+<div class="modalback" id="recurringJournalModal">
+  <div class="modal" style="max-width:560px">
+    <h2>Recurring journal</h2>
+    <p class="section-sub">Balanced entry that posts automatically on the schedule.</p>
+    <div class="field"><label>Memo</label><input id="rjMemo" placeholder="e.g. Office rent"></div>
+    <div class="two">
+      <div class="field"><label>Interval</label>
+        <select id="rjInterval">
+          <option value="monthly">Monthly</option>
+          <option value="weekly">Weekly</option>
+          <option value="quarterly">Quarterly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+      </div>
+      <div class="field"><label>Next run</label><input id="rjNext" type="date"></div>
+    </div>
+    <div id="rjLines"></div>
+    <button type="button" class="button small" id="rjAddLine">+ Line</button>
+    <p id="rjBalanceHint" class="section-sub"></p>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="button primary" type="button" id="rjSave">Save schedule</button>
+      <button class="button" type="button" id="rjCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="openingModal">
+  <div class="modal" style="max-width:560px">
+    <h2>Opening balances</h2>
+    <p class="section-sub">Set account balances as at your start date. We post one balanced opening journal (equity plugs the difference).</p>
+    <div class="field"><label>As at date</label><input id="obDate" type="date"></div>
+    <div id="obLines" style="max-height:320px;overflow:auto;margin:10px 0"></div>
+    <p id="obHint" class="section-sub"></p>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="button primary" type="button" id="obSave">Post opening balances</button>
+      <button class="button" type="button" id="obCancel">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <div class="modalback" id="journalModal">
   <div class="modal" style="max-width:560px">
@@ -4235,6 +4324,9 @@ async function startCloudSync(client, user) {
     }
     try { await pullRecurringFromCloud(); } catch (e) { console.warn('recurring pull', e.message || e); }
     try { await processDueRecurringSchedules(); } catch (e) { console.warn('recurring process', e.message || e); }
+    try { await pullBooksFromCloud(); } catch (e) { console.warn('books pull', e.message || e); }
+    try { processDueRecurringJournals(); } catch (e) {}
+    try { await pushBooksToCloud(); } catch (e) { console.warn('books push', e.message || e); }
     dashboard();
   } catch (error) {
     console.warn('cloud sync setup', error.message || error);
@@ -4268,7 +4360,11 @@ const defaultDB = {
   journals: [],
   bills: [],
   coaExtra: [],
-  booksSettings: { invoiceFeed: true }
+  booksSettings: { invoiceFeed: true },
+  reconciliations: [],
+  clearedJournalLines: {},
+  recurringJournals: [],
+  statementImports: []
 };
 const LEGACY_DB_KEY = 'invoicedey-v2';
 const ANON_DB_KEY = 'invoicedey-anonymous-v1';
@@ -4731,6 +4827,25 @@ document.addEventListener('click', (e) => {
   if (payBill) {
     e.preventDefault();
     paySupplierBill(payBill.getAttribute('data-pay-bill'));
+    return;
+  }
+  const rjToggle = e.target.closest('[data-rj-toggle]');
+  if (rjToggle) {
+    e.preventDefault();
+    const id = rjToggle.getAttribute('data-rj-toggle');
+    const sch = (db.recurringJournals || []).find(s => s.id === id);
+    if (sch) { sch.active = sch.active === false; save(); queueBooksCloudSync(); booksView(); }
+    return;
+  }
+  const rjDel = e.target.closest('[data-rj-del]');
+  if (rjDel) {
+    e.preventDefault();
+    const id = rjDel.getAttribute('data-rj-del');
+    db.recurringJournals = (db.recurringJournals || []).filter(s => s.id !== id);
+    save();
+    queueBooksCloudSync();
+    booksView();
+    toast('Schedule deleted');
     return;
   }
   const delAcc = e.target.closest('[data-del-account]');
@@ -7256,6 +7371,10 @@ function ensureBooksDb() {
   if (!Array.isArray(db.bills)) db.bills = [];
   if (!Array.isArray(db.coaExtra)) db.coaExtra = [];
   if (!db.booksSettings) db.booksSettings = { invoiceFeed: true };
+  if (!Array.isArray(db.reconciliations)) db.reconciliations = [];
+  if (!db.clearedJournalLines) db.clearedJournalLines = {};
+  if (!Array.isArray(db.recurringJournals)) db.recurringJournals = [];
+  if (!Array.isArray(db.statementImports)) db.statementImports = [];
 }
 function ensureCashEntries() { ensureBooksDb(); }
 
@@ -7326,6 +7445,7 @@ function postJournal({ date, memo, source, sourceKey, lines, currency }) {
     createdAt: new Date().toISOString()
   };
   db.journals.push(entry);
+  try { queueBooksCloudSync(); } catch {}
   return entry;
 }
 
@@ -7477,7 +7597,9 @@ function setBooksTab(tab) {
     receivables: 'booksPanelReceivables',
     coa: 'booksPanelCoa',
     trial: 'booksPanelTrial',
-    cash: 'booksPanelCash'
+    cash: 'booksPanelCash',
+    reconcile: 'booksPanelReconcile',
+    recurringj: 'booksPanelRecurringJ'
   };
   Object.entries(panels).forEach(([k, id]) => {
     const el = document.getElementById(id);
@@ -7882,6 +8004,7 @@ function renderBooksCoa() {
 function booksView() {
   ensureBooksDb();
   syncAllInvoiceAccruals();
+  try { processDueRecurringJournals(); } catch (e) { console.warn('rj due', e); }
   try { save(); } catch {}
 
   setBooksTab(booksTab);
@@ -8054,6 +8177,680 @@ function jeUpdateHint() {
     : 'Out of balance by ' + money(diff) + ' · Dr ' + money(dr) + ' / Cr ' + money(cr);
   hint.style.color = diff < 0.02 ? 'var(--green-text)' : 'var(--red-text)';
 }
+
+/* ---- Opening balances (Zoho-style setup) ---- */
+function openOpeningModal() {
+  ensureBooksDb();
+  const m = document.getElementById('openingModal');
+  if (!m) return;
+  document.getElementById('obDate').value = db.booksSettings?.openingDate || today;
+  const wrap = document.getElementById('obLines');
+  // Show key balance-sheet accounts for opening
+  const focus = getCoa().filter(a =>
+    a.type === 'asset' || a.type === 'liability' || a.type === 'equity'
+  );
+  wrap.innerHTML = focus.map(a => {
+    const bal = (accountBalances(null)[a.id] || 0);
+    // prefill 0 for fresh setup
+    return `<div class="two" style="gap:8px;margin-bottom:6px;align-items:end" data-ob-id="${a.id}">
+      <div class="field" style="flex:2;margin:0"><label>${a.id} · ${a.name}</label>
+        <input type="number" step="0.01" class="ob-amt" placeholder="0" data-ob-type="${a.type}">
+      </div>
+      <div style="font-size:11px;color:var(--muted);padding-bottom:10px;min-width:70px">${a.type}</div>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('.ob-amt').forEach(i => i.addEventListener('input', obUpdateHint));
+  obUpdateHint();
+  m.classList.add('show');
+}
+function closeOpeningModal() {
+  document.getElementById('openingModal')?.classList.remove('show');
+}
+function obUpdateHint() {
+  let assets = 0, liabEq = 0;
+  document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
+    const amt = Number(row.querySelector('.ob-amt')?.value || 0);
+    const type = row.querySelector('.ob-amt')?.dataset.obType;
+    if (type === 'asset') assets += amt;
+    else liabEq += amt; // liability + equity as credit balances entered positive
+  });
+  const plug = assets - liabEq;
+  const hint = document.getElementById('obHint');
+  if (!hint) return;
+  if (Math.abs(plug) < 0.02) {
+    hint.textContent = 'Balanced — ready to post.';
+    hint.style.color = 'var(--green-text)';
+  } else {
+    hint.textContent = 'Difference ' + money(plug) + ' will post to Owner equity as the balancing figure.';
+    hint.style.color = 'var(--muted)';
+  }
+}
+
+function postOpeningBalances() {
+  ensureBooksDb();
+  const date = document.getElementById('obDate')?.value || today;
+  if (db.journals.some(j => j.source === 'opening_balance')) {
+    if (!confirm('Opening balances were already posted. Post another opening journal anyway?')) return;
+  }
+  const lines = [];
+  let assets = 0, credits = 0;
+  document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
+    const id = row.getAttribute('data-ob-id');
+    const amt = Number(row.querySelector('.ob-amt')?.value || 0);
+    if (!(amt > 0)) return;
+    const type = row.querySelector('.ob-amt')?.dataset.obType;
+    if (type === 'asset') {
+      lines.push({ accountId: id, debit: amt, credit: 0 });
+      assets += amt;
+    } else {
+      lines.push({ accountId: id, debit: 0, credit: amt });
+      credits += amt;
+    }
+  });
+  const plug = Math.round((assets - credits) * 100) / 100;
+  if (Math.abs(plug) > 0.02) {
+    if (plug > 0) lines.push({ accountId: '3000', debit: 0, credit: plug });
+    else lines.push({ accountId: '3000', debit: -plug, credit: 0 });
+  }
+  if (lines.length < 2) {
+    toast('Enter at least two account balances');
+    return;
+  }
+  const entry = postJournal({
+    date,
+    memo: 'Opening balances as at ' + date,
+    source: 'opening_balance',
+    sourceKey: 'j:opening:' + date + ':' + crypto.randomUUID(),
+    lines
+  });
+  if (!entry) { toast('Could not post opening balances'); return; }
+  db.booksSettings.openingDate = date;
+  db.booksSettings.openingPostedAt = new Date().toISOString();
+  save();
+  closeOpeningModal();
+  toast('Opening balances posted');
+  booksTab = 'balance';
+  booksView();
+  track('opening_balances_posted', { lines: lines.length });
+}
+
+/* ---- Bank reconciliation ---- */
+function reconKey(journalId, accountId, debit, credit) {
+  return [journalId, accountId, debit || 0, credit || 0].join(':');
+}
+
+function renderBooksReconcile() {
+  const accSel = document.getElementById('reconAccount');
+  const el = document.getElementById('reconLines');
+  if (!el || !accSel) return;
+  ensureBooksDb();
+  const bankAccounts = getCoa().filter(a =>
+    a.type === 'asset' && (a.id === '1000' || /cash|bank/i.test(a.name))
+  );
+  if (!bankAccounts.length) bankAccounts.push({ id: '1000', name: 'Cash' });
+  const cur = accSel.value;
+  accSel.innerHTML = bankAccounts.map(a =>
+    `<option value="${a.id}" ${a.id === cur ? 'selected' : ''}>${a.id} · ${a.name}</option>`
+  ).join('');
+  if (!accSel.dataset.bound) {
+    accSel.dataset.bound = '1';
+    accSel.addEventListener('change', renderBooksReconcile);
+    document.getElementById('reconStatementBal')?.addEventListener('input', updateReconSummary);
+  }
+  if (!document.getElementById('reconStatementDate').value) {
+    document.getElementById('reconStatementDate').value = today;
+  }
+
+  const accountId = accSel.value || '1000';
+  const bal = accountBalances(null);
+  const bookBal = bal[accountId] || 0;
+  document.getElementById('reconBookBal').textContent = money(bookBal);
+
+  // Unreconciled lines on this account (not cleared)
+  const lines = [];
+  (db.journals || []).forEach(j => {
+    (j.lines || []).forEach(l => {
+      if (l.accountId !== accountId) return;
+      const key = reconKey(j.id, l.accountId, l.debit, l.credit);
+      lines.push({
+        key,
+        date: j.date,
+        memo: j.memo || j.source || '',
+        debit: Number(l.debit) || 0,
+        credit: Number(l.credit) || 0,
+        cleared: !!db.clearedJournalLines[key]
+      });
+    });
+  });
+  lines.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+  if (!lines.length) {
+    el.innerHTML = '<p class="section-sub">No transactions on this account yet. Post journals or collect invoice payments first.</p>';
+    updateReconSummary();
+    return;
+  }
+
+  el.innerHTML = `<table class="table"><thead><tr>
+    <th></th><th>Date</th><th>Memo</th><th class="right">Out</th><th class="right">In</th>
+  </tr></thead><tbody>` + lines.map(l => {
+    // bank statement style: credit to bank = money in
+    const out = l.credit || 0;
+    const inn = l.debit || 0;
+    return `<tr>
+      <td><input type="checkbox" class="recon-tick" data-recon-key="${l.key}" ${l.cleared ? 'checked' : ''}></td>
+      <td>${l.date || ''}</td>
+      <td>${l.memo}</td>
+      <td class="right">${out ? money(out) : ''}</td>
+      <td class="right">${inn ? money(inn) : ''}</td>
+    </tr>`;
+  }).join('') + '</tbody></table>';
+
+  el.querySelectorAll('.recon-tick').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const key = cb.getAttribute('data-recon-key');
+      if (cb.checked) db.clearedJournalLines[key] = true;
+      else delete db.clearedJournalLines[key];
+      save();
+      updateReconSummary();
+    });
+  });
+  updateReconSummary();
+}
+
+function updateReconSummary() {
+  ensureBooksDb();
+  const accountId = document.getElementById('reconAccount')?.value || '1000';
+  const statement = Number(document.getElementById('reconStatementBal')?.value || 0);
+  let cleared = 0;
+  // cleared balance = sum of cleared lines (debits - credits) on account — actually for recon:
+  // starting from 0, cleared items that hit the bank: we show "cleared total" as book movements ticked
+  (db.journals || []).forEach(j => {
+    (j.lines || []).forEach(l => {
+      if (l.accountId !== accountId) return;
+      const key = reconKey(j.id, l.accountId, l.debit, l.credit);
+      if (!db.clearedJournalLines[key]) return;
+      cleared += (Number(l.debit) || 0) - (Number(l.credit) || 0);
+    });
+  });
+  // For typical recon: difference = statement balance - sum of cleared effects from opening...
+  // Simpler UX: difference = statement - book balance when all should match; or statement - cleared running
+  const bookBal = (accountBalances(null)[accountId] || 0);
+  const uncleared = bookBal - cleared;
+  const diff = statement - cleared;
+  const elC = document.getElementById('reconCleared');
+  const elD = document.getElementById('reconDiff');
+  const elH = document.getElementById('reconDiffHint');
+  if (elC) elC.textContent = money(cleared);
+  if (elD) {
+    elD.textContent = money(diff);
+    elD.style.color = Math.abs(diff) < 0.05 ? '' : 'var(--red-text)';
+  }
+  if (elH) {
+    elH.textContent = Math.abs(diff) < 0.05
+      ? 'Matched — ready to save'
+      : ('Uncleared book items ≈ ' + money(uncleared));
+  }
+}
+
+function saveReconciliation() {
+  ensureBooksDb();
+  const accountId = document.getElementById('reconAccount')?.value || '1000';
+  const statement = Number(document.getElementById('reconStatementBal')?.value || 0);
+  const date = document.getElementById('reconStatementDate')?.value || today;
+  let cleared = 0;
+  Object.keys(db.clearedJournalLines || {}).forEach(() => {});
+  (db.journals || []).forEach(j => {
+    (j.lines || []).forEach(l => {
+      if (l.accountId !== accountId) return;
+      const key = reconKey(j.id, l.accountId, l.debit, l.credit);
+      if (db.clearedJournalLines[key]) cleared += (Number(l.debit) || 0) - (Number(l.credit) || 0);
+    });
+  });
+  const diff = statement - cleared;
+  if (Math.abs(diff) > 0.05) {
+    if (!confirm('Difference is ' + money(diff) + '. Save this reconciliation anyway?')) return;
+  }
+  db.reconciliations.push({
+    id: crypto.randomUUID(),
+    accountId,
+    statementBalance: statement,
+    clearedBalance: cleared,
+    difference: diff,
+    statementDate: date,
+    savedAt: new Date().toISOString()
+  });
+  save();
+  toast(Math.abs(diff) < 0.05 ? 'Reconciliation saved — matched' : 'Reconciliation saved with difference');
+  track('bank_reconciled', { accountId, difference: diff });
+  renderBooksReconcile();
+}
+
+
+
+/* ========== Bank statement CSV import ========== */
+function parseCsvText(text) {
+  const rows = [];
+  let i = 0, field = '', row = [], inQ = false;
+  const s = String(text || '').replace(/^\uFEFF/, '');
+  while (i < s.length) {
+    const c = s[i];
+    if (inQ) {
+      if (c === '"') {
+        if (s[i + 1] === '"') { field += '"'; i++; }
+        else inQ = false;
+      } else field += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && s[i + 1] === '\n') i++;
+        row.push(field); field = '';
+        if (row.some(x => String(x).trim() !== '')) rows.push(row);
+        row = [];
+      } else field += c;
+    }
+    i++;
+  }
+  if (field.length || row.length) { row.push(field); if (row.some(x => String(x).trim() !== '')) rows.push(row); }
+  return rows;
+}
+
+function normalizeBankCsv(rows) {
+  if (!rows.length) return [];
+  const header = rows[0].map(h => String(h || '').trim().toLowerCase());
+  const body = rows.slice(1);
+  const idx = (names) => {
+    for (const n of names) {
+      const i = header.findIndex(h => h === n || h.includes(n));
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  let iDate = idx(['date', 'txn date', 'transaction date', 'value date', 'posting date']);
+  let iDesc = idx(['description', 'narration', 'memo', 'details', 'particulars', 'reference']);
+  let iAmt = idx(['amount', 'transaction amount', 'amt']);
+  let iDebit = idx(['debit', 'withdrawal', 'money out', 'out']);
+  let iCredit = idx(['credit', 'deposit', 'money in', 'in']);
+  // fallback: first cols
+  if (iDate < 0) iDate = 0;
+  if (iDesc < 0) iDesc = Math.min(1, header.length - 1);
+  const out = [];
+  body.forEach(r => {
+    const dateRaw = String(r[iDate] || '').trim();
+    let date = dateRaw;
+    // try DD/MM/YYYY or YYYY-MM-DD
+    const m = dateRaw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+    if (m) {
+      let y = m[3].length === 2 ? '20' + m[3] : m[3];
+      date = y + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+    }
+    const desc = String(r[iDesc] || '').trim();
+    let amount = 0;
+    if (iAmt >= 0) {
+      amount = Number(String(r[iAmt] || '').replace(/[, ]/g, '')) || 0;
+    } else {
+      const deb = iDebit >= 0 ? Number(String(r[iDebit] || '').replace(/[, ]/g, '')) || 0 : 0;
+      const cre = iCredit >= 0 ? Number(String(r[iCredit] || '').replace(/[, ]/g, '')) || 0 : 0;
+      amount = cre - deb;
+    }
+    if (!date && !desc && !amount) return;
+    out.push({ date, description: desc, amount });
+  });
+  return out;
+}
+
+function importBankCsvFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const rows = parseCsvText(reader.result);
+      const txs = normalizeBankCsv(rows);
+      if (!txs.length) { toast('No transactions found in CSV'); return; }
+      ensureBooksDb();
+      db.statementImports = txs;
+      save();
+      autoMatchStatementToBooks();
+      renderStatementImportPreview();
+      toast('Imported ' + txs.length + ' statement lines');
+      track('bank_csv_imported', { rows: txs.length });
+    } catch (e) {
+      console.warn(e);
+      toast('Could not parse CSV');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function autoMatchStatementToBooks() {
+  ensureBooksDb();
+  const accountId = document.getElementById('reconAccount')?.value || '1000';
+  const txs = db.statementImports || [];
+  let matched = 0;
+  txs.forEach(tx => {
+    const amt = Math.abs(Number(tx.amount) || 0);
+    if (!(amt > 0)) return;
+    // amount > 0 = money in = debit on cash; amount < 0 = money out = credit on cash
+    const wantDebit = Number(tx.amount) > 0;
+    (db.journals || []).forEach(j => {
+      // loose date match ±3 days if both parseable
+      (j.lines || []).forEach(l => {
+        if (l.accountId !== accountId) return;
+        const d = Number(l.debit) || 0;
+        const c = Number(l.credit) || 0;
+        const lineAmt = wantDebit ? d : c;
+        if (Math.abs(lineAmt - amt) > 0.05) return;
+        if (tx.date && j.date) {
+          const t0 = Date.parse(tx.date);
+          const t1 = Date.parse(j.date);
+          if (Number.isFinite(t0) && Number.isFinite(t1) && Math.abs(t0 - t1) > 4 * 86400000) return;
+        }
+        const key = reconKey(j.id, l.accountId, l.debit, l.credit);
+        if (!db.clearedJournalLines[key]) matched++;
+        db.clearedJournalLines[key] = true;
+      });
+    });
+  });
+  save();
+  renderBooksReconcile();
+  updateReconSummary();
+  if (matched) toast('Auto-matched ' + matched + ' book lines');
+}
+
+function renderStatementImportPreview() {
+  const el = document.getElementById('reconImportPreview');
+  if (!el) return;
+  const txs = db.statementImports || [];
+  if (!txs.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div style="font-size:12px;margin-bottom:6px"><b>${txs.length}</b> statement lines imported
+    <button type="button" class="button small" id="reconRematch" style="margin-left:8px">Re-match</button>
+    <button type="button" class="button small" id="reconClearImport" style="margin-left:4px">Clear import</button>
+  </div>
+  <div style="max-height:120px;overflow:auto;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:8px">` +
+    txs.slice(0, 30).map(t =>
+      `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0">
+        <span>${t.date || ''} · ${t.description || ''}</span>
+        <b>${money(Math.abs(t.amount))} ${t.amount >= 0 ? 'in' : 'out'}</b>
+      </div>`
+    ).join('') + (txs.length > 30 ? '<div>…</div>' : '') + '</div>';
+  document.getElementById('reconRematch')?.addEventListener('click', autoMatchStatementToBooks);
+  document.getElementById('reconClearImport')?.addEventListener('click', () => {
+    db.statementImports = [];
+    save();
+    renderStatementImportPreview();
+  });
+}
+
+/* ========== Recurring journals ========== */
+let rjLineCount = 2;
+function rjRenderLines() {
+  const wrap = document.getElementById('rjLines');
+  if (!wrap) return;
+  if (rjLineCount < 2) rjLineCount = 2;
+  let html = '';
+  for (let i = 0; i < rjLineCount; i++) {
+    html += `<div class="two" style="gap:8px;margin-bottom:8px" data-rj-row="${i}">
+      <div class="field" style="flex:2"><label>Account</label><select class="rj-account">${coaOptionsHtml('5100')}</select></div>
+      <div class="field"><label>Debit</label><input type="number" min="0" step="0.01" class="rj-debit"></div>
+      <div class="field"><label>Credit</label><input type="number" min="0" step="0.01" class="rj-credit"></div>
+    </div>`;
+  }
+  wrap.innerHTML = html;
+  wrap.querySelectorAll('input').forEach(inp => inp.addEventListener('input', rjUpdateHint));
+  rjUpdateHint();
+}
+function rjUpdateHint() {
+  let dr = 0, cr = 0;
+  document.querySelectorAll('#rjLines [data-rj-row]').forEach(row => {
+    dr += Number(row.querySelector('.rj-debit')?.value || 0);
+    cr += Number(row.querySelector('.rj-credit')?.value || 0);
+  });
+  const hint = document.getElementById('rjBalanceHint');
+  if (!hint) return;
+  const diff = Math.abs(dr - cr);
+  hint.textContent = diff < 0.02 ? 'Balanced' : 'Out of balance by ' + money(diff);
+  hint.style.color = diff < 0.02 ? 'var(--green-text)' : 'var(--red-text)';
+}
+function openRecurringJournalModal() {
+  document.getElementById('rjMemo').value = '';
+  document.getElementById('rjInterval').value = 'monthly';
+  document.getElementById('rjNext').value = today;
+  rjLineCount = 2;
+  rjRenderLines();
+  document.getElementById('recurringJournalModal')?.classList.add('show');
+}
+function closeRecurringJournalModal() {
+  document.getElementById('recurringJournalModal')?.classList.remove('show');
+}
+function nextRunAfter(dateStr, interval) {
+  const d = new Date(dateStr + 'T12:00:00');
+  if (interval === 'weekly') d.setDate(d.getDate() + 7);
+  else if (interval === 'quarterly') d.setMonth(d.getMonth() + 3);
+  else if (interval === 'yearly') d.setFullYear(d.getFullYear() + 1);
+  else d.setMonth(d.getMonth() + 1);
+  return d.toISOString().slice(0, 10);
+}
+function processDueRecurringJournals() {
+  ensureBooksDb();
+  let n = 0;
+  (db.recurringJournals || []).forEach(sch => {
+    if (!sch.active) return;
+    let guard = 0;
+    while (sch.nextRunDate && sch.nextRunDate <= today && guard < 24) {
+      const key = 'j:rj:' + sch.id + ':' + sch.nextRunDate;
+      postJournal({
+        date: sch.nextRunDate,
+        memo: (sch.memo || 'Recurring') + ' · ' + sch.nextRunDate,
+        source: 'recurring_journal',
+        sourceKey: key,
+        lines: (sch.lines || []).map(l => ({ accountId: l.accountId, debit: l.debit, credit: l.credit }))
+      });
+      sch.lastPostedAt = new Date().toISOString();
+      sch.nextRunDate = nextRunAfter(sch.nextRunDate, sch.interval || 'monthly');
+      n++;
+      guard++;
+    }
+  });
+  if (n) {
+    save();
+    queueBooksCloudSync();
+  }
+  return n;
+}
+function renderBooksRecurringJ() {
+  const el = document.getElementById('booksRecurringJList');
+  if (!el) return;
+  ensureBooksDb();
+  const list = db.recurringJournals || [];
+  if (!list.length) {
+    el.innerHTML = '<p class="section-sub">No recurring journals yet. Example: Dr Rent / Cr Cash every month.</p>';
+    return;
+  }
+  el.innerHTML = list.map(sch => {
+    const lines = (sch.lines || []).map(l =>
+      `${coaName(l.accountId)} ${l.debit ? 'Dr ' + money(l.debit) : 'Cr ' + money(l.credit)}`
+    ).join(' · ');
+    return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <div style="flex:1;min-width:160px">
+          <b style="font-size:13px">${sch.memo || 'Schedule'}</b>
+          <div style="font-size:12px;color:var(--muted)">${sch.interval || 'monthly'} · next ${sch.nextRunDate || '—'} · ${sch.active === false ? 'paused' : 'active'}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">${lines}</div>
+        </div>
+        <button type="button" class="button small" data-rj-toggle="${sch.id}">${sch.active === false ? 'Resume' : 'Pause'}</button>
+        <button type="button" class="button small danger" data-rj-del="${sch.id}">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ========== Cloud sync for Books ========== */
+function queueBooksCloudSync() {
+  if (!cloud.client || !cloud.user) return;
+  clearTimeout(cloud.booksTimer);
+  cloud.booksTimer = setTimeout(() => {
+    pushBooksToCloud().catch(e => console.warn('books push', e.message || e));
+  }, 800);
+}
+
+async function pushBooksToCloud() {
+  if (!cloud.client || !cloud.user) return;
+  ensureBooksDb();
+  const organizationId = await ensureCloudOrganization();
+  // Journals by source_key upsert
+  for (const j of db.journals || []) {
+    const payload = {
+      organization_id: organizationId,
+      local_id: j.id,
+      entry_date: j.date || today,
+      memo: j.memo || null,
+      source: j.source || null,
+      source_key: j.sourceKey || ('local:' + j.id),
+      currency: j.currency || db.profile.reporting || 'USD',
+      lines: j.lines || [],
+      updated_at: new Date().toISOString()
+    };
+    const { error } = await cloud.client.from('books_journals').upsert(payload, {
+      onConflict: 'organization_id,source_key'
+    });
+    // unique index is partial — fallback insert/select
+    if (error) {
+      const { data: existing } = await cloud.client.from('books_journals')
+        .select('id').eq('organization_id', organizationId).eq('source_key', payload.source_key).maybeSingle();
+      if (existing?.id) {
+        await cloud.client.from('books_journals').update(payload).eq('id', existing.id);
+      } else {
+        const ins = await cloud.client.from('books_journals').insert(payload);
+        if (ins.error) console.warn('books_journals', ins.error.message);
+      }
+    }
+  }
+  // Bills
+  for (const b of db.bills || []) {
+    const payload = {
+      organization_id: organizationId,
+      local_id: b.id,
+      supplier: b.supplier || null,
+      category: b.category || null,
+      amount: Number(b.amount) || 0,
+      tax: Number(b.tax) || 0,
+      currency: b.currency || 'USD',
+      bill_date: b.date || null,
+      due_date: b.due || null,
+      note: b.note || null,
+      status: b.status || 'open',
+      paid_at: b.paidAt || null,
+      updated_at: new Date().toISOString()
+    };
+    const { data: existing } = await cloud.client.from('books_bills')
+      .select('id').eq('organization_id', organizationId).eq('local_id', b.id).maybeSingle();
+    if (existing?.id) await cloud.client.from('books_bills').update(payload).eq('id', existing.id);
+    else {
+      const ins = await cloud.client.from('books_bills').insert(payload);
+      if (ins.error) console.warn('books_bills', ins.error.message);
+    }
+  }
+  // COA extra
+  for (const a of db.coaExtra || []) {
+    const payload = {
+      organization_id: organizationId,
+      code: a.id,
+      name: a.name,
+      account_type: a.type || 'asset'
+    };
+    const { error } = await cloud.client.from('books_coa_extra').upsert(payload, {
+      onConflict: 'organization_id,code'
+    });
+    if (error) console.warn('books_coa_extra', error.message);
+  }
+  // Recurring journals
+  for (const sch of db.recurringJournals || []) {
+    const payload = {
+      organization_id: organizationId,
+      local_id: sch.id,
+      memo: sch.memo || null,
+      interval_unit: sch.interval || 'monthly',
+      next_run_date: sch.nextRunDate || today,
+      active: sch.active !== false,
+      lines: sch.lines || [],
+      last_posted_at: sch.lastPostedAt || null,
+      updated_at: new Date().toISOString()
+    };
+    const { data: existing } = await cloud.client.from('books_recurring_journals')
+      .select('id').eq('organization_id', organizationId).eq('local_id', sch.id).maybeSingle();
+    if (existing?.id) await cloud.client.from('books_recurring_journals').update(payload).eq('id', existing.id);
+    else {
+      const ins = await cloud.client.from('books_recurring_journals').insert(payload);
+      if (ins.error) console.warn('books_recurring', ins.error.message);
+    }
+  }
+}
+
+async function pullBooksFromCloud() {
+  if (!cloud.client || !cloud.user) return;
+  ensureBooksDb();
+  const organizationId = await ensureCloudOrganization();
+  const { data: journals, error: jErr } = await cloud.client.from('books_journals')
+    .select('*').eq('organization_id', organizationId).order('entry_date', { ascending: true });
+  if (jErr) {
+    // table may not exist yet
+    if (!/does not exist|schema cache/i.test(jErr.message || '')) console.warn('pull journals', jErr.message);
+    return;
+  }
+  (journals || []).forEach(row => {
+    const sourceKey = row.source_key || null;
+    if (sourceKey && db.journals.some(j => j.sourceKey === sourceKey)) return;
+    if (row.local_id && db.journals.some(j => j.id === row.local_id)) return;
+    db.journals.push({
+      id: row.local_id || row.id,
+      date: row.entry_date,
+      memo: row.memo || '',
+      source: row.source || 'cloud',
+      sourceKey: sourceKey || ('cloud:' + row.id),
+      currency: row.currency || db.profile.reporting || 'USD',
+      lines: row.lines || [],
+      createdAt: row.created_at
+    });
+  });
+  const { data: bills } = await cloud.client.from('books_bills').select('*').eq('organization_id', organizationId);
+  (bills || []).forEach(row => {
+    if (row.local_id && db.bills.some(b => b.id === row.local_id)) return;
+    db.bills.push({
+      id: row.local_id || row.id,
+      supplier: row.supplier,
+      category: row.category,
+      amount: Number(row.amount) || 0,
+      tax: Number(row.tax) || 0,
+      currency: row.currency,
+      date: row.bill_date,
+      due: row.due_date,
+      note: row.note,
+      status: row.status || 'open',
+      paidAt: row.paid_at
+    });
+  });
+  const { data: coa } = await cloud.client.from('books_coa_extra').select('*').eq('organization_id', organizationId);
+  (coa || []).forEach(row => {
+    if (db.coaExtra.some(a => a.id === row.code)) return;
+    db.coaExtra.push({ id: row.code, name: row.name, type: row.account_type || 'asset' });
+  });
+  const { data: rjs } = await cloud.client.from('books_recurring_journals').select('*').eq('organization_id', organizationId);
+  (rjs || []).forEach(row => {
+    if (row.local_id && db.recurringJournals.some(s => s.id === row.local_id)) return;
+    db.recurringJournals.push({
+      id: row.local_id || row.id,
+      memo: row.memo,
+      interval: row.interval_unit || 'monthly',
+      nextRunDate: row.next_run_date,
+      active: row.active !== false,
+      lines: row.lines || [],
+      lastPostedAt: row.last_posted_at
+    });
+  });
+  save();
+}
+
+
 function openJournalModal() {
   const m = document.getElementById('journalModal');
   if (!m) return;
@@ -8077,6 +8874,55 @@ function closeAccountModal() {
 }
 
 document.getElementById('btnManualJournal')?.addEventListener('click', openJournalModal);
+document.getElementById('btnBooksSetup')?.addEventListener('click', openOpeningModal);
+document.getElementById('obCancel')?.addEventListener('click', closeOpeningModal);
+document.getElementById('obSave')?.addEventListener('click', postOpeningBalances);
+document.getElementById('reconSave')?.addEventListener('click', saveReconciliation);
+document.getElementById('reconCsvFile')?.addEventListener('change', (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (f) importBankCsvFile(f);
+  e.target.value = '';
+});
+document.getElementById('btnAddRecurringJournal')?.addEventListener('click', openRecurringJournalModal);
+document.getElementById('rjCancel')?.addEventListener('click', closeRecurringJournalModal);
+document.getElementById('rjAddLine')?.addEventListener('click', () => { rjLineCount++; rjRenderLines(); });
+document.getElementById('rjSave')?.addEventListener('click', () => {
+  ensureBooksDb();
+  const lines = [];
+  document.querySelectorAll('#rjLines [data-rj-row]').forEach(row => {
+    const accountId = row.querySelector('.rj-account')?.value;
+    const debit = Number(row.querySelector('.rj-debit')?.value || 0);
+    const credit = Number(row.querySelector('.rj-credit')?.value || 0);
+    if (accountId && (debit > 0 || credit > 0)) lines.push({ accountId, debit, credit });
+  });
+  const dr = lines.reduce((n, l) => n + l.debit, 0);
+  const cr = lines.reduce((n, l) => n + l.credit, 0);
+  if (lines.length < 2 || Math.abs(dr - cr) > 0.02) { toast('Lines must balance'); return; }
+  db.recurringJournals.push({
+    id: crypto.randomUUID(),
+    memo: (document.getElementById('rjMemo')?.value || '').trim() || 'Recurring journal',
+    interval: document.getElementById('rjInterval')?.value || 'monthly',
+    nextRunDate: document.getElementById('rjNext')?.value || today,
+    active: true,
+    lines
+  });
+  save();
+  queueBooksCloudSync();
+  closeRecurringJournalModal();
+  toast('Recurring journal saved');
+  booksTab = 'recurringj';
+  booksView();
+  track('recurring_journal_created', {});
+});
+
+document.getElementById('reconClearTicks')?.addEventListener('click', () => {
+  if (!confirm('Clear all reconciliation ticks?')) return;
+  db.clearedJournalLines = {};
+  save();
+  renderBooksReconcile();
+  toast('Ticks cleared');
+});
+
 document.getElementById('jeCancel')?.addEventListener('click', closeJournalModal);
 document.getElementById('jeAddLine')?.addEventListener('click', () => { jeLineCount++; jeRenderLines(); });
 document.getElementById('jeSave')?.addEventListener('click', () => {
