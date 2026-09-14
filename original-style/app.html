@@ -2288,43 +2288,80 @@ input:focus:not(:focus-visible) {
       <div class="section-head">
         <div>
           <h2>Books</h2>
-          <p class="section-sub">Mini cash books for your business — invoice money in, expenses out. Not full accounting; enough to know where the money went.</p>
+          <p class="section-sub">Accrual accounting for your business — invoices post revenue when sent, cash when paid. Double-entry under the hood.</p>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
-          <button class="button" type="button" id="btnExportBooks">Export CSV</button>
-          <button class="button primary" type="button" id="btnAddCashEntry">Add entry</button>
+          <button class="button" type="button" id="btnExportBooks">Export journal CSV</button>
+          <button class="button primary" type="button" id="btnAddCashEntry">Record expense</button>
         </div>
+      </div>
+      <div class="books-tabs" id="booksTabs" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">
+        <button type="button" class="button small primary" data-books-tab="overview">Overview</button>
+        <button type="button" class="button small" data-books-tab="pnl">Profit &amp; loss</button>
+        <button type="button" class="button small" data-books-tab="balance">Balance sheet</button>
+        <button type="button" class="button small" data-books-tab="journal">Journal</button>
+        <button type="button" class="button small" data-books-tab="cash">Cash ledger</button>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center">
         <label style="font-size:12px;color:var(--muted)">Period</label>
         <select id="booksPeriod" style="max-width:160px">
-          <option value="30">Last 30 days</option>
           <option value="month">This month</option>
+          <option value="30">Last 30 days</option>
           <option value="90">Last 90 days</option>
           <option value="all">All time</option>
         </select>
-        <label style="font-size:12px;color:var(--muted);margin-left:8px">Type</label>
-        <select id="booksTypeFilter" style="max-width:120px">
-          <option value="all">All</option>
-          <option value="in">Cash in</option>
-          <option value="out">Cash out</option>
-        </select>
+        <span id="booksBasisBadge" class="badge" style="margin-left:8px">Accrual basis</span>
       </div>
-      <div class="cards stack-gap" id="booksSummaryCards">
-        <div class="card"><small id="booksInLabel">Cash in</small><b id="booksIn30">—</b><span class="mini" id="booksInSub">Period total</span></div>
-        <div class="card"><small id="booksOutLabel">Cash out</small><b id="booksOut30">—</b><span class="mini" id="booksOutSub">Period total</span></div>
-        <div class="card"><small>Net</small><b id="booksNet30">—</b><span class="mini" id="booksNetSub">In − out</span></div>
-        <div class="card"><small>Outstanding invoices</small><b id="booksOutstanding">—</b><span class="mini">Unpaid balances</span></div>
+
+      <div id="booksPanelOverview">
+        <div class="cards stack-gap" id="booksSummaryCards">
+          <div class="card"><small>Revenue (accrued)</small><b id="booksRevenue">—</b><span class="mini" id="booksRevenueSub">Invoices sent in period</span></div>
+          <div class="card"><small>Expenses</small><b id="booksExpenses">—</b><span class="mini">Posted expenses</span></div>
+          <div class="card"><small>Net profit</small><b id="booksNetProfit">—</b><span class="mini">Revenue − expenses</span></div>
+          <div class="card"><small>Accounts receivable</small><b id="booksAR">—</b><span class="mini">Unpaid invoices</span></div>
+        </div>
+        <div class="insights stack-gap" style="margin-top:16px">
+          <div class="insight">
+            <h3>How Books works</h3>
+            <p class="section-sub" style="margin:0;line-height:1.55">
+              <b>Send an invoice</b> → revenue is recognised (debit Receivable, credit Revenue).<br>
+              <b>Record a payment</b> → cash rises, receivable falls.<br>
+              <b>Record an expense</b> → expense account + cash (or payable later).<br>
+              This is real double-entry, sized for a small business — not a corporate ERP.
+            </p>
+          </div>
+          <div class="insight">
+            <h3>Expense mix</h3>
+            <div id="booksByCategory"></div>
+          </div>
+        </div>
       </div>
-      <div class="insights stack-gap" style="margin-top:16px">
-        <div class="insight">
-          <h3>By category</h3>
-          <div id="booksByCategory"></div>
+
+      <div id="booksPanelPnl" hidden>
+        <div class="insight"><h3>Profit &amp; loss</h3><div id="booksPnl"></div></div>
+      </div>
+      <div id="booksPanelBalance" hidden>
+        <div class="insight"><h3>Balance sheet</h3><div id="booksBalanceSheet"></div></div>
+      </div>
+      <div id="booksPanelJournal" hidden>
+        <div class="insight"><h3>Journal entries</h3><div id="booksJournal"></div></div>
+      </div>
+      <div id="booksPanelCash" hidden>
+        <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
+          <label style="font-size:12px;color:var(--muted)">Type</label>
+          <select id="booksTypeFilter" style="max-width:120px">
+            <option value="all">All</option>
+            <option value="in">Cash in</option>
+            <option value="out">Cash out</option>
+          </select>
         </div>
-        <div class="insight">
-          <h3>Ledger</h3>
-          <div id="booksList"></div>
+        <div class="cards stack-gap">
+          <div class="card"><small>Cash in</small><b id="booksIn30">—</b></div>
+          <div class="card"><small>Cash out</small><b id="booksOut30">—</b></div>
+          <div class="card"><small>Net cash</small><b id="booksNet30">—</b></div>
+          <div class="card"><small>Outstanding</small><b id="booksOutstanding">—</b></div>
         </div>
+        <div class="insight" style="margin-top:16px"><h3>Cash movements</h3><div id="booksList"></div></div>
       </div>
     </section>
 
@@ -4124,7 +4161,8 @@ const defaultDB = {
   clients: [],
   invoices: [],
   recurring: [],
-  cashEntries: []
+  cashEntries: [],
+  journals: []
 };
 const LEGACY_DB_KEY = 'invoicedey-v2';
 const ANON_DB_KEY = 'invoicedey-anonymous-v1';
@@ -4136,6 +4174,7 @@ let db = structuredClone(defaultDB);
 function normalizeDbProfile() {
   if (!Array.isArray(db.recurring)) db.recurring = [];
   if (!Array.isArray(db.cashEntries)) db.cashEntries = [];
+  if (!Array.isArray(db.journals)) db.journals = [];
   // Migrate older profiles — never overwrite an explicit reporting currency
   if (db.profile) {
     db.profile.taxId = db.profile.taxId ?? '';
@@ -5167,7 +5206,7 @@ function switchTo(v) {
     invoices: ['Invoices', 'Simple invoicing. Nothing you do not need.'],
     receipts: ['Receipts', 'Download payment confirmations for your records.'],
     recurring: ['Recurring invoices', 'Schedules that create the next invoice when due.'],
-    books: ['Books', 'Mini cash books — money in, money out, and unpaid invoices.'],
+    books: ['Books', 'Accrual books — revenue, expenses, receivables, and journal.'],
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
     plan: ['Plan & billing', 'Manage your plan, usage and feature access.'],
@@ -6989,6 +7028,7 @@ function persist(s) {
     track('invoice_activation', { invoice_id: edit.id, invoice_number: edit.number, activation: 'first_invoice_created' });
   }
   if (s === 'Sent') track('invoice_sent', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
+  try { accrueInvoiceIfNeeded(edit); } catch (e) { console.warn('accrue', e); }
   ensurePayments(edit);
   syncPaidFlag(edit);
   if (edit.paid) track('invoice_paid', { invoice_id: edit.cloudId || edit.id, invoice_number: edit.number, currency: edit.currency });
@@ -6998,7 +7038,53 @@ function persist(s) {
 }
 
 
-/* ---------- invoicedey Books (mini cash accounting) ---------- */
+/* ---------- invoicedey Books (accrual double-entry) ---------- */
+/**
+ * Full-ish small-business books:
+ * - Chart of accounts
+ * - Double-entry journals (debits = credits)
+ * - Accrual: invoice sent → Dr AR / Cr Revenue
+ * - Payment → Dr Cash / Cr AR
+ * - Expense → Dr Expense / Cr Cash
+ * Reports: P&L, Balance sheet, Journal, Cash ledger
+ */
+
+const COA = [
+  // Assets
+  { id: '1000', name: 'Cash', type: 'asset' },
+  { id: '1100', name: 'Accounts receivable', type: 'asset' },
+  // Liabilities
+  { id: '2000', name: 'Accounts payable', type: 'liability' },
+  // Equity
+  { id: '3000', name: 'Owner equity', type: 'equity' },
+  { id: '3100', name: 'Owner drawings', type: 'equity' },
+  // Income
+  { id: '4000', name: 'Sales revenue', type: 'income' },
+  { id: '4100', name: 'Other income', type: 'income' },
+  // Expenses
+  { id: '5000', name: 'Cost of sales / supplies', type: 'expense' },
+  { id: '5100', name: 'Rent & workspace', type: 'expense' },
+  { id: '5200', name: 'Utilities, data & airtime', type: 'expense' },
+  { id: '5300', name: 'Transport & logistics', type: 'expense' },
+  { id: '5400', name: 'Salaries & helpers', type: 'expense' },
+  { id: '5500', name: 'Bank, POS & platform fees', type: 'expense' },
+  { id: '5600', name: 'Tax & levies', type: 'expense' },
+  { id: '5700', name: 'Other expenses', type: 'expense' }
+];
+
+const EXPENSE_ACCOUNT_BY_CATEGORY = {
+  supplies: '5000',
+  rent: '5100',
+  utilities: '5200',
+  transport: '5300',
+  salaries: '5400',
+  fees: '5500',
+  tax: '5600',
+  loan_out: '5700',
+  drawings: '3100',
+  other_out: '5700'
+};
+
 const BOOKS_CATEGORIES = {
   in: [
     { id: 'invoice', label: 'Invoice payment' },
@@ -7021,8 +7107,16 @@ const BOOKS_CATEGORIES = {
   ]
 };
 
-function ensureCashEntries() {
+let booksTab = 'overview';
+
+function ensureBooksDb() {
   if (!Array.isArray(db.cashEntries)) db.cashEntries = [];
+  if (!Array.isArray(db.journals)) db.journals = [];
+}
+function ensureCashEntries() { ensureBooksDb(); }
+
+function coaName(id) {
+  return (COA.find(a => a.id === id) || {}).name || id;
 }
 
 function booksCategoryLabel(type, categoryId) {
@@ -7034,26 +7128,105 @@ function booksCategoryLabel(type, categoryId) {
 function fillCashCategoryOptions(type) {
   const sel = document.getElementById('cashCategory');
   if (!sel) return;
-  const list = BOOKS_CATEGORIES[type === 'out' ? 'out' : 'in'] || [];
-  const filtered = list.filter(c => c.id !== 'invoice'); // invoice is auto-only
-  sel.innerHTML = filtered.map(c => `<option value="${c.id}">${c.label}</option>`).join('');
+  const list = (BOOKS_CATEGORIES[type === 'out' ? 'out' : 'in'] || []).filter(c => c.id !== 'invoice');
+  sel.innerHTML = list.map(c => `<option value="${c.id}">${c.label}</option>`).join('');
+}
+
+function toRep(amount, currency) {
+  return convertApprox(Number(amount) || 0, currency || db.profile.reporting || 'USD', db.profile.reporting || 'USD');
+}
+
+/** Post a balanced journal. lines: [{accountId, debit, credit}] in reporting currency amounts. */
+function postJournal({ date, memo, source, sourceKey, lines, currency }) {
+  ensureBooksDb();
+  if (sourceKey && db.journals.some(j => j.sourceKey === sourceKey)) return null;
+  const rep = db.profile.reporting || 'USD';
+  const cur = currency || rep;
+  const normalized = (lines || []).map(l => ({
+    accountId: l.accountId,
+    debit: Number(l.debit) || 0,
+    credit: Number(l.credit) || 0
+  })).filter(l => l.debit > 0 || l.credit > 0);
+  const debits = normalized.reduce((n, l) => n + l.debit, 0);
+  const credits = normalized.reduce((n, l) => n + l.credit, 0);
+  if (Math.abs(debits - credits) > 0.02) {
+    console.warn('unbalanced journal', memo, debits, credits);
+    return null;
+  }
+  if (!normalized.length) return null;
+  const entry = {
+    id: crypto.randomUUID(),
+    date: date || today,
+    memo: memo || '',
+    source: source || 'manual',
+    sourceKey: sourceKey || null,
+    currency: cur,
+    lines: normalized,
+    createdAt: new Date().toISOString()
+  };
+  db.journals.push(entry);
+  return entry;
 }
 
 function recordCashFromInvoicePayment(inv, payment) {
-  ensureCashEntries();
+  ensureBooksDb();
   const key = 'pay:' + (payment.id || (payment.date + ':' + payment.amount));
-  if (db.cashEntries.some(e => e.sourceKey === key)) return;
-  db.cashEntries.push({
-    id: crypto.randomUUID(),
-    type: 'in',
-    category: 'invoice',
-    amount: Number(payment.amount) || 0,
-    currency: inv.currency || db.profile.reporting || 'USD',
+  if (!db.cashEntries.some(e => e.sourceKey === key)) {
+    db.cashEntries.push({
+      id: crypto.randomUUID(),
+      type: 'in',
+      category: 'invoice',
+      amount: Number(payment.amount) || 0,
+      currency: inv.currency || db.profile.reporting || 'USD',
+      date: payment.date || today,
+      note: 'Invoice ' + (inv.number || '') + (payment.note ? ' · ' + payment.note : ''),
+      source: 'invoice_payment',
+      sourceKey: key,
+      invoiceId: inv.id
+    });
+  }
+  // Accrual: payment clears AR into cash
+  const amt = toRep(payment.amount, inv.currency);
+  postJournal({
     date: payment.date || today,
-    note: 'Invoice ' + (inv.number || '') + (payment.note ? ' · ' + payment.note : ''),
+    memo: 'Payment · ' + (inv.number || 'invoice'),
     source: 'invoice_payment',
-    sourceKey: key,
-    invoiceId: inv.id
+    sourceKey: 'j:' + key,
+    currency: db.profile.reporting || 'USD',
+    lines: [
+      { accountId: '1000', debit: amt, credit: 0 },
+      { accountId: '1100', debit: 0, credit: amt }
+    ]
+  });
+}
+
+/** Accrue revenue when invoice leaves Draft (sent / open). */
+function accrueInvoiceIfNeeded(inv) {
+  if (!inv || inv.status === 'Draft') return;
+  ensureBooksDb();
+  const key = 'inv:' + inv.id;
+  const invTotal = total(inv);
+  if (!(invTotal > 0)) return;
+  const amt = toRep(invTotal, inv.currency);
+  postJournal({
+    date: inv.issue || today,
+    memo: 'Invoice ' + (inv.number || '') + ' · accrued revenue',
+    source: 'invoice_accrual',
+    sourceKey: 'j:' + key,
+    currency: db.profile.reporting || 'USD',
+    lines: [
+      { accountId: '1100', debit: amt, credit: 0 },
+      { accountId: '4000', debit: 0, credit: amt }
+    ]
+  });
+}
+
+function syncAllInvoiceAccruals() {
+  (db.invoices || []).forEach(inv => {
+    syncPaidFlag(inv);
+    accrueInvoiceIfNeeded(inv);
+    ensurePayments(inv);
+    (inv.payments || []).forEach(p => recordCashFromInvoicePayment(inv, p));
   });
 }
 
@@ -7069,9 +7242,44 @@ function booksPeriodCutoff(period) {
   return d.toISOString().slice(0, 10);
 }
 
+function journalsInPeriod() {
+  ensureBooksDb();
+  const period = document.getElementById('booksPeriod')?.value || 'month';
+  const cut = booksPeriodCutoff(period);
+  return db.journals.filter(j => !cut || String(j.date || '') >= cut);
+}
+
+function accountBalances(asOfCut) {
+  // asOfCut null = all time; balances are cumulative to end of period filter start? Use all journals up to "today" within period for P&L activity; BS uses all journals through period end (approx: all journals with date >= cut for P&L only)
+  ensureBooksDb();
+  const balances = {};
+  COA.forEach(a => { balances[a.id] = 0; });
+  db.journals.forEach(j => {
+    if (asOfCut && String(j.date || '') < asOfCut && false) return; // BS: all time to date for simplicity
+    (j.lines || []).forEach(l => {
+      balances[l.accountId] = (balances[l.accountId] || 0) + (Number(l.debit) || 0) - (Number(l.credit) || 0);
+    });
+  });
+  return balances;
+}
+
+function periodActivity() {
+  const journals = journalsInPeriod();
+  const activity = {};
+  COA.forEach(a => { activity[a.id] = { debit: 0, credit: 0 }; });
+  journals.forEach(j => {
+    (j.lines || []).forEach(l => {
+      if (!activity[l.accountId]) activity[l.accountId] = { debit: 0, credit: 0 };
+      activity[l.accountId].debit += Number(l.debit) || 0;
+      activity[l.accountId].credit += Number(l.credit) || 0;
+    });
+  });
+  return activity;
+}
+
 function booksFilteredEntries() {
-  ensureCashEntries();
-  const period = document.getElementById('booksPeriod')?.value || '30';
+  ensureBooksDb();
+  const period = document.getElementById('booksPeriod')?.value || 'month';
   const typeFilter = document.getElementById('booksTypeFilter')?.value || 'all';
   const cut = booksPeriodCutoff(period);
   return db.cashEntries.filter(e => {
@@ -7081,138 +7289,208 @@ function booksFilteredEntries() {
   });
 }
 
-function booksView() {
-  ensureCashEntries();
-  (db.invoices || []).forEach(inv => {
-    ensurePayments(inv);
-    (inv.payments || []).forEach(p => recordCashFromInvoicePayment(inv, p));
+function setBooksTab(tab) {
+  booksTab = tab || 'overview';
+  document.querySelectorAll('[data-books-tab]').forEach(btn => {
+    btn.classList.toggle('primary', btn.getAttribute('data-books-tab') === booksTab);
   });
-  // persist any newly ingested payments
+  const panels = {
+    overview: 'booksPanelOverview',
+    pnl: 'booksPanelPnl',
+    balance: 'booksPanelBalance',
+    journal: 'booksPanelJournal',
+    cash: 'booksPanelCash'
+  };
+  Object.entries(panels).forEach(([k, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = k !== booksTab;
+  });
+}
+
+function renderBooksPnl() {
+  const el = document.getElementById('booksPnl');
+  if (!el) return;
+  const act = periodActivity();
+  const income = COA.filter(a => a.type === 'income').map(a => {
+    const net = (act[a.id]?.credit || 0) - (act[a.id]?.debit || 0);
+    return { ...a, net };
+  }).filter(a => Math.abs(a.net) > 0.001);
+  const expenses = COA.filter(a => a.type === 'expense' || a.id === '3100').map(a => {
+    const net = (act[a.id]?.debit || 0) - (act[a.id]?.credit || 0);
+    return { ...a, net };
+  }).filter(a => Math.abs(a.net) > 0.001);
+  const rev = income.reduce((n, a) => n + a.net, 0);
+  const exp = expenses.reduce((n, a) => n + a.net, 0);
+  const row = (name, amt, bold) =>
+    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);${bold ? 'font-weight:700' : ''}">
+      <span>${name}</span><span>${money(amt)}</span></div>`;
+  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Accrual basis · reporting currency</div>';
+  html += '<div style="font-weight:700;margin:8px 0 4px">Income</div>';
+  if (!income.length) html += row('No revenue in period', 0);
+  income.forEach(a => { html += row(a.name, a.net); });
+  html += row('Total income', rev, true);
+  html += '<div style="font-weight:700;margin:16px 0 4px">Expenses</div>';
+  if (!expenses.length) html += row('No expenses in period', 0);
+  expenses.forEach(a => { html += row(a.name, a.net); });
+  html += row('Total expenses', exp, true);
+  html += row('Net profit / (loss)', rev - exp, true);
+  el.innerHTML = html;
+}
+
+function renderBooksBalance() {
+  const el = document.getElementById('booksBalanceSheet');
+  if (!el) return;
+  const bal = accountBalances(null);
+  // Net income all-time from income/expense accounts feeds equity
+  let retained = 0;
+  COA.forEach(a => {
+    const b = bal[a.id] || 0;
+    if (a.type === 'income') retained += -b; // credit balance → positive equity
+    if (a.type === 'expense') retained += -b; // debit balance → negative equity
+  });
+  const row = (name, amt, bold) =>
+    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);${bold ? 'font-weight:700' : ''}">
+      <span>${name}</span><span>${money(amt)}</span></div>`;
+  const assets = COA.filter(a => a.type === 'asset');
+  const liabilities = COA.filter(a => a.type === 'liability');
+  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">As at today · reporting currency</div>';
+  html += '<div style="font-weight:700;margin:8px 0 4px">Assets</div>';
+  let assetTotal = 0;
+  assets.forEach(a => {
+    const v = bal[a.id] || 0;
+    assetTotal += v;
+    if (Math.abs(v) > 0.001) html += row(a.name, v);
+  });
+  html += row('Total assets', assetTotal, true);
+  html += '<div style="font-weight:700;margin:16px 0 4px">Liabilities</div>';
+  let liabTotal = 0;
+  liabilities.forEach(a => {
+    const v = -(bal[a.id] || 0); // credit-normal
+    liabTotal += v;
+    if (Math.abs(v) > 0.001) html += row(a.name, v);
+  });
+  if (Math.abs(liabTotal) < 0.001) html += row('No liabilities', 0);
+  html += row('Total liabilities', liabTotal, true);
+  const drawings = -(bal['3100'] || 0);
+  const equity = retained - (bal['3100'] || 0);
+  html += '<div style="font-weight:700;margin:16px 0 4px">Equity</div>';
+  html += row('Retained earnings (incl. P&L)', retained, false);
+  if (Math.abs(bal['3100'] || 0) > 0.001) html += row('Owner drawings', bal['3100'] || 0);
+  html += row('Total equity', equity, true);
+  html += row('Liabilities + equity', liabTotal + equity, true);
+  el.innerHTML = html;
+}
+
+function renderBooksJournal() {
+  const el = document.getElementById('booksJournal');
+  if (!el) return;
+  const list = journalsInPeriod().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  if (!list.length) {
+    el.innerHTML = '<p class="section-sub">No journal entries in this period. Send an invoice or record an expense to post entries.</p>';
+    return;
+  }
+  el.innerHTML = list.map(j => {
+    const lines = (j.lines || []).map(l =>
+      `<div style="display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:2px 0 2px 12px">
+        <span>${coaName(l.accountId)}</span>
+        <span style="font-variant-numeric:tabular-nums">${l.debit ? money(l.debit) : ''}${l.debit && l.credit ? ' · ' : ''}${l.credit ? 'Cr ' + money(l.credit) : (l.debit ? 'Dr' : '')}</span>
+      </div>`
+    ).join('');
+    return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+      <div style="display:flex;justify-content:space-between;gap:8px">
+        <b style="font-size:13px">${j.date || ''} · ${j.memo || 'Entry'}</b>
+        <span style="font-size:11px;color:var(--muted)">${j.source || ''}</span>
+      </div>
+      ${lines}
+    </div>`;
+  }).join('');
+}
+
+function booksView() {
+  ensureBooksDb();
+  syncAllInvoiceAccruals();
   try { save(); } catch {}
 
+  setBooksTab(booksTab);
+
   const rep = db.profile.reporting || 'USD';
-  const filtered = booksFilteredEntries();
-  const cashIn = filtered.filter(e => e.type === 'in')
-    .reduce((n, e) => n + convertApprox(e.amount, e.currency, rep), 0);
-  const cashOut = filtered.filter(e => e.type === 'out')
-    .reduce((n, e) => n + convertApprox(e.amount, e.currency, rep), 0);
+  const act = periodActivity();
+  const revenue = COA.filter(a => a.type === 'income').reduce((n, a) => n + ((act[a.id]?.credit || 0) - (act[a.id]?.debit || 0)), 0);
+  const expenses = COA.filter(a => a.type === 'expense' || a.id === '3100').reduce((n, a) => n + ((act[a.id]?.debit || 0) - (act[a.id]?.credit || 0)), 0);
+  const bal = accountBalances(null);
+  const ar = bal['1100'] || 0;
 
-  const elIn = document.getElementById('booksIn30');
-  const elOut = document.getElementById('booksOut30');
-  const elNet = document.getElementById('booksNet30');
-  const elOuts = document.getElementById('booksOutstanding');
-  if (elIn) elIn.textContent = money(cashIn);
-  if (elOut) elOut.textContent = money(cashOut);
+  const elRev = document.getElementById('booksRevenue');
+  const elExp = document.getElementById('booksExpenses');
+  const elNet = document.getElementById('booksNetProfit');
+  const elAR = document.getElementById('booksAR');
+  if (elRev) elRev.textContent = money(revenue);
+  if (elExp) elExp.textContent = money(expenses);
   if (elNet) {
-    elNet.textContent = money(cashIn - cashOut);
-    elNet.style.color = (cashIn - cashOut) >= 0 ? '' : 'var(--red-text)';
+    elNet.textContent = money(revenue - expenses);
+    elNet.style.color = (revenue - expenses) >= 0 ? '' : 'var(--red-text)';
   }
+  if (elAR) elAR.textContent = money(Math.max(0, ar));
 
-  // Outstanding AR from invoices
-  const outstanding = (db.invoices || []).reduce((n, inv) => {
-    syncPaidFlag(inv);
-    if (inv.status === 'Draft') return n;
-    const bal = balanceDue(inv);
-    if (bal <= 0.001) return n;
-    return n + convertApprox(bal, inv.currency, rep);
-  }, 0);
-  if (elOuts) elOuts.textContent = money(outstanding);
-
-  const period = document.getElementById('booksPeriod')?.value || '30';
-  const periodLabel = ({ '30': 'Last 30 days', month: 'This month', '90': 'Last 90 days', all: 'All time' })[period] || 'Period';
-  const inSub = document.getElementById('booksInSub');
-  const outSub = document.getElementById('booksOutSub');
-  if (inSub) inSub.textContent = periodLabel + ' · ' + rep;
-  if (outSub) outSub.textContent = periodLabel + ' · ' + rep;
-
-  // Category breakdown
+  // Expense mix from period activity
   const byCat = document.getElementById('booksByCategory');
   if (byCat) {
-    const map = {};
-    filtered.forEach(e => {
-      const cat = e.category || (e.type === 'in' ? 'other_in' : 'other_out');
-      const key = e.type + ':' + cat;
-      if (!map[key]) map[key] = { type: e.type, category: cat, total: 0 };
-      map[key].total += convertApprox(e.amount, e.currency, rep);
-    });
-    const rows = Object.values(map).sort((a, b) => b.total - a.total);
-    if (!rows.length) {
-      byCat.innerHTML = '<p class="section-sub" style="margin:0">No movements in this period.</p>';
+    const expRows = COA.filter(a => a.type === 'expense' || a.id === '3100').map(a => ({
+      name: a.name,
+      total: (act[a.id]?.debit || 0) - (act[a.id]?.credit || 0)
+    })).filter(r => r.total > 0.001).sort((a, b) => b.total - a.total);
+    if (!expRows.length) {
+      byCat.innerHTML = '<p class="section-sub" style="margin:0">No expenses posted in this period.</p>';
     } else {
-      const max = Math.max(1, ...rows.map(r => r.total));
-      byCat.innerHTML = rows.map(r => {
-        const label = booksCategoryLabel(r.type, r.category);
-        const col = r.type === 'in' ? 'var(--green-text)' : 'var(--red-text)';
-        return `<div class="barrow" style="margin-bottom:8px">
-          <span style="min-width:120px;font-size:12px">${r.type === 'in' ? '↓' : '↑'} ${label}</span>
-          <div class="track"><div class="fill ${r.type === 'out' ? 'b' : 'a'}" style="width:${(r.total / max) * 100}%"></div></div>
-          <b class="right" style="color:${col};font-size:12px">${money(r.total)}</b>
-        </div>`;
-      }).join('');
+      const max = Math.max(1, ...expRows.map(r => r.total));
+      byCat.innerHTML = expRows.map(r =>
+        `<div class="barrow" style="margin-bottom:8px">
+          <span style="min-width:140px;font-size:12px">${r.name}</span>
+          <div class="track"><div class="fill b" style="width:${(r.total / max) * 100}%"></div></div>
+          <b class="right" style="font-size:12px">${money(r.total)}</b>
+        </div>`
+      ).join('');
     }
   }
 
+  renderBooksPnl();
+  renderBooksBalance();
+  renderBooksJournal();
+
+  // Cash panel (cash basis companion)
+  const filtered = booksFilteredEntries();
+  const cashIn = filtered.filter(e => e.type === 'in').reduce((n, e) => n + toRep(e.amount, e.currency), 0);
+  const cashOut = filtered.filter(e => e.type === 'out').reduce((n, e) => n + toRep(e.amount, e.currency), 0);
+  const elIn = document.getElementById('booksIn30');
+  const elOut = document.getElementById('booksOut30');
+  const elNetC = document.getElementById('booksNet30');
+  const elOuts = document.getElementById('booksOutstanding');
+  if (elIn) elIn.textContent = money(cashIn);
+  if (elOut) elOut.textContent = money(cashOut);
+  if (elNetC) elNetC.textContent = money(cashIn - cashOut);
+  if (elOuts) elOuts.textContent = money(Math.max(0, ar));
+
   const list = document.getElementById('booksList');
-  if (!list) return;
-  const rows = [...filtered].sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)));
-  if (!rows.length) {
-    list.innerHTML = `<div class="empty" style="padding:24px">
-      <h3>No ledger entries yet</h3>
-      <p>When clients pay invoices, those show up here as cash in. Add rent, airtime, stock, and other money out manually.</p>
-      <button class="button primary" type="button" id="booksEmptyAdd">Add first entry</button>
-    </div>`;
-    document.getElementById('booksEmptyAdd')?.addEventListener('click', openCashModal);
-    return;
+  if (list) {
+    const rows = [...filtered].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    if (!rows.length) {
+      list.innerHTML = '<p class="section-sub">No cash movements in this period.</p>';
+    } else {
+      list.innerHTML = `<table class="table desktop-table"><thead><tr>
+        <th>Date</th><th>Category</th><th>Note</th><th class="right">Amount</th><th></th>
+      </tr></thead><tbody>` + rows.map(e => {
+        const cls = e.type === 'in' ? 'color:var(--green-text)' : 'color:var(--red-text)';
+        const sign = e.type === 'in' ? '+' : '−';
+        const cat = booksCategoryLabel(e.type, e.category || (e.type === 'in' ? 'other_in' : 'other_out'));
+        const del = e.source === 'invoice_payment' ? '' : `<button class="button small danger" data-del-cash="${e.id}">Delete</button>`;
+        return `<tr>
+          <td>${e.date || '—'}</td><td>${cat}</td><td>${e.note || '—'}</td>
+          <td class="right" style="${cls}"><b>${sign}${money(e.amount, e.currency)}</b></td>
+          <td class="actions">${del}</td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+    }
   }
-
-  // Running balance (oldest → newest, then display newest first)
-  const chrono = [...rows].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  let run = 0;
-  const balMap = {};
-  chrono.forEach(e => {
-    const delta = convertApprox(e.amount, e.currency, rep) * (e.type === 'in' ? 1 : -1);
-    run += delta;
-    balMap[e.id] = run;
-  });
-
-  list.innerHTML = `<table class="table desktop-table"><thead><tr>
-    <th>Date</th><th>Category</th><th>Note</th><th class="right">Amount</th><th class="right">Balance</th><th></th>
-  </tr></thead><tbody>` + rows.map(e => {
-    const cls = e.type === 'in' ? 'color:var(--green-text)' : 'color:var(--red-text)';
-    const sign = e.type === 'in' ? '+' : '−';
-    const cat = booksCategoryLabel(e.type, e.category || (e.type === 'in' ? 'other_in' : 'other_out'));
-    const openInv = e.invoiceId
-      ? `<button class="button small" data-open="${e.invoiceId}" title="Open invoice">Invoice</button>`
-      : '';
-    const del = e.source === 'invoice_payment'
-      ? ''
-      : `<button class="button small danger" data-del-cash="${e.id}">Delete</button>`;
-    return `<tr>
-      <td>${e.date || '—'}</td>
-      <td><span style="font-size:12px">${cat}</span></td>
-      <td>${e.note || '—'}</td>
-      <td class="right" style="${cls}"><b>${sign}${money(e.amount, e.currency)}</b></td>
-      <td class="right" style="font-size:12px;color:var(--muted)">${money(balMap[e.id] || 0)}</td>
-      <td class="actions">${openInv}${del}</td>
-    </tr>`;
-  }).join('') + '</tbody></table>';
-
-  // Mobile cards
-  list.innerHTML += `<div class="mobile-list">` + rows.map(e => {
-    const cls = e.type === 'in' ? 'var(--green-text)' : 'var(--red-text)';
-    const sign = e.type === 'in' ? '+' : '−';
-    const cat = booksCategoryLabel(e.type, e.category || (e.type === 'in' ? 'other_in' : 'other_out'));
-    return `<div class="mobile-card">
-      <div class="mobile-card-top">
-        <div>
-          <div class="mobile-card-title">${cat}</div>
-          <div class="mobile-card-sub">${e.date || ''} · ${e.note || ''}</div>
-        </div>
-        <b style="color:${cls}">${sign}${money(e.amount, e.currency)}</b>
-      </div>
-      ${e.source === 'invoice_payment' ? '' : `<div class="mobile-card-actions"><button class="button small danger" data-del-cash="${e.id}">Delete</button></div>`}
-    </div>`;
-  }).join('') + '</div>';
 }
 
 function openCashModal() {
@@ -7226,66 +7504,93 @@ function openCashModal() {
   document.getElementById('cashNote').value = '';
   m.classList.add('show');
 }
-
 function closeCashModal() {
   document.getElementById('cashModal')?.classList.remove('show');
 }
 
 function exportBooksCsv() {
-  ensureCashEntries();
-  const rows = booksFilteredEntries().sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  const header = ['date', 'type', 'category', 'note', 'amount', 'currency', 'source'];
-  const lines = [header.join(',')];
-  rows.forEach(e => {
-    const cells = [
-      e.date || '',
-      e.type || '',
-      e.category || '',
-      '"' + String(e.note || '').replace(/"/g, '""') + '"',
-      e.amount,
-      e.currency || '',
-      e.source || ''
-    ];
-    lines.push(cells.join(','));
+  ensureBooksDb();
+  const rows = journalsInPeriod().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const lines = ['date,memo,source,account,debit,credit,currency'];
+  rows.forEach(j => {
+    (j.lines || []).forEach(l => {
+      lines.push([
+        j.date || '',
+        '"' + String(j.memo || '').replace(/"/g, '""') + '"',
+        j.source || '',
+        '"' + coaName(l.accountId).replace(/"/g, '""') + '"',
+        l.debit || 0,
+        l.credit || 0,
+        j.currency || ''
+      ].join(','));
+    });
   });
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'invoicedey-books-' + (today || 'export') + '.csv';
+  a.download = 'invoicedey-journal-' + (today || 'export') + '.csv';
   a.click();
   URL.revokeObjectURL(a.href);
-  track('books_exported', { rows: rows.length });
-  toast('CSV downloaded');
+  track('books_exported', { rows: rows.length, type: 'journal' });
+  toast('Journal CSV downloaded');
 }
 
 document.getElementById('btnAddCashEntry')?.addEventListener('click', openCashModal);
 document.getElementById('btnExportBooks')?.addEventListener('click', exportBooksCsv);
 document.getElementById('cashCancel')?.addEventListener('click', closeCashModal);
-document.getElementById('cashType')?.addEventListener('change', (e) => {
-  fillCashCategoryOptions(e.target.value);
-});
+document.getElementById('cashType')?.addEventListener('change', (e) => fillCashCategoryOptions(e.target.value));
 document.getElementById('booksPeriod')?.addEventListener('change', () => booksView());
 document.getElementById('booksTypeFilter')?.addEventListener('change', () => booksView());
+document.getElementById('booksTabs')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-books-tab]');
+  if (!btn) return;
+  setBooksTab(btn.getAttribute('data-books-tab'));
+});
 document.getElementById('cashSave')?.addEventListener('click', () => {
-  ensureCashEntries();
+  ensureBooksDb();
   const amount = Number(document.getElementById('cashAmount')?.value || 0);
   if (!(amount > 0)) { toast('Enter an amount'); return; }
   const type = document.getElementById('cashType')?.value === 'out' ? 'out' : 'in';
-  db.cashEntries.push({
-    id: crypto.randomUUID(),
-    type,
-    category: document.getElementById('cashCategory')?.value || (type === 'in' ? 'other_in' : 'other_out'),
-    amount,
-    currency: String(document.getElementById('cashCurrency')?.value || db.profile.reporting || 'USD').toUpperCase(),
-    date: document.getElementById('cashDate')?.value || today,
-    note: (document.getElementById('cashNote')?.value || '').trim() || 'Manual entry',
-    source: 'manual'
-  });
+  const category = document.getElementById('cashCategory')?.value || (type === 'in' ? 'other_in' : 'other_out');
+  const currency = String(document.getElementById('cashCurrency')?.value || db.profile.reporting || 'USD').toUpperCase();
+  const date = document.getElementById('cashDate')?.value || today;
+  const note = (document.getElementById('cashNote')?.value || '').trim() || 'Manual entry';
+  const id = crypto.randomUUID();
+  db.cashEntries.push({ id, type, category, amount, currency, date, note, source: 'manual' });
+  const amt = toRep(amount, currency);
+  if (type === 'out') {
+    const expenseAccount = EXPENSE_ACCOUNT_BY_CATEGORY[category] || '5700';
+    if (expenseAccount === '3100') {
+      postJournal({
+        date, memo: note, source: 'manual_expense', sourceKey: 'j:cash:' + id,
+        lines: [
+          { accountId: '3100', debit: amt, credit: 0 },
+          { accountId: '1000', debit: 0, credit: amt }
+        ]
+      });
+    } else {
+      postJournal({
+        date, memo: note, source: 'manual_expense', sourceKey: 'j:cash:' + id,
+        lines: [
+          { accountId: expenseAccount, debit: amt, credit: 0 },
+          { accountId: '1000', debit: 0, credit: amt }
+        ]
+      });
+    }
+  } else {
+    postJournal({
+      date, memo: note, source: 'manual_income', sourceKey: 'j:cash:' + id,
+      lines: [
+        { accountId: '1000', debit: amt, credit: 0 },
+        { accountId: category === 'loan_in' ? '3000' : '4100', debit: 0, credit: amt }
+      ]
+    });
+  }
   save();
   closeCashModal();
-  toast('Entry saved');
+  toast('Posted to books');
   booksView();
-  track('cash_entry_added', { type, category: document.getElementById('cashCategory')?.value });
+  track('cash_entry_added', { type, category, accrual: true });
 });
 
 /* ---------- Scheduled reminder nudges (local) ---------- */
