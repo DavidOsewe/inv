@@ -2202,6 +2202,11 @@ input:focus:not(:focus-visible) {
           <h3>Open balances by age</h3>
           <div id="aging"></div>
         </div>
+        <div class="insight" id="collectionsCard">
+          <h3>Collect payments</h3>
+          <p class="section-sub" style="margin:0 0 10px">Remind clients on WhatsApp — built for how African SMEs actually get paid.</p>
+          <div id="collectionsPanel"></div>
+        </div>
         <div class="insight" id="insightCard">
           <h3>Summary</h3>
           <div id="insightText" style="color:var(--muted);line-height:1.7"></div>
@@ -2438,6 +2443,37 @@ input:focus:not(:focus-visible) {
             </select>
             <div style="font-size:11px;color:var(--muted);margin-top:4px">Used for plan pricing band and tax defaults.</div>
           </div>
+        </div>
+        <div class="insight" style="margin:8px 0 16px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
+          <b style="font-size:13px">Diaspora &amp; multi-currency</b>
+          <p style="margin:6px 0 10px;font-size:12px;color:var(--muted);line-height:1.5">
+            Invoice clients in NGN, KES, GHS… while you track totals in USD/GBP. Reminder messages can show both amounts.
+          </p>
+          <div class="two" style="gap:12px">
+            <div class="field" style="margin:0">
+              <label>Settlement / “think in” currency</label>
+              <select data-p="settlementCurrency" id="settlementCurrency">
+                <option value="">Same as reporting</option>
+                <option value="USD">USD</option>
+                <option value="GBP">GBP</option>
+                <option value="EUR">EUR</option>
+                <option value="CAD">CAD</option>
+                <option value="NGN">NGN</option>
+                <option value="GHS">GHS</option>
+                <option value="KES">KES</option>
+                <option value="ZAR">ZAR</option>
+              </select>
+            </div>
+            <div class="field" style="margin:0">
+              <label>WhatsApp country code (reminders)</label>
+              <input data-p="whatsappDial" id="whatsappDial" placeholder="234" inputmode="numeric">
+              <div style="font-size:11px;color:var(--muted);margin-top:4px">e.g. 234 Nigeria · 233 Ghana · 254 Kenya · 1 US/CA</div>
+            </div>
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;cursor:pointer">
+            <input type="checkbox" data-p="showDualCurrency" id="showDualCurrency">
+            Show approximate foreign amount on share &amp; reminder messages
+          </label>
         </div>
         <div class="field" style="max-width:320px">
             <label>Reporting currency</label>
@@ -2793,6 +2829,7 @@ input:focus:not(:focus-visible) {
     <div class="form-error-banner" id="clientErrors"></div>
     <div class="field"><label>Name / company</label><input id="mName"></div>
     <div class="field"><label>Email</label><input id="mEmail"></div>
+    <div class="field"><label>Phone (WhatsApp)</label><input id="mPhone" type="tel" placeholder="0803… or +234…"></div>
     <div class="field"><label>Billing address</label><textarea id="mAddress" rows="2" placeholder="Street, city, postcode, country"></textarea></div>
     <div class="field"><label>Tax ID (optional)</label><input id="mTaxId" placeholder="Client tax / VAT / ABN / EIN"></div>
     <div class="client-modal-actions">
@@ -3821,7 +3858,10 @@ async function shareInvoice() {
     const url = window.location.origin + '/invoice.html?token=' + encodeURIComponent(token);
     try { await navigator.clipboard.writeText(url); } catch {}
     await track('invoice_shared', { invoice_id: refreshedInvoice.cloudId, invoice_number: refreshedInvoice.number });
-    toast('Share link copied.');
+    const msg = buildPaymentMessage(refreshedInvoice, 'share');
+    try { await navigator.clipboard.writeText(msg); } catch { try { await navigator.clipboard.writeText(url); } catch {} }
+    toast('Share message copied (link included).');
+    track('invoice_share_message', { invoice_id: refreshedInvoice.cloudId });
     return url;
   } catch (error) {
     console.error('SHARE FAILED:', error);
@@ -4451,6 +4491,13 @@ async function cancelPlanRenewal() {
 
 document.getElementById('btnCancelRenewal')?.addEventListener('click', () => {
   cancelPlanRenewal();
+});
+
+document.addEventListener('click', (e) => {
+  const wa = e.target.closest('[data-remind-wa]');
+  if (wa) { e.preventDefault(); remindInvoice(wa.getAttribute('data-remind-wa'), 'whatsapp'); return; }
+  const cp = e.target.closest('[data-remind-copy]');
+  if (cp) { e.preventDefault(); remindInvoice(cp.getAttribute('data-remind-copy'), 'copy'); return; }
 });
 
 const PLAN_RANK = { free: 0, starter: 1, pro: 2 };
@@ -5132,6 +5179,8 @@ function renderInvoiceRows(arr, options = {}) {
           <td><span class="badge ${st.toLowerCase()}">${st}</span></td>
           <td class="right"><b>${money(tot, i.currency)}</b>${amtExtra}${repNote}</td>
           ${showActions ? `<td class="actions" onclick="event.stopPropagation()">
+            ${bal > 0.001 ? `<button class="button small" data-remind-wa="${i.id}">Remind</button>` : ''}
+            ${bal > 0.001 ? `<button class="button small" data-remind-wa="${i.id}">Remind</button>` : ''}
             ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
             ${paid > 0 ? `<button class="button small" data-receipt="${i.id}" title="${hasFeature('payment_receipts') ? 'Download receipt' : 'Receipts require Starter'}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
             <button class="button small danger" data-delete-invoice="${i.id}">Delete</button>
@@ -5154,6 +5203,7 @@ function renderInvoiceRows(arr, options = {}) {
           ? 'Bal ' + money(bal, i.currency)
           : '';
       const actions = showActions ? `<div class="mobile-card-actions" onclick="event.stopPropagation()">
+          ${bal > 0.001 ? `<button class="button small" data-remind-wa="${i.id}">Remind</button>` : ''}
           ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
           ${paid > 0 ? `<button class="button small" data-receipt="${i.id}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
           <button class="button small danger" data-delete-invoice="${i.id}">Delete</button>
@@ -5178,6 +5228,171 @@ function renderInvoiceRows(arr, options = {}) {
   </div>`;
 
   return table + cards;
+}
+
+
+
+/* ---------- African SME collect + diaspora dual-currency ---------- */
+function settlementCurrency() {
+  return String(db.profile.settlementCurrency || db.profile.reporting || 'USD').toUpperCase();
+}
+
+function convertApprox(amount, fromCur, toCur) {
+  const from = String(fromCur || 'USD').toUpperCase();
+  const to = String(toCur || 'USD').toUpperCase();
+  if (from === to) return Number(amount) || 0;
+  const fromRate = fx[from] ?? 1;
+  const toRate = fx[to] ?? 1;
+  return (Number(amount) || 0) * fromRate / toRate;
+}
+
+function dualAmountLine(invoice, amount) {
+  const invCur = String(invoice.currency || db.profile.reporting || 'USD').toUpperCase();
+  const settle = settlementCurrency();
+  const showDual = !!db.profile.showDualCurrency && settle && settle !== invCur;
+  const primary = money(amount, invCur);
+  if (!showDual) return primary;
+  const approx = convertApprox(amount, invCur, settle);
+  return primary + ' (≈ ' + money(approx, settle) + ')';
+}
+
+function clientPhoneDigits(clientObj) {
+  if (!clientObj) return '';
+  const raw = String(clientObj.phone || clientObj.mobile || '').replace(/[^\d+]/g, '');
+  return raw;
+}
+
+function whatsappHref(phoneRaw, message) {
+  let digits = String(phoneRaw || '').replace(/\D/g, '');
+  const dial = String(db.profile.whatsappDial || '').replace(/\D/g, '');
+  if (digits.length && !digits.startsWith(dial) && dial && digits.length <= 11) {
+    // local number → prefix dial code
+    if (digits.startsWith('0')) digits = digits.slice(1);
+    digits = dial + digits;
+  }
+  const text = encodeURIComponent(message || '');
+  if (digits) return 'https://wa.me/' + digits + '?text=' + text;
+  return 'https://wa.me/?text=' + text;
+}
+
+function buildPaymentMessage(invoice, kind) {
+  const c = client(invoice.client);
+  const name = (c?.name || 'there').split(' ')[0];
+  const biz = (db.profile.name || 'us').trim();
+  const bal = balanceDue(invoice);
+  const amt = dualAmountLine(invoice, bal);
+  const due = invoice.due || '';
+  const num = invoice.number || 'invoice';
+  let link = '';
+  if (invoice.publicShareToken && invoice.publicShareEnabled) {
+    link = (window.location.origin || '') + '/invoice.html?token=' + encodeURIComponent(invoice.publicShareToken);
+  }
+  if (kind === 'overdue') {
+    let msg = 'Hi ' + name + ', hope you’re well. This is a gentle reminder that ' + num + ' from ' + biz +
+      ' for ' + amt + ' was due on ' + due + '.';
+    if (link) msg += ' You can view it here: ' + link;
+    msg += ' Please let me know if you’ve already paid or if you need the payment details again. Thank you.';
+    return msg;
+  }
+  // share / send
+  let msg = 'Hi ' + name + ', please find invoice ' + num + ' from ' + biz + ' for ' + amt + '.';
+  if (due) msg += ' Due ' + due + '.';
+  if (link) msg += ' View / download: ' + link;
+  msg += ' Thank you.';
+  return msg;
+}
+
+async function remindInvoice(invoiceId, channel) {
+  const inv = db.invoices.find(i => i.id === invoiceId);
+  if (!inv) return;
+  syncPaidFlag(inv);
+  if (balanceDue(inv) <= 0.001) {
+    toast('This invoice is already paid.');
+    return;
+  }
+  // Ensure share link exists when signed in
+  if (cloud.user && cloud.client && (!inv.publicShareToken || !inv.publicShareEnabled)) {
+    try {
+      edit = JSON.parse(JSON.stringify(inv));
+      await shareInvoice();
+      const refreshed = db.invoices.find(i => i.id === invoiceId);
+      if (refreshed) Object.assign(inv, refreshed);
+    } catch (e) {
+      console.warn('remind share', e.message || e);
+    }
+  }
+  const overdue = new Date(inv.due + 'T12:00:00') < new Date();
+  const msg = buildPaymentMessage(inv, overdue ? 'overdue' : 'share');
+  const c = client(inv.client);
+  inv.lastRemindedAt = new Date().toISOString();
+  inv.remindCount = (Number(inv.remindCount) || 0) + 1;
+  save();
+  track('invoice_remind', {
+    invoice_id: inv.id,
+    channel: channel || 'copy',
+    overdue: overdue,
+    amount: balanceDue(inv),
+    currency: inv.currency
+  });
+  if (channel === 'whatsapp') {
+    const href = whatsappHref(clientPhoneDigits(c), msg);
+    window.open(href, '_blank', 'noopener');
+    toast('WhatsApp opened with reminder.');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(msg);
+    toast('Reminder copied — paste into WhatsApp or email.');
+  } catch {
+    window.prompt('Copy this reminder:', msg);
+  }
+}
+
+function renderCollectionsPanel() {
+  const el = document.getElementById('collectionsPanel');
+  if (!el) return;
+  const open = db.invoices.filter(i => {
+    syncPaidFlag(i);
+    return balanceDue(i) > 0.001 && i.status !== 'Draft';
+  });
+  const over = open
+    .filter(i => new Date(i.due + 'T12:00:00') < new Date())
+    .sort((a, b) => String(a.due).localeCompare(String(b.due)));
+  const dueSoon = open
+    .filter(i => new Date(i.due + 'T12:00:00') >= new Date())
+    .sort((a, b) => String(a.due).localeCompare(String(b.due)))
+    .slice(0, 3);
+
+  if (!over.length && !dueSoon.length) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--muted)">No open invoices to collect. When clients owe you, reminders will show up here.</div>';
+    return;
+  }
+
+  const row = (i, badge) => {
+    const c = client(i.client);
+    const bal = balanceDue(i);
+    const amt = dualAmountLine(i, bal);
+    const phone = clientPhoneDigits(c);
+    return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)">
+      <div style="flex:1;min-width:140px">
+        <div style="font-weight:700;font-size:13px">${c?.name || 'Client'} · ${i.number || ''}</div>
+        <div style="font-size:12px;color:var(--muted)">${badge} · ${amt}</div>
+      </div>
+      <button type="button" class="button small" data-remind-wa="${i.id}">WhatsApp</button>
+      <button type="button" class="button small" data-remind-copy="${i.id}">Copy text</button>
+    </div>`;
+  };
+
+  let html = '';
+  if (over.length) {
+    html += '<div style="font-size:11px;font-weight:700;color:var(--red-text);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Overdue</div>';
+    html += over.slice(0, 8).map(i => row(i, 'Overdue ' + (i.due || ''))).join('');
+  }
+  if (dueSoon.length) {
+    html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin:12px 0 4px">Coming due</div>';
+    html += dueSoon.map(i => row(i, 'Due ' + (i.due || ''))).join('');
+  }
+  el.innerHTML = html;
 }
 
 
@@ -5275,6 +5490,8 @@ function dashboard() {
       <b class="right">${money(b[1])}</b>
     </div>`
   ).join('');
+
+  try { renderCollectionsPanel(); } catch (e) { console.warn('collections', e.message || e); }
 
   if (!all.length) {
     $('#insightText').innerHTML = `<b style="color:var(--text)">Welcome to invoicedey</b><br>
@@ -6327,6 +6544,10 @@ function profile() {
   document.querySelectorAll('[data-p]').forEach(e => {
     const key = e.dataset.p;
     let val = db.profile[key];
+    if (e.type === 'checkbox') {
+      e.checked = !!val;
+      return;
+    }
     if (val === undefined || val === null) val = '';
     e.value = val;
   });
@@ -6785,6 +7006,7 @@ async function openClientModal(client) {
     : 'Save a client once and invoice them in seconds.';
   $('#mName').value = client?.name || '';
   $('#mEmail').value = client?.email || '';
+  $('#mPhone').value = client?.phone || '';
   $('#mTaxId').value = client?.taxId || '';
   $('#mAddress').value = client?.address || '';
   $('#confirm').textContent = client ? 'Update client' : 'Save client';
@@ -6821,13 +7043,14 @@ $('#confirm').onclick = () => {
   showBanner('clientErrors', []);
   const n = $('#mName').value.trim();
   const email = $('#mEmail').value.trim();
+  const phone = ($('#mPhone')?.value || '').trim();
   const taxId = $('#mTaxId').value.trim();
   const errors = [];
   if (!n) { errors.push('Client name is required.'); $('#mName')?.classList.add('invalid'); }
   if (email && !isValidEmail(email)) { errors.push('Enter a valid email address.'); $('#mEmail')?.classList.add('invalid'); }
   if (errors.length) { showBanner('clientErrors', errors); toast(errors[0]); return; }
   const address = ($('#mAddress')?.value || '').trim();
-  const payload = { name: n, email, address, taxId };
+  const payload = { name: n, email, phone, address, taxId };
   if (editingClientId) {
     const c = db.clients.find(x => x.id === editingClientId);
     if (c) Object.assign(c, payload);
@@ -6838,7 +7061,7 @@ $('#confirm').onclick = () => {
   }
   save();
   editingClientId = null;
-  $('#mName').value = ''; $('#mEmail').value = ''; $('#mTaxId').value = '';
+  $('#mName').value = ''; $('#mEmail').value = ''; if ($('#mPhone')) $('#mPhone').value = ''; $('#mTaxId').value = '';
   if ($('#mAddress')) $('#mAddress').value = '';
   $('#modal').classList.remove('show');
   clients();
@@ -6919,6 +7142,12 @@ function saveProfileField(el) {
     toast('Reporting currency set to ' + val);
   }
   if (key === 'taxCountry') {
+    const dialMap = { NG: '234', GH: '233', KE: '254', ZA: '27', UG: '256', RW: '250', TZ: '255', ET: '251', US: '1', GB: '44', CA: '1' };
+    if (!db.profile.whatsappDial && dialMap[val]) {
+      db.profile.whatsappDial = dialMap[val];
+      const w = document.getElementById('whatsappDial');
+      if (w) w.value = dialMap[val];
+    }
     applyTaxCountrySuggestion(val, true);
     // Refresh plan prices when country (pricing band) changes
     if (document.getElementById('plan')?.classList.contains('active') && typeof planView === 'function') {
