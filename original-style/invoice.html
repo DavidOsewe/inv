@@ -120,6 +120,18 @@
   }
   .terms + .terms { margin-top: 18px; }
   .terms b { color: #0f172a; }
+  .pay-box {
+    margin-top: 22px; padding: 16px 18px; border: 1px solid #bfdbfe;
+    background: #eff6ff; border-radius: 12px;
+  }
+  .pay-box h3 { margin: 0 0 8px; font-size: 15px; }
+  .pay-box p { margin: 0 0 10px; color: #334155; font-size: 13px; }
+  .pay-box .dual { color: #1d4ed8; font-weight: 700; font-size: 13px; margin-bottom: 10px; }
+  .pay-box .pay-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .pay-box .bank {
+    white-space: pre-line; font-size: 13px; color: #0f172a;
+    background: #fff; border: 1px solid #dbe3ee; border-radius: 8px; padding: 12px; margin-top: 8px;
+  }
   .viral { margin-top:24px; padding-top:15px; border-top:1px solid var(--line); text-align:center; color:var(--muted); font-size:12px; }
   .viral a { color:var(--blue); font-weight:800; text-decoration:none; }
   .state { text-align:center; padding:60px 20px; }
@@ -238,6 +250,33 @@ async function trackPublic(eventName, metadata = {}) {
 function renderNotFound(message) {
   document.getElementById('app').innerHTML = '<div class="state"><h1>Invoice unavailable</h1><p>' + esc(message) + '</p><a class="button primary" href="index.html">Create an invoice with invoicedey</a></div>';
 }
+
+const FX_USD = {
+  USD: 1, EUR: 0.92, GBP: 0.79, CAD: 1.36, AUD: 1.52, NGN: 1500, GHS: 15.5,
+  KES: 129, ZAR: 18.2, INR: 83, AED: 3.67, SAR: 3.75, CHF: 0.89, JPY: 149
+};
+function toMajor(minor, currency) {
+  const digits = currencyExponent(currency);
+  return (Number(minor) || 0) / Math.pow(10, digits);
+}
+function convertMajor(amount, fromCur, toCur) {
+  const from = String(fromCur || 'USD').toUpperCase();
+  const to = String(toCur || 'USD').toUpperCase();
+  if (from === to) return Number(amount) || 0;
+  const fromPerUsd = FX_USD[from] || 1;
+  const toPerUsd = FX_USD[to] || 1;
+  // FX_USD values are "units per 1 USD" for most; USD=1
+  const usd = (Number(amount) || 0) / fromPerUsd;
+  return usd * toPerUsd;
+}
+function approxMoney(major, currency) {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: String(currency || 'USD').toUpperCase(), maximumFractionDigits: 2 }).format(major);
+  } catch {
+    return String(currency || '') + ' ' + Number(major || 0).toFixed(2);
+  }
+}
+
 function render(data) {
   if (!data) { renderNotFound('This invoice link is invalid, expired, or no longer public.'); return; }
   const i=data.invoice, o=data.issuer||{}, c=data.client||{};
@@ -254,6 +293,46 @@ function render(data) {
   const issuerContact=[o.email,o.phone,address].filter(Boolean).map(esc).join('<br>');
   const taxLabel=o.tax_label || 'Tax';
   document.title=(i.invoice_number || 'Invoice')+' — invoicedey';
+
+  const balanceMinor = Number(i.balance_minor != null ? i.balance_minor : i.total_minor) || 0;
+  const paidMinor = Number(i.amount_paid_minor || 0);
+  const invCur = String(i.currency || 'USD').toUpperCase();
+  const settle = String(o.settlement_currency || o.reporting_currency || '').toUpperCase();
+  const showDual = !!o.show_dual_currency && settle && settle !== invCur;
+  let dualHtml = '';
+  if (showDual && balanceMinor > 0) {
+    const major = toMajor(balanceMinor, invCur);
+    const approx = convertMajor(major, invCur, settle);
+    dualHtml = '<div class="dual">≈ ' + esc(approxMoney(approx, settle)) + ' (indicative)</div>';
+  }
+  let dualTotal = '';
+  if (showDual) {
+    const major = toMajor(Number(i.total_minor) || 0, invCur);
+    const approx = convertMajor(major, invCur, settle);
+    dualTotal = ' <span style="font-weight:600;color:#64748b;font-size:12px">(≈ ' + esc(approxMoney(approx, settle)) + ')</span>';
+  }
+
+  const isPaid = balanceMinor <= 0 || String(i.status || '').toLowerCase() === 'paid';
+  let paySection = '';
+  if (isPaid) {
+    paySection = '<div class="pay-box" style="border-color:#bbf7d0;background:#f0fdf4"><h3>Paid in full</h3><p>Thank you. This invoice has no remaining balance.</p></div>';
+  } else {
+    const bank = o.payment_details
+      ? '<div class="bank"><b>Bank / transfer details</b><br>' + esc(o.payment_details) + '</div>'
+      : '';
+    paySection = `
+      <div class="pay-box" id="publicPayBox">
+        <h3>Pay this invoice</h3>
+        <p>Amount due: <strong>${moneyMinor(balanceMinor, invCur)}</strong>${paidMinor ? ' <span style="color:#64748b">(paid ' + moneyMinor(paidMinor, invCur) + ')</span>' : ''}</p>
+        ${dualHtml}
+        <div class="pay-actions">
+          <button type="button" class="button primary" id="publicPayBtn">Pay with card / transfer</button>
+        </div>
+        ${bank}
+        <p style="margin-top:10px;font-size:12px;color:#64748b">Use the invoice number <strong>${esc(i.invoice_number || '')}</strong> as payment reference.</p>
+      </div>`;
+  }
+
   document.getElementById('app').innerHTML = `
     <div class="head">
       <div><div class="issuer">${esc(o.name || 'Business')}</div><div class="contact">${issuerContact}</div></div>
@@ -274,15 +353,59 @@ function render(data) {
     <div class="totals-wrap"><div class="totals">
       <div><span>Subtotal</span><span>${moneyMinor(i.subtotal_minor,i.currency)}</span></div>
       <div><span>${esc(taxLabel)} (${esc(i.tax_rate)}%)</span><span>${moneyMinor(i.tax_minor,i.currency)}</span></div>
-      <div class="grand"><span>Total</span><span>${moneyMinor(i.total_minor,i.currency)}</span></div>
+      <div class="grand"><span>Total</span><span>${moneyMinor(i.total_minor,i.currency)}${dualTotal}</span></div>
     </div></div>
-    ${o.payment_details ? '<div class="terms"><b>Payment instructions</b><br><span>'+esc(o.payment_details)+'</span></div>' : ''}
     ${o.tax_registration_number ? '<div class="terms"><b>Tax ID</b><br><span>'+esc(o.tax_registration_number)+'</span></div>' : ''}
+    ${paySection}
     <div class="viral">Need to create an invoice? <a id="publicFooterCta" href="index.html">Try invoicedey — free.</a></div>
   `;
+
+  // Wire Pay button
+  const payBtn = document.getElementById('publicPayBtn');
+  if (payBtn) {
+    payBtn.addEventListener('click', async () => {
+      payBtn.disabled = true;
+      payBtn.textContent = 'Starting payment…';
+      try {
+        const email = (c.email || '').trim();
+        const res = await fetch(SUPABASE_URL + '/functions/v1/create-invoice-payment', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': SUPABASE_PUBLISHABLE_KEY,
+            'Authorization': 'Bearer ' + SUPABASE_PUBLISHABLE_KEY
+          },
+          body: JSON.stringify({
+            token: new URLSearchParams(location.search).get('token'),
+            email: email || undefined,
+            origin: location.origin
+          })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.authorization_url) {
+          throw new Error(body.message || body.error || 'Could not start payment');
+        }
+        trackPublic('public_invoice_pay_clicked', { invoice_number: i.invoice_number, reference: body.reference });
+        location.href = body.authorization_url;
+      } catch (err) {
+        alert(err.message || 'Payment could not be started. Use the bank details above or contact the issuer.');
+        payBtn.disabled = false;
+        payBtn.textContent = 'Pay with card / transfer';
+      }
+    });
+  }
 }
 (async()=>{
-  const token=new URLSearchParams(location.search).get('token');
+  const params=new URLSearchParams(location.search);
+  const token=params.get('token');
+  if (params.get('paid') === '1') {
+    try {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'background:#ecfdf5;color:#065f46;padding:10px 16px;text-align:center;font-size:13px;font-weight:600';
+      banner.textContent = 'Payment submitted — the issuer will confirm on their side. You can keep this page for your records.';
+      document.body.prepend(banner);
+    } catch {}
+  }
   if (!token) { renderNotFound('No invoice token was provided.'); return; }
   if (!SUPABASE_PUBLISHABLE_KEY || SUPABASE_PUBLISHABLE_KEY.includes('PASTE_YOUR')) { renderNotFound('Public invoice viewing is not configured yet.'); return; }
   try {
