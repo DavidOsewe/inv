@@ -2590,7 +2590,7 @@ input:focus:not(:focus-visible) {
             </div>
             <button type="button" class="button small" id="bankTxAutoMatch">Auto-match all</button>
             <button type="button" class="button small" id="bankTxNewRule" title="Create a bank rule">New rule</button>
-            <button type="button" class="button small primary" id="bankTxApplyRules" title="Add or exclude all pending lines that match a bank rule">Apply rules (bulk)</button>
+            <button type="button" class="button small primary" id="bankTxApplyRules" title="Review proposed journals for lines that match bank rules, then post">Apply rules → Review</button>
             <button type="button" class="button small primary" id="bankTxAutoReconcile">Auto-reconcile</button>
             <button type="button" class="button small" id="bankTxClearPending" title="Remove pending lines (zeros or all)">Clear pending</button>
           </div>
@@ -3318,6 +3318,21 @@ input:focus:not(:focus-visible) {
     <div style="display:flex;gap:8px;margin-top:12px">
       <button class="button primary" type="button" id="brSave">Save rule</button>
       <button class="button" type="button" id="brCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="bankRulesReviewModal">
+  <div class="modal" style="max-width:820px">
+    <h2>Review postings before ledger</h2>
+    <p class="section-sub" style="margin-top:-4px">Rules propose these journals. Edit accounts or uncheck rows. Nothing hits the books until you click <b>Post selected</b>.</p>
+    <div id="bankRulesReviewSummary" class="section-sub" style="margin-bottom:10px"></div>
+    <div id="bankRulesReviewList" style="max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--bg)"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center">
+      <button class="button primary" type="button" id="bankRulesReviewPost">Post selected to ledger</button>
+      <button class="button" type="button" id="bankRulesReviewExclude">Exclude selected</button>
+      <button class="button" type="button" id="bankRulesReviewCancel">Cancel</button>
+      <span id="bankRulesReviewHint" class="section-sub" style="margin:0"></span>
     </div>
   </div>
 </div>
@@ -11158,6 +11173,174 @@ function applyBankRulesToPending(opts = {}) {
   return { suggested, applied };
 }
 
+function proposeBankJournalFromRule(tx, rule) {
+  const amt = Math.abs(Number(tx.amount) || 0);
+  const isIn = Number(tx.amount) > 0;
+  const memo = (rule.memo || tx.description || (isIn ? 'Bank deposit' : 'Bank charge')).slice(0, 120);
+  const coaId = rule.coaId || (isIn ? '4100' : '5700');
+  const bankId = tx.accountId;
+  let lines;
+  if (isIn) {
+    lines = [
+      { accountId: bankId, debit: amt, credit: 0 },
+      { accountId: coaId, debit: 0, credit: amt }
+    ];
+  } else {
+    lines = [
+      { accountId: coaId, debit: amt, credit: 0 },
+      { accountId: bankId, debit: 0, credit: amt }
+    ];
+  }
+  return {
+    txId: tx.id,
+    ruleId: rule.id,
+    action: rule.action || 'add',
+    date: tx.date || (typeof today === 'function' ? today() : String(today || '').slice(0, 10)),
+    memo,
+    description: tx.description || '',
+    amount: Number(tx.amount) || 0,
+    bankId,
+    coaId,
+    isIn,
+    lines,
+    selected: true
+  };
+}
+
+function accountLabel(id) {
+  const a = getCoa().find(x => x.id === id);
+  return a ? (a.id + ' · ' + a.name) : String(id || '—');
+}
+
+let _bankRulesReview = [];
+
+function openBankRulesReviewModal(proposals) {
+  _bankRulesReview = proposals || [];
+  const modal = document.getElementById('bankRulesReviewModal');
+  if (!modal) {
+    toast('Review modal missing — hard-refresh');
+    return;
+  }
+  renderBankRulesReviewList();
+  modal.classList.add('show');
+}
+
+function closeBankRulesReviewModal() {
+  document.getElementById('bankRulesReviewModal')?.classList.remove('show');
+  _bankRulesReview = [];
+}
+
+function renderBankRulesReviewList() {
+  const list = document.getElementById('bankRulesReviewList');
+  const sum = document.getElementById('bankRulesReviewSummary');
+  const hint = document.getElementById('bankRulesReviewHint');
+  if (!list) return;
+  const coaOpts = getCoa()
+    .filter(a => a.type === 'expense' || a.type === 'income' || a.type === 'asset' || a.id === '3100')
+    .map(a => '<option value="' + a.id + '">' + a.id + ' · ' + a.name + '</option>')
+    .join('');
+
+  let nAdd = 0, nEx = 0, totalOut = 0, totalIn = 0;
+  _bankRulesReview.forEach(p => {
+    if (p.action === 'exclude') nEx++;
+    else {
+      nAdd++;
+      if (p.isIn) totalIn += Math.abs(Number(p.amount) || 0);
+      else totalOut += Math.abs(Number(p.amount) || 0);
+    }
+  });
+  if (sum) {
+    sum.innerHTML = '<span class="badge">' + _bankRulesReview.length + ' proposed</span> ' +
+      '<span class="badge">' + nAdd + ' to post</span> ' +
+      (nEx ? '<span class="badge">' + nEx + ' exclude</span> ' : '') +
+      ' · out ' + money(totalOut) + ' · in ' + money(totalIn);
+  }
+
+  list.innerHTML = _bankRulesReview.map((p, idx) => {
+    const amt = money(Math.abs(Number(p.amount) || 0));
+    if (p.action === 'exclude') {
+      return '<div class="insight" style="margin-bottom:8px;padding:10px;opacity:' + (p.selected ? '1' : '0.45') + '">' +
+        '<label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">' +
+        '<input type="checkbox" data-brrev-sel="' + idx + '"' + (p.selected ? ' checked' : '') + ' style="width:auto;margin-top:3px">' +
+        '<div style="flex:1">' +
+        '<div><b>' + (p.date || '—') + '</b> · <span class="badge">EXCLUDE</span> · ' + amt + '</div>' +
+        '<div style="font-size:12px;color:var(--muted)">' + String(p.description || '').slice(0, 120).replace(/</g, '&lt;') + '</div>' +
+        '</div></label></div>';
+    }
+    // Proposed double-entry
+    const bankLab = accountLabel(p.bankId);
+    const coaSelect = '<select data-brrev-coa="' + idx + '" style="font-size:12px;max-width:100%;margin-top:2px">' + coaOpts + '</select>';
+    const journalBlock = p.isIn
+      ? ('<div style="font-size:12px;line-height:1.6">' +
+         '<div><b>Dr</b> ' + bankLab + ' <span style="float:right">' + amt + '</span></div>' +
+         '<div style="margin-top:4px"><b>Cr</b> Income / other' + coaSelect + '</div></div>')
+      : ('<div style="font-size:12px;line-height:1.6">' +
+         '<div><b>Dr</b> Expense / other' + coaSelect + '</div>' +
+         '<div style="margin-top:4px"><b>Cr</b> ' + bankLab + ' <span style="float:right">' + amt + '</span></div></div>');
+
+    return '<div class="insight" style="margin-bottom:8px;padding:10px;opacity:' + (p.selected ? '1' : '0.45') + '">' +
+      '<label style="display:flex;gap:8px;align-items:flex-start">' +
+      '<input type="checkbox" data-brrev-sel="' + idx + '"' + (p.selected ? ' checked' : '') + ' style="width:auto;margin-top:3px">' +
+      '<div style="flex:1;min-width:0">' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:space-between;align-items:baseline">' +
+      '<div><b>' + (p.date || '—') + '</b> · ' + (p.isIn ? 'Money in' : 'Money out') + '</div>' +
+      '<div><b>' + amt + '</b></div></div>' +
+      '<div style="font-size:12px;color:var(--muted);margin:4px 0">' + String(p.description || '').slice(0, 120).replace(/</g, '&lt;') + '</div>' +
+      '<div class="field" style="margin:6px 0 8px"><label style="font-size:11px">Memo</label>' +
+      '<input data-brrev-memo="' + idx + '" value="' + String(p.memo || '').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '" style="font-size:12px"></div>' +
+      '<div style="padding:8px;background:var(--panel);border-radius:8px;border:1px solid var(--line)">' + journalBlock + '</div>' +
+      '</div></label></div>';
+  }).join('') || '<p class="section-sub">No proposals</p>';
+
+  list.querySelectorAll('[data-brrev-coa]').forEach(sel => {
+    const idx = Number(sel.getAttribute('data-brrev-coa'));
+    const p = _bankRulesReview[idx];
+    if (!p) return;
+    if (![...sel.options].some(o => o.value === p.coaId)) {
+      const o = document.createElement('option');
+      o.value = p.coaId;
+      o.textContent = accountLabel(p.coaId);
+      sel.appendChild(o);
+    }
+    sel.value = p.coaId;
+  });
+
+  if (hint) {
+    hint.textContent = _bankRulesReview.filter(p => p.selected).length + ' selected';
+  }
+}
+
+function syncBankRulesReviewFromDom() {
+  const list = document.getElementById('bankRulesReviewList');
+  if (!list) return;
+  list.querySelectorAll('[data-brrev-sel]').forEach(cb => {
+    const idx = Number(cb.getAttribute('data-brrev-sel'));
+    if (_bankRulesReview[idx]) _bankRulesReview[idx].selected = !!cb.checked;
+  });
+  list.querySelectorAll('[data-brrev-memo]').forEach(inp => {
+    const idx = Number(inp.getAttribute('data-brrev-memo'));
+    if (_bankRulesReview[idx]) _bankRulesReview[idx].memo = inp.value;
+  });
+  list.querySelectorAll('[data-brrev-coa]').forEach(sel => {
+    const idx = Number(sel.getAttribute('data-brrev-coa'));
+    const p = _bankRulesReview[idx];
+    if (!p || p.action === 'exclude') return;
+    p.coaId = sel.value;
+    const amt = Math.abs(Number(p.amount) || 0);
+    if (p.isIn) {
+      p.lines = [
+        { accountId: p.bankId, debit: amt, credit: 0 },
+        { accountId: p.coaId, debit: 0, credit: amt }
+      ];
+    } else {
+      p.lines = [
+        { accountId: p.coaId, debit: amt, credit: 0 },
+        { accountId: p.bankId, debit: 0, credit: amt }
+      ];
+    }
+  });
+}
+
 function bulkApplyBankRules() {
   ensureBooksDb();
   const accountId = document.getElementById('bankTxAccount')?.value || '';
@@ -11167,45 +11350,99 @@ function bulkApplyBankRules() {
     if (accountId && t.accountId !== accountId) return false;
     return true;
   });
-  const pending = pendingAll.filter(t => !!findMatchingBankRule(t));
+  const matched = pendingAll.filter(t => !!findMatchingBankRule(t));
 
   if (!rules.length) {
-    toast('No bank rules yet — open Rules tab or click New rule');
+    toast('No bank rules yet — click New rule first');
     return;
   }
   if (!pendingAll.length) {
-    toast('No lines waiting for review on this account (For review is 0). Import a CSV first, or pick another bank account.');
+    toast('No lines waiting for review on this account. Import a CSV first.');
     return;
   }
-  if (!pending.length) {
-    toast(pendingAll.length + ' pending line(s), but none match your ' + rules.length + ' rule(s). Check "description contains" and direction.');
+  if (!matched.length) {
+    toast(pendingAll.length + ' pending, but none match your ' + rules.length + ' rule(s).');
     return;
   }
-  if (!confirm('Apply rules to ' + pending.length + ' of ' + pendingAll.length + ' pending line(s)?\nMatching rules will Add or Exclude now.')) return;
 
-  let added = 0, excluded = 0, failed = 0;
-  pending.forEach(tx => {
+  // Tag suggestions only — do not post yet
+  const proposals = [];
+  matched.forEach(tx => {
     const rule = findMatchingBankRule(tx);
     if (!rule) return;
-    if (rule.action === 'exclude') {
+    tx.suggestedRuleId = rule.id;
+    proposals.push(proposeBankJournalFromRule(tx, rule));
+  });
+  save();
+  openBankRulesReviewModal(proposals);
+  track('bank_rules_review_open', { n: proposals.length });
+}
+
+function commitBankRulesReview() {
+  ensureBooksDb();
+  syncBankRulesReviewFromDom();
+  const selected = _bankRulesReview.filter(p => p.selected);
+  if (!selected.length) {
+    toast('Select at least one row to post');
+    return;
+  }
+  let added = 0, excluded = 0, failed = 0;
+  selected.forEach(p => {
+    const tx = (db.bankTransactions || []).find(t => t.id === p.txId);
+    if (!tx || tx.status !== 'pending') return;
+    if (p.action === 'exclude') {
       tx.status = 'excluded';
-      tx.appliedRuleId = rule.id;
+      tx.appliedRuleId = p.ruleId;
       excluded++;
-    } else {
-      const entry = postBankTxFromRule(tx, rule);
-      if (entry || tx.status === 'added') added++;
-      else failed++;
+      try {
+        appendBooksAudit('bank.excluded', 'bank_tx', tx.id, 'Excluded via review · ' + (tx.description || '').slice(0, 80),
+          { status: 'pending' }, { status: 'excluded' }, {});
+      } catch {}
+      return;
     }
+    // Post with possibly edited memo/coa
+    const rule = {
+      id: p.ruleId,
+      memo: p.memo,
+      coaId: p.coaId,
+      action: 'add'
+    };
+    const entry = postBankTxFromRule(tx, rule);
+    if (entry || tx.status === 'added') added++;
+    else failed++;
   });
   save();
   try { queueBooksCloudSync(); } catch {}
+  closeBankRulesReviewModal();
   renderBankTransactions();
   try { updateBankTxReconHint(); } catch {}
-  let msg = 'Rules applied · added ' + added;
+  let msg = 'Posted ' + added + ' to ledger';
   if (excluded) msg += ' · excluded ' + excluded;
-  if (failed) msg += ' · ' + failed + ' failed to post';
+  if (failed) msg += ' · ' + failed + ' failed';
   toast(msg);
-  track('bank_rules_bulk', { added, excluded, failed });
+  track('bank_rules_review_post', { added, excluded, failed });
+}
+
+function excludeSelectedBankRulesReview() {
+  ensureBooksDb();
+  syncBankRulesReviewFromDom();
+  const selected = _bankRulesReview.filter(p => p.selected);
+  if (!selected.length) {
+    toast('Select rows to exclude');
+    return;
+  }
+  let n = 0;
+  selected.forEach(p => {
+    const tx = (db.bankTransactions || []).find(t => t.id === p.txId);
+    if (!tx || tx.status !== 'pending') return;
+    tx.status = 'excluded';
+    tx.appliedRuleId = p.ruleId;
+    n++;
+  });
+  save();
+  closeBankRulesReviewModal();
+  renderBankTransactions();
+  toast('Excluded ' + n + ' line(s)');
 }
 
 function promptAddBankAccount() {
@@ -11877,8 +12114,8 @@ function commitBankTxImport(txs, meta) {
     if (db.statementImports.length > 100) db.statementImports = db.statementImports.slice(-100);
   }
   save();
-  // Rules only after validated commit
-  const applied = applyBankRulesToPending();
+  // Tag matching rules only — user posts via Apply rules → Review modal
+  const applied = applyBankRulesToPending({ suggestOnly: true });
   try { queueBooksCloudSync(); } catch {}
   renderBankTransactions();
   try { updateBankTxReconHint(); } catch {}
@@ -11887,8 +12124,8 @@ function commitBankTxImport(txs, meta) {
     msg += ' · out ' + money(summary.debits) + ' · in ' + money(summary.credits);
   }
   if (skippedDup) msg += ' · skipped ' + skippedDup + ' duplicate' + (skippedDup === 1 ? '' : 's');
-  if (applied && applied.applied) msg += ' · ' + applied.applied + ' posted via bank rules';
-  else if (applied && applied.suggested) msg += ' · ' + applied.suggested + ' matched a rule (manual only)';
+  if (applied && applied.suggested) msg += ' · ' + applied.suggested + ' matched a rule — use Apply rules (bulk) to review & post';
+  else if (applied && applied.applied) msg += ' · ' + applied.applied + ' auto-posted';
   if (!added && skippedDup) msg = 'All ' + skippedDup + ' rows already imported (duplicates skipped)';
   toast(msg);
   track('bank_tx_imported', {
@@ -12569,6 +12806,17 @@ document.getElementById('bankTxClearPending')?.addEventListener('click', () => {
 });
 document.getElementById('bankTxApplyRules')?.addEventListener('click', (e) => { e.preventDefault(); bulkApplyBankRules(); });
 document.getElementById('bankTxNewRule')?.addEventListener('click', (e) => { e.preventDefault(); openBankRuleModal(); });
+document.getElementById('bankRulesReviewPost')?.addEventListener('click', () => commitBankRulesReview());
+document.getElementById('bankRulesReviewExclude')?.addEventListener('click', () => excludeSelectedBankRulesReview());
+document.getElementById('bankRulesReviewCancel')?.addEventListener('click', () => closeBankRulesReviewModal());
+document.getElementById('bankRulesReviewList')?.addEventListener('change', (e) => {
+  if (e.target && (e.target.matches('[data-brrev-sel]') || e.target.matches('[data-brrev-coa]'))) {
+    syncBankRulesReviewFromDom();
+    const hint = document.getElementById('bankRulesReviewHint');
+    if (hint) hint.textContent = _bankRulesReview.filter(p => p.selected).length + ' selected';
+  }
+});
+
 
 
 document.getElementById('btnAddBankRule')?.addEventListener('click', (e) => { e.preventDefault(); openBankRuleModal(); });
