@@ -3608,6 +3608,44 @@ input:focus:not(:focus-visible) {
 <script>
 const $ = s => document.querySelector(s);
 
+function showModal(id) {
+  const m = document.getElementById(id);
+  if (!m) return null;
+  m.classList.add('show');
+  // Prefer CSS .modalback.show; only set display if class alone is not enough
+  try {
+    m.style.display = 'grid';
+    m.style.zIndex = m.style.zIndex || '80';
+  } catch (_) {}
+  return m;
+}
+function hideModal(id) {
+  const m = typeof id === 'string' ? document.getElementById(id) : id;
+  if (!m) return;
+  m.classList.remove('show');
+  try {
+    m.style.display = '';
+    m.style.zIndex = '';
+  } catch (_) {}
+}
+function hideAllModals() {
+  document.querySelectorAll('.modalback').forEach(m => {
+    m.classList.remove('show');
+    try { m.style.display = ''; m.style.zIndex = ''; } catch (_) {}
+  });
+}
+// Escape key closes any stuck overlay
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hideAllModals();
+});
+// Click on backdrop (not modal content) closes
+document.addEventListener('click', (e) => {
+  const back = e.target && e.target.classList && e.target.classList.contains('modalback') ? e.target : null;
+  if (back && back.classList.contains('show')) hideModal(back);
+}, true);
+
+
+
 // Global signup navigation so the Free-limit button still works even if a later
 // initialization block throws an unrelated runtime error.
 function goToSignup() {
@@ -8718,8 +8756,7 @@ function openJournalActivityModal(journalId, opts) {
       (e.entityType ? (' · ' + e.entityType) : '') + '</div></div>'
     ).join('');
   }
-  m.classList.add('show');
-  m.style.display = 'grid';
+  showModal('journalActivityModal');
 }
 
 function renderBooksAuditTrail() {
@@ -9880,13 +9917,17 @@ function jeUpdateHint() {
 }
 
 /* ---- Opening balances (Zoho-style setup) ---- */
+function closeOpeningModal() {
+  hideModal('openingModal');
+}
+
 function openOpeningModal() {
   ensureBooksDb();
   const m = document.getElementById('openingModal');
   if (!m) return;
   document.getElementById('obDate').value = db.booksSettings?.openingDate || (typeof today === 'function' ? today() : today);
   rebuildOpeningBalanceLines();
-  m.classList.add('show');
+  showModal('openingModal');
 }
 
 function rebuildOpeningBalanceLines(prefill) {
@@ -11503,19 +11544,13 @@ function openBankRulesReviewModal(proposals) {
       ).join('') || '<p>No rows</p>';
     }
   }
-  // Force visible even if CSS class missing
-  modal.classList.add('show');
-  modal.style.display = 'grid';
-  modal.style.zIndex = '90';
+  showModal('bankRulesReviewModal');
+  try { modal.style.zIndex = '90'; } catch (_) {}
 }
 
 function closeBankRulesReviewModal() {
-  const modal = document.getElementById('bankRulesReviewModal');
-  if (modal) {
-    modal.classList.remove('show');
-    modal.style.display = '';
-  }
-  _bankRulesReview = [];
+  hideModal('bankRulesReviewModal');
+  try { _bankRulesReview = []; } catch (_) {}
 }
 
 function renderBankRulesReviewList() {
@@ -11783,7 +11818,7 @@ function downloadSampleJournalCsv() {
 let _pendingJournalImport = null; // { groups: [...] }
 
 function closeJournalImportModal() {
-  document.getElementById('journalImportModal')?.classList.remove('show');
+  hideModal('journalImportModal');
   _pendingJournalImport = null;
 }
 
@@ -11979,7 +12014,7 @@ function openJournalImportPreview(groups, sourceLabel) {
       : 'Fix validation errors in the CSV (balance, accounts, dates) and re-import.';
     hint.style.color = ok ? 'var(--muted)' : 'var(--red-text)';
   }
-  document.getElementById('journalImportModal')?.classList.add('show');
+  showModal('journalImportModal');
   const conf = document.getElementById('journalImportConfirm');
   if (conf) conf.disabled = ok === 0;
 }
@@ -13297,10 +13332,7 @@ document.getElementById('booksLedgerBackReports')?.addEventListener('click', () 
   setBooksPage('reports', 'trial');
   try { renderBooksTrial(); } catch {}
 });
-document.getElementById('journalActivityClose')?.addEventListener('click', () => {
-  const m = document.getElementById('journalActivityModal');
-  if (m) { m.classList.remove('show'); m.style.display = ''; }
-});
+document.getElementById('journalActivityClose')?.addEventListener('click', () => hideModal('journalActivityModal'));
 document.getElementById('journalActivityModal')?.addEventListener('click', (e) => {
   if (e.target.id === 'journalActivityModal') document.getElementById('journalActivityModal')?.classList.remove('show');
 });
@@ -15466,7 +15498,25 @@ async function maybeAcceptInviteFromUrl() {
 }
 
 /* Init */
-switchTo('dashboard');
+try { hideAllModals(); } catch (_) {}
+try {
+  // Recover if a previous session left modal overlays stuck with inline display
+  document.querySelectorAll('.modalback').forEach(m => {
+    m.classList.remove('show');
+    m.style.display = '';
+  });
+} catch (_) {}
+try {
+  switchTo('dashboard');
+} catch (err) {
+  console.error('init switchTo failed', err);
+  try {
+    document.querySelectorAll('.view').forEach((x, i) => {
+      x.classList.toggle('active', x.id === 'dashboard' || i === 0);
+    });
+  } catch (_) {}
+}
+
 </script>
 </body>
 </html>
