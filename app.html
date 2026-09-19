@@ -2589,6 +2589,7 @@ input:focus:not(:focus-visible) {
               <input id="bankTxCsvFile" type="file" accept=".csv,text/csv,.txt,text/plain">
             </div>
             <button type="button" class="button small" id="bankTxAutoMatch">Auto-match all</button>
+            <button type="button" class="button small" id="bankTxNewRule" title="Create a bank rule">New rule</button>
             <button type="button" class="button small primary" id="bankTxApplyRules" title="Add or exclude all pending lines that match a bank rule">Apply rules (bulk)</button>
             <button type="button" class="button small primary" id="bankTxAutoReconcile">Auto-reconcile</button>
             <button type="button" class="button small" id="bankTxClearPending" title="Remove pending lines (zeros or all)">Clear pending</button>
@@ -11103,8 +11104,10 @@ function findMatchingBankRule(tx) {
   const amt = Math.abs(Number(tx.amount) || 0);
   const isIn = Number(tx.amount) > 0;
   for (const rule of rules) {
-    if (rule.direction === 'in' && !isIn) continue;
-    if (rule.direction === 'out' && isIn) continue;
+    const dir = String(rule.direction || 'either').toLowerCase();
+    if (dir === 'in' && !isIn) continue;
+    if (dir === 'out' && isIn) continue;
+    // 'either' / blank → match both directions
     if (rule.accountId && rule.accountId !== '*' && rule.accountId !== tx.accountId) continue;
     const needleRaw = String(rule.contains || '').trim().toLowerCase();
     const needle = normalizeBankDesc(rule.contains);
@@ -11157,19 +11160,30 @@ function applyBankRulesToPending(opts = {}) {
 
 function bulkApplyBankRules() {
   ensureBooksDb();
-  applyBankRulesToPending();
   const accountId = document.getElementById('bankTxAccount')?.value || '';
-  const pending = (db.bankTransactions || []).filter(t => {
+  const rules = (db.bankRules || []).filter(r => r.active !== false);
+  const pendingAll = (db.bankTransactions || []).filter(t => {
     if (t.status !== 'pending') return false;
     if (accountId && t.accountId !== accountId) return false;
-    return !!findMatchingBankRule(t);
+    return true;
   });
-  if (!pending.length) {
-    toast('No pending lines with a matching rule on this account');
+  const pending = pendingAll.filter(t => !!findMatchingBankRule(t));
+
+  if (!rules.length) {
+    toast('No bank rules yet — open Rules tab or click New rule');
     return;
   }
-  if (!confirm('Apply rules to ' + pending.length + ' line(s)? Matching rules will Add or Exclude automatically.')) return;
-  let added = 0, excluded = 0;
+  if (!pendingAll.length) {
+    toast('No lines waiting for review on this account (For review is 0). Import a CSV first, or pick another bank account.');
+    return;
+  }
+  if (!pending.length) {
+    toast(pendingAll.length + ' pending line(s), but none match your ' + rules.length + ' rule(s). Check "description contains" and direction.');
+    return;
+  }
+  if (!confirm('Apply rules to ' + pending.length + ' of ' + pendingAll.length + ' pending line(s)?\nMatching rules will Add or Exclude now.')) return;
+
+  let added = 0, excluded = 0, failed = 0;
   pending.forEach(tx => {
     const rule = findMatchingBankRule(tx);
     if (!rule) return;
@@ -11178,15 +11192,20 @@ function bulkApplyBankRules() {
       tx.appliedRuleId = rule.id;
       excluded++;
     } else {
-      postBankTxFromRule(tx, rule);
-      added++;
+      const entry = postBankTxFromRule(tx, rule);
+      if (entry || tx.status === 'added') added++;
+      else failed++;
     }
   });
   save();
+  try { queueBooksCloudSync(); } catch {}
   renderBankTransactions();
   try { updateBankTxReconHint(); } catch {}
-  toast('Rules applied · added ' + added + (excluded ? (' · excluded ' + excluded) : ''));
-  track('bank_rules_bulk', { added, excluded });
+  let msg = 'Rules applied · added ' + added;
+  if (excluded) msg += ' · excluded ' + excluded;
+  if (failed) msg += ' · ' + failed + ' failed to post';
+  toast(msg);
+  track('bank_rules_bulk', { added, excluded, failed });
 }
 
 function promptAddBankAccount() {
@@ -11534,15 +11553,25 @@ function postBankTxFromRule(tx, rule) {
 function openBankRuleModal(editId, prefills) {
   ensureBooksDb();
   const m = document.getElementById('bankRuleModal');
-  if (!m) return;
-  const banks = getCoa().filter(a => a.type === 'asset' && (a.id === '1000' || /cash|bank/i.test(a.name)));
+  if (!m) {
+    toast('Rule form missing — hard-refresh the app');
+    return;
+  }
+  try {
+  const banks = getCoa().filter(a => a.type === 'asset' && (a.id === '1000' || /cash|bank|moniepoint|opay|wallet/i.test(a.name)));
+  const allAssets = getCoa().filter(a => a.type === 'asset');
+  const bankList = banks.length ? banks : allAssets;
   const accSel = document.getElementById('brAccount');
-  accSel.innerHTML = '<option value="*">All cash / bank accounts</option>' +
-    banks.map(a => `<option value="${a.id}">${a.id} · ${a.name}</option>`).join('');
+  if (accSel) {
+    accSel.innerHTML = '<option value="*">All cash / bank accounts</option>' +
+      bankList.map(a => `<option value="${a.id}">${a.id} · ${a.name}</option>`).join('');
+  }
   const coaSel = document.getElementById('brCoa');
-  coaSel.innerHTML = getCoa()
-    .filter(a => a.type === 'expense' || a.type === 'income' || a.id === '3100')
-    .map(a => `<option value="${a.id}">${a.id} · ${a.name}</option>`).join('');
+  if (coaSel) {
+    coaSel.innerHTML = getCoa()
+      .filter(a => a.type === 'expense' || a.type === 'income' || a.id === '3100')
+      .map(a => `<option value="${a.id}">${a.id} · ${a.name}</option>`).join('');
+  }
 
   const rule = editId ? (db.bankRules || []).find(r => r.id === editId) : null;
   document.getElementById('bankRuleEditId').value = editId || '';
@@ -11557,6 +11586,10 @@ function openBankRuleModal(editId, prefills) {
   document.getElementById('brMemo').value = rule?.memo || prefills?.memo || '';
   document.getElementById('brAuto').checked = rule ? (rule.autoApply !== false) : true;
   m.classList.add('show');
+  } catch (err) {
+    console.warn('openBankRuleModal', err);
+    toast('Could not open rule form');
+  }
 }
 function closeBankRuleModal() {
   document.getElementById('bankRuleModal')?.classList.remove('show');
@@ -12534,7 +12567,12 @@ document.getElementById('bankTxClearPending')?.addEventListener('click', () => {
   if (zeros > 0) clearPendingBankTx({ zerosOnly: true });
   else clearPendingBankTx({});
 });
-document.getElementById('bankTxApplyRules')?.addEventListener('click', () => bulkApplyBankRules());
+document.getElementById('bankTxApplyRules')?.addEventListener('click', (e) => { e.preventDefault(); bulkApplyBankRules(); });
+document.getElementById('bankTxNewRule')?.addEventListener('click', (e) => { e.preventDefault(); openBankRuleModal(); });
+
+
+document.getElementById('btnAddBankRule')?.addEventListener('click', (e) => { e.preventDefault(); openBankRuleModal(); });
+
 document.getElementById('bankTxAddAccount')?.addEventListener('click', () => promptAddBankAccount());
 document.getElementById('btnImportJournals')?.addEventListener('click', () => document.getElementById('journalCsvFile')?.click());
 document.getElementById('btnExportJournals')?.addEventListener('click', () => exportBooksCsv());
@@ -12569,7 +12607,6 @@ document.getElementById('booksDateTo')?.addEventListener('change', () => {
   if (document.getElementById('booksPeriod')?.value === 'custom') booksView();
 });
 
-document.getElementById('btnAddBankRule')?.addEventListener('click', () => openBankRuleModal());
 document.getElementById('brCancel')?.addEventListener('click', closeBankRuleModal);
 document.getElementById('brSave')?.addEventListener('click', saveBankRule);
 
