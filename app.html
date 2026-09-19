@@ -2663,7 +2663,7 @@ input:focus:not(:focus-visible) {
             <div class="field">
               <label>Import statement CSV</label>
               <input id="reconCsvFile" type="file" accept=".csv,text/csv,.txt,text/plain">
-              <div style="font-size:11px;color:var(--muted);margin-top:4px">CSV only (not Excel). Columns: date, description, amount (or debit/credit).</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:4px">CSV only (not Excel). Opens the same column mapper as Transactions — map date, narration, debit/credit, confirm totals, then reconcile.</div>
             </div>
           </div>
           <div id="reconCashStrip" style="margin-bottom:10px"></div>
@@ -10612,50 +10612,10 @@ function normalizeBankCsv(rows) {
 }
 
 function importBankCsvFile(file) {
-  if (!file) return;
-  const name = file.name || '';
-  if (/\.(xlsx|xls|xlsm|xlsb|ods|pdf)$/i.test(name)) {
-    toast('Excel/PDF not supported — export as CSV (File → Save As → CSV) from Excel or your bank');
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const raw = String(reader.result || '');
-      if (isProbablyBinaryBankFile(name, raw)) {
-        toast('That file looks like Excel/binary, not CSV. Save as .csv and try again');
-        return;
-      }
-      const rows = parseCsvText(raw);
-      if (!rows.length) { toast('Empty file'); return; }
-      let txs = normalizeBankCsv(rows).filter(t => {
-        const desc = String(t.description || '');
-        const amt = Math.abs(Number(t.amount) || 0);
-        if (amt < 0.001) return false;
-        let bad = 0;
-        for (let i = 0; i < Math.min(desc.length, 80); i++) {
-          const c = desc.charCodeAt(i);
-          if (c < 32 && c !== 9) bad++;
-        }
-        if (desc.length && bad > 5) return false;
-        return true;
-      });
-      if (txs.length > 5000) txs = txs.slice(0, 5000);
-      if (!txs.length) { toast('No usable transactions in that CSV'); return; }
-      ensureBooksDb();
-      db.statementImports = txs;
-      save();
-      autoMatchStatementToBooks();
-      renderStatementImportPreview();
-      toast('Imported ' + txs.length + ' statement lines');
-      track('bank_csv_imported', { rows: txs.length });
-    } catch (e) {
-      console.warn(e);
-      toast('Could not parse CSV');
-    }
-  };
-  reader.readAsText(file);
+  // Legacy entry — always use mapped CSV import (same as Transactions)
+  return importBankTxCsv(file);
 }
+
 
 function autoMatchStatementToBooks() {
   ensureBooksDb();
@@ -12295,6 +12255,13 @@ function commitBankTxImport(txs, meta) {
   try { queueBooksCloudSync(); } catch {}
   renderBankTransactions();
   try { updateBankTxReconHint(); } catch {}
+  try {
+    if (document.getElementById('booksPanelReconcile') && !document.getElementById('booksPanelReconcile').hidden) {
+      renderBooksReconcile();
+    } else if (typeof booksPage !== 'undefined' && booksPage === 'banking') {
+      renderBooksReconcile();
+    }
+  } catch (_) {}
   let msg = 'Imported ' + added + ' new';
   if (summary && summary.n) {
     msg += ' · out ' + money(summary.debits) + ' · in ' + money(summary.credits);
@@ -13061,7 +13028,24 @@ document.getElementById('bankTxAutoReconcile')?.addEventListener('click', () => 
 
 document.getElementById('reconCsvFile')?.addEventListener('change', (e) => {
   const f = e.target.files && e.target.files[0];
-  if (f) importBankCsvFile(f);
+  if (f) {
+    // Use same column-mapper flow as Banking → Transactions
+    const reconAcc = document.getElementById('reconAccount')?.value;
+    const bankSel = document.getElementById('bankTxAccount');
+    if (reconAcc && bankSel) {
+      if (![...bankSel.options].some(o => o.value === reconAcc)) {
+        const a = (typeof getCoa === 'function' ? getCoa() : []).find(x => x.id === reconAcc);
+        if (a) bankSel.insertAdjacentHTML('beforeend', '<option value="' + a.id + '">' + a.id + ' · ' + a.name + '</option>');
+      }
+      bankSel.value = reconAcc;
+      try {
+        ensureBooksDb();
+        if (!db.booksSettings) db.booksSettings = {};
+        db.booksSettings.lastBankAccountId = reconAcc;
+      } catch (_) {}
+    }
+    importBankTxCsv(f);
+  }
   e.target.value = '';
 });
 document.getElementById('btnAddRecurringJournal')?.addEventListener('click', openRecurringJournalModal);
