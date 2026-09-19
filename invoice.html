@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invoice — invoicedey</title>
+<style>
+  :root { --blue:#2467E3; --text:#0F172A; --muted:#64748B; --line:#E2E8F0; --bg:#F8FAFC; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap { max-width:820px; margin:0 auto; padding:28px 16px 60px; }
+  .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:18px; }
+  .brand { font-weight:800; font-size:20px; letter-spacing:-.6px; }
+  .brand em { color:var(--blue); font-style:normal; }
+  .button { display:inline-flex; align-items:center; justify-content:center; padding:10px 14px; border:1px solid var(--line); border-radius:9px; background:#fff; color:var(--text); text-decoration:none; font-weight:700; cursor:pointer; }
+  .button.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:28px; box-shadow:0 8px 30px rgba(15,23,42,.06); }
+  .head { display:flex; justify-content:space-between; gap:30px; padding-bottom:22px; border-bottom:2px solid var(--blue); }
+  .issuer { font-size:22px; font-weight:800; }
+  .contact { color:var(--muted); font-size:12px; white-space:pre-line; margin-top:5px; }
+  .doc { text-align:right; }
+  .doc-type { color:var(--blue); font-weight:800; text-transform:uppercase; letter-spacing:1.5px; font-size:11px; }
+  .meta { color:var(--muted); font-size:12px; margin-top:5px; line-height:1.6; }
+  .parties { display:grid; grid-template-columns:1fr 1fr; gap:30px; padding:24px 0 18px; }
+  .label { color:#64748B; text-transform:uppercase; font-size:10px; font-weight:800; letter-spacing:.8px; margin-bottom:6px; }
+  .party-name { font-weight:750; font-size:15px; }
+  .party-extra { color:var(--muted); font-size:12px; line-height:1.5; margin-top:3px; }
+  .status-badge { display:inline-flex; align-items:center; padding:5px 10px; border-radius:999px; background:#EFF6FF; color:#1D4ED8; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.6px; }
+  .title { font-size:21px; font-weight:800; margin:0 0 12px; }
+  .table-wrap { overflow-x:auto; margin-top:18px; }
+  .table {
+    width:100%;
+    min-width:640px;
+    border-collapse:separate;
+    border-spacing:0;
+    border:1px solid #dbe3ee;
+    border-radius:8px;
+    overflow:hidden;
+    font-size:13px;
+    table-layout:fixed;
+    box-sizing:border-box;
+    background:#fff;
+  }
+  .table th {
+    text-align:left;
+    font-size:10px;
+    color:#64748b;
+    background:#f8fafc;
+    text-transform:uppercase;
+    letter-spacing:.6px;
+    border-bottom:1px solid #cfd8e3;
+    border-right:1px solid #dbe3ee;
+    padding:10px 10px;
+    font-weight:700;
+    vertical-align:middle;
+  }
+  .table td {
+    padding:13px 10px;
+    border-bottom:1px solid #e5eaf0;
+    border-right:1px solid #e5eaf0;
+    vertical-align:middle;
+    word-wrap:break-word;
+    color:#0f172a;
+  }
+  .table th:last-child, .table td:last-child { border-right:0; }
+  .table tbody tr:last-child td { border-bottom:0; }
+  .table th, .table td { text-align:left; }
+  .table th:not(:first-child), .table td:not(:first-child) { text-align:right; }
+  .table th:last-child, .table td:last-child { font-weight:600; }
+  .table .right { text-align:right; }
+  .table col.col-desc { width:46%; }
+  .table col.col-qty { width:10%; }
+  .table col.col-unit { width:12%; }
+  .table col.col-rate { width:16%; }
+  .table col.col-amount { width:16%; }
+  .totals-wrap { display:flex; justify-content:flex-end; margin:20px 0 30px; }
+  .totals {
+    width:320px;
+    border:1px solid #dbe3ee;
+    border-radius:8px;
+    padding:8px 14px;
+    background:#fff;
+  }
+  .totals div {
+    display:grid;
+    grid-template-columns:minmax(0, 1fr) 120px;
+    align-items:baseline;
+    column-gap:18px;
+    padding:6px 0;
+    color:#64748b;
+    font-size:13px;
+    line-height:1.4;
+  }
+  .totals div > span:last-child {
+    text-align:right;
+    color:#334155;
+    font-variant-numeric:tabular-nums;
+    white-space:nowrap;
+  }
+  .totals .grand {
+    margin-top:10px;
+    padding:12px 12px;
+    border-top:1px solid #cbd5e1;
+    background:#f8fafc;
+    border-radius:8px;
+    color:#0f172a;
+    font-size:17px;
+    font-weight:800;
+    letter-spacing:-.15px;
+  }
+  .totals .grand > span:last-child { color:#0f172a; font-weight:800; }
+  .terms {
+    border-top: 1px solid #e2e8f0;
+    padding-top: 18px;
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-line;
+    margin-top: 0;
+  }
+  .terms + .terms { margin-top: 18px; }
+  .terms b { color: #0f172a; }
+  .pay-box {
+    margin-top: 22px; padding: 16px 18px; border: 1px solid #bfdbfe;
+    background: #eff6ff; border-radius: 12px;
+  }
+  .pay-box h3 { margin: 0 0 8px; font-size: 15px; }
+  .pay-box p { margin: 0 0 10px; color: #334155; font-size: 13px; }
+  .pay-box .dual { color: #1d4ed8; font-weight: 700; font-size: 13px; margin-bottom: 10px; }
+  .pay-box .pay-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .pay-box .bank {
+    white-space: pre-line; font-size: 13px; color: #0f172a;
+    background: #fff; border: 1px solid #dbe3ee; border-radius: 8px; padding: 12px; margin-top: 8px;
+  }
+  .viral { margin-top:24px; padding-top:15px; border-top:1px solid var(--line); text-align:center; color:var(--muted); font-size:12px; }
+  .viral a { color:var(--blue); font-weight:800; text-decoration:none; }
+  .state { text-align:center; padding:60px 20px; }
+  .state h1 { margin:0 0 8px; }
+  .state p { color:var(--muted); margin:0 auto 20px; max-width:500px; }
+  @media(max-width:640px){
+    .card { padding:20px; }
+    .head,.parties { grid-template-columns:1fr; display:grid; }
+    .doc { text-align:left; }
+    .totals { width:100%; }
+    .table { font-size:12px; min-width:640px; }
+    .table th, .table td { padding:9px 7px; }
+    .table col.col-desc { width:46%; }
+    .table col.col-qty { width:10%; }
+    .table col.col-unit { width:12%; }
+    .table col.col-rate { width:16%; }
+    .table col.col-amount { width:16%; }
+    .totals-wrap { margin-top:16px; }
+    .totals { width:100%; }
+  }
+  @media print {
+    body { background:#fff; }
+    .wrap { padding:0; max-width:none; }
+    .topbar,.share-actions { display:none; }
+    .card { border:0; box-shadow:none; padding:0; }
+    .viral { margin-top:20px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">invoice<em>dey</em></div>
+    <div class="share-actions">
+      <button class="button" id="publicPrintBtn" type="button">Print / Save PDF</button>
+      <a class="button primary" id="publicCreateInvoiceBtn" href="index.html">Create your invoice</a>
+    </div>
+  </div>
+  <main id="app" class="card">
+    <div class="state"><h1>Loading invoice…</h1><p>Please wait.</p></div>
+  </main>
+</div>
+<script>
+const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
+
+function esc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+/** Minor-unit exponent — must match app.html toMinor/fromMinor (Intl). */
+function currencyExponent(currency) {
+  const code = String(currency || 'USD').toUpperCase();
+  // ISO: most have 2; these typically have 0
+  if (['JPY', 'KRW', 'VND', 'XOF', 'XAF', 'CLP', 'ISK'].includes(code)) return 0;
+  try {
+    const d = new Intl.NumberFormat(undefined, { style: 'currency', currency: code }).resolvedOptions().maximumFractionDigits;
+    if (Number.isFinite(d)) return d;
+  } catch {}
+  return 2; // NGN, KES, GHS, RWF, USD, EUR, … → 2
+}
+function moneyMinor(value, currency) {
+  const code = String(currency || 'USD').toUpperCase();
+  const digits = currencyExponent(code);
+  const major = (Number(value) || 0) / Math.pow(10, digits);
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: code,
+      maximumFractionDigits: digits,
+      minimumFractionDigits: digits === 0 ? 0 : Math.min(2, digits)
+    }).format(major);
+  } catch {
+    return code + ' ' + major.toLocaleString('en-US', { maximumFractionDigits: digits });
+  }
+}
+function formatDate(value) {
+  if (!value) return '—';
+  try { return new Date(String(value).slice(0,10) + 'T12:00:00').toLocaleDateString(); } catch { return value; }
+}
+async function loadSupabase() {
+  if (!window.supabase) {
+    await new Promise((resolve,reject)=>{
+      const s=document.createElement('script');
+      s.src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+      s.onload=resolve; s.onerror=reject; document.head.appendChild(s);
+    });
+  }
+  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+}
+
+function getPublicSessionId() {
+  let id = sessionStorage.getItem('invoicedey-public-session');
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem('invoicedey-public-session', id);
+  }
+  return id;
+}
+
+async function trackPublic(eventName, metadata = {}) {
+  try {
+    if (!SUPABASE_PUBLISHABLE_KEY || SUPABASE_PUBLISHABLE_KEY.includes('PASTE_YOUR')) return;
+    const client = await loadSupabase();
+    await client.from('analytics_events').insert({
+      event_name: eventName,
+      user_id: null,
+      session_id: getPublicSessionId(),
+      metadata
+    });
+  } catch (e) {
+    console.debug('public analytics', e.message || e);
+  }
+}
+function renderNotFound(message) {
+  document.getElementById('app').innerHTML = '<div class="state"><h1>Invoice unavailable</h1><p>' + esc(message) + '</p><a class="button primary" href="index.html">Create an invoice with invoicedey</a></div>';
+}
+
+const FX_USD = {
+  USD: 1, EUR: 0.92, GBP: 0.79, CAD: 1.36, AUD: 1.52, NGN: 1500, GHS: 15.5,
+  KES: 129, ZAR: 18.2, INR: 83, AED: 3.67, SAR: 3.75, CHF: 0.89, JPY: 149
+};
+function toMajor(minor, currency) {
+  const digits = currencyExponent(currency);
+  return (Number(minor) || 0) / Math.pow(10, digits);
+}
+function convertMajor(amount, fromCur, toCur) {
+  const from = String(fromCur || 'USD').toUpperCase();
+  const to = String(toCur || 'USD').toUpperCase();
+  if (from === to) return Number(amount) || 0;
+  const fromPerUsd = FX_USD[from] || 1;
+  const toPerUsd = FX_USD[to] || 1;
+  // FX_USD values are "units per 1 USD" for most; USD=1
+  const usd = (Number(amount) || 0) / fromPerUsd;
+  return usd * toPerUsd;
+}
+function approxMoney(major, currency) {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: String(currency || 'USD').toUpperCase(), maximumFractionDigits: 2 }).format(major);
+  } catch {
+    return String(currency || '') + ' ' + Number(major || 0).toFixed(2);
+  }
+}
+
+function render(data) {
+  if (!data) { renderNotFound('This invoice link is invalid, expired, or no longer public.'); return; }
+  const i=data.invoice, o=data.issuer||{}, c=data.client||{};
+  const address = o.address?.text || c.billing_address?.address || '';
+  const clientAddress = c.billing_address?.address || '';
+  const lines=(data.lines||[]).map(line=>{
+    const qty = Number(line.quantity ?? 0);
+    const unitMinor = Number(line.unit_amount_minor ?? 0);
+    let lineMinor = Number(line.line_total_minor ?? 0);
+    // Recompute if line_total missing or inconsistent with qty × rate
+    if (!lineMinor && unitMinor) lineMinor = Math.round(unitMinor * qty);
+    return '<tr><td>'+esc(line.description || 'Service')+'</td><td>'+esc(line.quantity ?? '')+'</td><td>'+esc(line.unit || '—')+'</td><td>'+moneyMinor(unitMinor,i.currency)+'</td><td>'+moneyMinor(lineMinor,i.currency)+'</td></tr>';
+  }).join('');
+  const issuerContact=[o.email,o.phone,address].filter(Boolean).map(esc).join('<br>');
+  const taxLabel=o.tax_label || 'Tax';
+  document.title=(i.invoice_number || 'Invoice')+' — invoicedey';
+
+  const balanceMinor = Number(i.balance_minor != null ? i.balance_minor : i.total_minor) || 0;
+  const paidMinor = Number(i.amount_paid_minor || 0);
+  const invCur = String(i.currency || 'USD').toUpperCase();
+  const settle = String(o.settlement_currency || o.reporting_currency || '').toUpperCase();
+  const showDual = !!o.show_dual_currency && settle && settle !== invCur;
+  let dualHtml = '';
+  if (showDual && balanceMinor > 0) {
+    const major = toMajor(balanceMinor, invCur);
+    const approx = convertMajor(major, invCur, settle);
+    dualHtml = '<div class="dual">≈ ' + esc(approxMoney(approx, settle)) + ' (indicative)</div>';
+  }
+  let dualTotal = '';
+  if (showDual) {
+    const major = toMajor(Number(i.total_minor) || 0, invCur);
+    const approx = convertMajor(major, invCur, settle);
+    dualTotal = ' <span style="font-weight:600;color:#64748b;font-size:12px">(≈ ' + esc(approxMoney(approx, settle)) + ')</span>';
+  }
+
+  const isPaid = balanceMinor <= 0 || String(i.status || '').toLowerCase() === 'paid';
+  let paySection = '';
+  if (isPaid) {
+    paySection = '<div class="pay-box" style="border-color:#bbf7d0;background:#f0fdf4"><h3>Paid in full</h3><p>Thank you. This invoice has no remaining balance.</p></div>';
+  } else {
+    const bank = o.payment_details
+      ? '<div class="bank"><b>Bank / transfer details</b><br>' + esc(o.payment_details) + '</div>'
+      : '';
+    paySection = `
+      <div class="pay-box" id="publicPayBox">
+        <h3>Pay this invoice</h3>
+        <p>Amount due: <strong>${moneyMinor(balanceMinor, invCur)}</strong>${paidMinor ? ' <span style="color:#64748b">(paid ' + moneyMinor(paidMinor, invCur) + ')</span>' : ''}</p>
+        ${dualHtml}
+        <div class="pay-actions">
+          <button type="button" class="button primary" id="publicPayBtn">Pay with card / transfer</button>
+        </div>
+        ${bank}
+        <p style="margin-top:10px;font-size:12px;color:#64748b">Use the invoice number <strong>${esc(i.invoice_number || '')}</strong> as payment reference.</p>
+      </div>`;
+  }
+
+  document.getElementById('app').innerHTML = `
+    <div class="head">
+      <div><div class="issuer">${esc(o.name || 'Business')}</div><div class="contact">${issuerContact}</div></div>
+      <div class="doc"><div class="doc-type">Invoice</div><div class="meta">${esc(i.invoice_number)} · ${esc(i.currency)}<br>Issued ${esc(formatDate(i.issue_date))}<br>Due ${esc(formatDate(i.due_date))}</div></div>
+    </div>
+    <div class="parties">
+      <div><div class="label">Bill to</div><div class="party-name">${esc(c.name || 'Client')}</div>${c.email ? '<div class="party-extra">'+esc(c.email)+'</div>' : ''}${clientAddress ? '<div class="party-extra">'+esc(clientAddress)+'</div>' : ''}</div>
+      <div><div class="label">Status</div><div class="status-badge">${esc(String(i.status || 'draft').replace('_',' '))}</div></div>
+    </div>
+    <h1 class="title">Invoice ${esc(i.invoice_number)}</h1>
+    <div class="table-wrap"><table class="table">
+      <colgroup>
+        <col class="col-desc"><col class="col-qty"><col class="col-unit"><col class="col-rate"><col class="col-amount">
+      </colgroup>
+      <thead><tr><th>Description</th><th class="right">Qty</th><th class="right">Unit</th><th class="right">Rate</th><th class="right">Amount</th></tr></thead>
+      <tbody>${lines || '<tr><td colspan="5">No line items</td></tr>'}</tbody>
+    </table></div>
+    <div class="totals-wrap"><div class="totals">
+      <div><span>Subtotal</span><span>${moneyMinor(i.subtotal_minor,i.currency)}</span></div>
+      <div><span>${esc(taxLabel)} (${esc(i.tax_rate)}%)</span><span>${moneyMinor(i.tax_minor,i.currency)}</span></div>
+      <div class="grand"><span>Total</span><span>${moneyMinor(i.total_minor,i.currency)}${dualTotal}</span></div>
+    </div></div>
+    ${o.tax_registration_number ? '<div class="terms"><b>Tax ID</b><br><span>'+esc(o.tax_registration_number)+'</span></div>' : ''}
+    ${paySection}
+    <div class="viral">Need to create an invoice? <a id="publicFooterCta" href="index.html">Try invoicedey — free.</a></div>
+  `;
+
+  // Wire Pay button
+  const payBtn = document.getElementById('publicPayBtn');
+  if (payBtn) {
+    payBtn.addEventListener('click', async () => {
+      payBtn.disabled = true;
+      payBtn.textContent = 'Starting payment…';
+      try {
+        const email = (c.email || '').trim();
+        const res = await fetch(SUPABASE_URL + '/functions/v1/create-invoice-payment', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': SUPABASE_PUBLISHABLE_KEY,
+            'Authorization': 'Bearer ' + SUPABASE_PUBLISHABLE_KEY
+          },
+          body: JSON.stringify({
+            token: new URLSearchParams(location.search).get('token'),
+            email: email || undefined,
+            origin: location.origin
+          })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.authorization_url) {
+          throw new Error(body.message || body.error || 'Could not start payment');
+        }
+        trackPublic('public_invoice_pay_clicked', { invoice_number: i.invoice_number, reference: body.reference });
+        location.href = body.authorization_url;
+      } catch (err) {
+        alert(err.message || 'Payment could not be started. Use the bank details above or contact the issuer.');
+        payBtn.disabled = false;
+        payBtn.textContent = 'Pay with card / transfer';
+      }
+    });
+  }
+}
+(async()=>{
+  const params=new URLSearchParams(location.search);
+  const token=params.get('token');
+  if (params.get('paid') === '1') {
+    try {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'background:#ecfdf5;color:#065f46;padding:10px 16px;text-align:center;font-size:13px;font-weight:600';
+      banner.textContent = 'Payment submitted — the issuer will confirm on their side. You can keep this page for your records.';
+      document.body.prepend(banner);
+    } catch {}
+  }
+  if (!token) { renderNotFound('No invoice token was provided.'); return; }
+  if (!SUPABASE_PUBLISHABLE_KEY || SUPABASE_PUBLISHABLE_KEY.includes('PASTE_YOUR')) { renderNotFound('Public invoice viewing is not configured yet.'); return; }
+  try {
+    const client=await loadSupabase();
+    const {data,error}=await client.rpc('get_public_invoice',{p_token:token});
+    if (error) throw error;
+    render(data);
+    if (data?.invoice) {
+      await trackPublic('public_invoice_viewed', {
+        invoice_number: data.invoice.invoice_number,
+        currency: data.invoice.currency,
+        status: data.invoice.status
+      });
+    }
+    const printBtn = document.getElementById('publicPrintBtn');
+    if (printBtn) printBtn.addEventListener('click', () => {
+      trackPublic('public_invoice_downloaded', { invoice_number: data.invoice.invoice_number, format: 'print_pdf' });
+      window.print();
+    });
+    const ctaHandler = (source) => () => {
+      trackPublic('public_invoice_cta_clicked', { invoice_number: data.invoice.invoice_number, source });
+    };
+    document.getElementById('publicCreateInvoiceBtn')?.addEventListener('click', ctaHandler('top_button'));
+    document.getElementById('publicFooterCta')?.addEventListener('click', ctaHandler('footer'));
+  } catch (e) {
+    console.error(e);
+    renderNotFound('We could not load this invoice right now.');
+  }
+})();
+</script>
+</body>
+</html>
