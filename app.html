@@ -2513,11 +2513,16 @@ input:focus:not(:focus-visible) {
         <div class="insight"><h3>Balance sheet</h3><div id="booksBalanceSheet"></div></div>
       </div>
       <div id="booksPanelLedger" hidden>
+        <p id="booksLedgerCrumb" class="section-sub" style="margin:0 0 10px"></p>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center">
           <label style="font-size:12px;color:var(--muted)">Account</label>
           <select id="booksLedgerAccount" style="min-width:220px"></select>
+          <button type="button" class="button small" id="booksLedgerBackReports">← Statements</button>
         </div>
-        <div class="insight"><h3>Account ledger</h3><div id="booksLedger"></div></div>
+        <div class="insight"><h3>Account ledger</h3>
+          <p class="section-sub">Click a journal row to see the full entry and audit log.</p>
+          <div id="booksLedger"></div>
+        </div>
       </div>
       <div id="booksPanelJournal" hidden>
         <div class="insight">
@@ -3429,12 +3434,16 @@ input:focus:not(:focus-visible) {
 </div>
 
 
-<div class="modalback" id="journalActivityModal">
-  <div class="modal" style="max-width:520px">
-    <h2 id="journalActivityTitle">Activity</h2>
-    <div id="journalActivityBody" style="max-height:360px;overflow:auto"></div>
-    <div style="margin-top:12px">
+<div class="modalback" id="journalActivityModal" style="z-index:85">
+  <div class="modal" style="max-width:640px">
+    <h2 id="journalActivityTitle">Journal entry</h2>
+    <p id="journalActivityCrumb" class="section-sub" style="margin-top:-6px;margin-bottom:10px"></p>
+    <div id="journalActivityEntry" style="margin-bottom:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)"></div>
+    <h3 style="font-size:14px;margin:0 0 8px">Audit log</h3>
+    <div id="journalActivityBody" style="max-height:220px;overflow:auto"></div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
       <button type="button" class="button" id="journalActivityClose">Close</button>
+      <button type="button" class="button small" id="journalActivityBackLedger" hidden>← Back to ledger</button>
     </div>
   </div>
 </div>
@@ -8193,17 +8202,17 @@ function drillToLedger(accountId, dateOpt) {
     const p = document.getElementById('booksPeriod');
     if (p) p.value = 'custom';
     const f = document.getElementById('booksDateFrom');
-    const t = document.getElementById('booksDateTo');
+    const toEl = document.getElementById('booksDateTo');
     if (f) f.value = dateOpt;
-    if (t) t.value = dateOpt;
-    syncBooksCustomDateUI();
+    if (toEl) toEl.value = dateOpt;
+    try { syncBooksCustomDateUI(); } catch {}
   }
   setBooksPage('reports', 'ledger');
   const sel = document.getElementById('booksLedgerAccount');
   if (sel) {
     if (![...sel.options].some(o => o.value === accountId)) {
       const a = getCoa().find(x => x.id === accountId);
-      if (a) sel.insertAdjacentHTML('beforeend', `<option value="${a.id}">${a.id} · ${a.name}</option>`);
+      if (a) sel.insertAdjacentHTML('beforeend', '<option value="' + a.id + '">' + a.id + ' · ' + a.name + '</option>');
     }
     sel.value = accountId;
   }
@@ -8608,26 +8617,82 @@ function renderBooksJournal() {
   });
 }
 
-function openJournalActivityModal(journalId) {
+function openJournalActivityModal(journalId, opts) {
+  opts = opts || {};
+  ensureBooksDb();
   const j = (db.journals || []).find(x => x.id === journalId);
-  const events = journalActivity(journalId);
+  const events = typeof journalActivity === 'function' ? journalActivity(journalId) : [];
   const m = document.getElementById('journalActivityModal');
   const body = document.getElementById('journalActivityBody');
+  const entryEl = document.getElementById('journalActivityEntry');
   const title = document.getElementById('journalActivityTitle');
+  const crumb = document.getElementById('journalActivityCrumb');
+  const backBtn = document.getElementById('journalActivityBackLedger');
   if (!m || !body) return;
-  if (title) title.textContent = 'Activity · ' + (j ? ((j.date || '') + ' · ' + (j.memo || 'Journal')) : 'Journal');
+
+  if (title) {
+    title.textContent = j
+      ? ('Journal · ' + (j.date || '') + ' · ' + (j.memo || j.source || 'Entry'))
+      : 'Journal entry';
+  }
+  if (crumb) {
+    const parts = [];
+    if (opts.fromAccount) {
+      const a = getCoa().find(x => x.id === opts.fromAccount);
+      parts.push('Ledger · ' + (a ? (a.id + ' ' + a.name) : opts.fromAccount));
+    }
+    parts.push('Journal entry');
+    parts.push('Audit log');
+    crumb.textContent = parts.join(' → ');
+  }
+  if (backBtn) {
+    backBtn.hidden = !opts.fromAccount;
+    backBtn.onclick = () => {
+      m.classList.remove('show');
+      if (opts.fromAccount) drillToLedger(opts.fromAccount);
+    };
+  }
+
+  if (entryEl) {
+    if (!j) {
+      entryEl.innerHTML = '<p class="section-sub">Journal not found (may have been pruned).</p>';
+    } else {
+      const badges = [];
+      if (j.reversed) badges.push('<span class="badge">Reversed</span>');
+      if (j.reverseOf) badges.push('<span class="badge">Reversal</span>');
+      if (j.source) badges.push('<span class="badge">' + String(j.source).replace(/</g, '') + '</span>');
+      const linesHtml = (j.lines || []).map(l => {
+        const nm = (typeof coaName === 'function' ? coaName(l.accountId) : l.accountId);
+        const dr = Number(l.debit) || 0;
+        const cr = Number(l.credit) || 0;
+        return '<div style="display:flex;justify-content:space-between;gap:12px;padding:4px 0;border-bottom:1px solid var(--line);font-size:13px">' +
+          '<span>' + nm + '</span>' +
+          '<span style="font-variant-numeric:tabular-nums;white-space:nowrap">' +
+          (dr ? ('Dr ' + money(dr)) : '') + (dr && cr ? ' · ' : '') + (cr ? ('Cr ' + money(cr)) : '') +
+          '</span></div>';
+      }).join('');
+      entryEl.innerHTML =
+        '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">' + badges.join(' ') + '</div>' +
+        '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Id · ' + String(j.id || '').slice(0, 8) +
+        (j.sourceKey ? (' · ' + String(j.sourceKey).slice(0, 40)) : '') + '</div>' +
+        linesHtml;
+    }
+  }
+
   if (!events.length) {
-    body.innerHTML = '<p class="section-sub">No audit events for this journal yet (posted before audit trail was enabled).</p>';
+    body.innerHTML = '<p class="section-sub">No audit events for this journal yet (posted before audit trail was enabled, or audit not logging).</p>';
   } else {
     body.innerHTML = events.map(e =>
-      `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
-        <div style="font-size:12px;color:var(--muted)">${String(e.at || '').replace('T', ' ').slice(0, 19)} · ${e.actorEmail || e.actorUserId || 'system'}</div>
-        <div style="font-size:13px;font-weight:600">${e.summary || e.action}</div>
-        <div style="font-size:11px;color:var(--muted)">${e.action}</div>
-      </div>`
+      '<div style="padding:10px 0;border-bottom:1px solid var(--line)">' +
+      '<div style="font-size:12px;color:var(--muted)">' + String(e.at || '').replace('T', ' ').slice(0, 19) +
+      ' · ' + (e.actorEmail || e.actorUserId || 'system') + '</div>' +
+      '<div style="font-size:13px;font-weight:600">' + (e.summary || e.action) + '</div>' +
+      '<div style="font-size:11px;color:var(--muted)">' + e.action +
+      (e.entityType ? (' · ' + e.entityType) : '') + '</div></div>'
     ).join('');
   }
   m.classList.add('show');
+  m.style.display = 'grid';
 }
 
 function renderBooksAuditTrail() {
@@ -8996,19 +9061,23 @@ function renderBooksTrial() {
 function renderBooksLedger() {
   const sel = document.getElementById('booksLedgerAccount');
   const el = document.getElementById('booksLedger');
+  const crumb = document.getElementById('booksLedgerCrumb');
   if (!el) return;
   const coa = getCoa();
-  if (sel && !sel.dataset.ready) {
-    sel.innerHTML = coa.map(a => `<option value="${a.id}">${a.id} · ${a.name}</option>`).join('');
-    sel.dataset.ready = '1';
-    sel.onchange = () => renderBooksLedger();
-  }
-  // refresh options if new accounts
   if (sel) {
     const cur = sel.value;
-    sel.innerHTML = coa.map(a => `<option value="${a.id}" ${a.id === cur ? 'selected' : ''}>${a.id} · ${a.name}</option>`).join('');
+    sel.innerHTML = coa.map(a =>
+      '<option value="' + a.id + '"' + (a.id === cur ? ' selected' : '') + '>' + a.id + ' · ' + a.name + '</option>'
+    ).join('');
+    sel.onchange = () => renderBooksLedger();
   }
   const accountId = sel?.value || '1000';
+  const acc = coa.find(a => a.id === accountId);
+  if (crumb) {
+    crumb.innerHTML = '<span style="color:var(--muted)">Financial statements</span> → <b>Ledger · ' +
+      (acc ? (acc.id + ' · ' + acc.name) : accountId) +
+      '</span> → <span style="color:var(--muted)">click a row for journal + audit</span>';
+  }
   const range = booksDateRange();
   const lines = [];
   (db.journals || []).forEach(j => {
@@ -9027,7 +9096,6 @@ function renderBooksLedger() {
   });
   lines.sort((a, b) => String(a.date).localeCompare(String(b.date)));
   let run = 0;
-  // opening: balance before range.from
   if (range.from) {
     (db.journals || []).forEach(j => {
       if (String(j.date || '') >= range.from) return;
@@ -9043,30 +9111,37 @@ function renderBooksLedger() {
     return;
   }
   const rangeLabel = range.from || range.to
-    ? (` · ${range.from || '…'} → ${range.to || 'today'}`)
+    ? (' · ' + (range.from || '…') + ' → ' + (range.to || 'today'))
     : ' · all time';
-  let html = `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Opening balance: <b>${money(opening)}</b>${rangeLabel} · click a date to focus that day</div>`;
-  html += `<table class="table"><thead><tr><th>Date</th><th>Memo</th><th class="right">Debit</th><th class="right">Credit</th><th class="right">Balance</th></tr></thead><tbody>`;
+  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Opening: <b>' + money(opening) + '</b>' + rangeLabel + '</div>';
+  html += '<table class="table"><thead><tr><th>Date</th><th>Memo</th><th class="right">Debit</th><th class="right">Credit</th><th class="right">Balance</th><th></th></tr></thead><tbody>';
   lines.forEach(l => {
     run += l.debit - l.credit;
     const d = l.date || '';
-    html += `<tr>
-      <td>${d ? `<button type="button" class="button small" data-date-drill="${d}" style="padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline;cursor:pointer">${d}</button>` : '—'}</td>
-      <td>${l.memo || l.source || ''}</td>
-      <td class="right">${l.debit ? money(l.debit) : ''}</td>
-      <td class="right">${l.credit ? money(l.credit) : ''}</td>
-      <td class="right">${money(run)}</td>
-    </tr>`;
+    html += '<tr class="books-ledger-row" data-journal-drill="' + l.journalId + '" style="cursor:pointer" title="Open journal + audit">' +
+      '<td>' + (d || '—') + '</td>' +
+      '<td>' + String(l.memo || l.source || '').replace(/</g, '&lt;') + '</td>' +
+      '<td class="right">' + (l.debit ? money(l.debit) : '') + '</td>' +
+      '<td class="right">' + (l.credit ? money(l.credit) : '') + '</td>' +
+      '<td class="right">' + money(run) + '</td>' +
+      '<td><button type="button" class="button small" data-journal-drill="' + l.journalId + '">Entry</button></td>' +
+      '</tr>';
   });
-  html += `</tbody></table>`;
+  html += '</tbody></table>';
   el.innerHTML = html;
-  el.querySelectorAll('[data-date-drill]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const d = btn.getAttribute('data-date-drill');
-      if (d) drillToLedger(accountId, d);
+  const openJ = (id) => {
+    if (!id) return;
+    openJournalActivityModal(id, { fromAccount: accountId });
+  };
+  el.querySelectorAll('[data-journal-drill]').forEach(node => {
+    node.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openJ(node.getAttribute('data-journal-drill'));
     });
   });
 }
+
 
 function renderBooksReceivables() {
   const el = document.getElementById('booksReceivablesList');
@@ -12928,8 +13003,13 @@ document.getElementById('btnExportJournals')?.addEventListener('click', () => ex
 document.getElementById('btnSampleJournalCsv')?.addEventListener('click', () => downloadSampleJournalCsv());
 document.getElementById('btnPostSampleJournals')?.addEventListener('click', () => postSampleJournalsNow());
 document.getElementById('journalImportConfirm')?.addEventListener('click', () => commitJournalImport());
+document.getElementById('booksLedgerBackReports')?.addEventListener('click', () => {
+  setBooksPage('reports', 'trial');
+  try { renderBooksTrial(); } catch {}
+});
 document.getElementById('journalActivityClose')?.addEventListener('click', () => {
-  document.getElementById('journalActivityModal')?.classList.remove('show');
+  const m = document.getElementById('journalActivityModal');
+  if (m) { m.classList.remove('show'); m.style.display = ''; }
 });
 document.getElementById('journalActivityModal')?.addEventListener('click', (e) => {
   if (e.target.id === 'journalActivityModal') document.getElementById('journalActivityModal')?.classList.remove('show');
