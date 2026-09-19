@@ -2512,6 +2512,13 @@ input:focus:not(:focus-visible) {
       <div id="booksPanelBalance" hidden>
         <div class="insight"><h3>Balance sheet</h3><div id="booksBalanceSheet"></div></div>
       </div>
+      <div id="booksPanelCashflow" hidden>
+        <div class="insight">
+          <h3>Statement of cash flows</h3>
+          <p class="section-sub">Indirect method · period selected above · derived from P&amp;L and balance sheet movements.</p>
+          <div id="booksCashflow"></div>
+        </div>
+      </div>
       <div id="booksPanelLedger" hidden>
         <p id="booksLedgerCrumb" class="section-sub" style="margin:0 0 10px"></p>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center">
@@ -2553,7 +2560,7 @@ input:focus:not(:focus-visible) {
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <div>
             <h3 style="margin:0">Chart of accounts</h3>
-            <p class="section-sub" style="margin:4px 0 0">Edit names, add accounts, or import a CSV. System codes stay stable for posting rules.</p>
+            <p class="section-sub" style="margin:4px 0 0">Edit names, FS line, statement (bs/pl), and cash-flow section. Import CSV with columns: code, name, type, statement, fs_line, cf_section.</p>
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:8px">
             <button type="button" class="button small" id="btnDownloadCoaSample">Sample CSV</button>
@@ -7857,29 +7864,58 @@ function persist(s) {
  * Reports: P&L, Balance sheet, Journal, Cash ledger
  */
 
+/** Financial statement line definitions for report rollups */
+const FS_LINES = {
+  // Balance sheet
+  cash_and_equivalents: { statement: 'bs', section: 'assets', label: 'Cash & cash equivalents', order: 10 },
+  receivables: { statement: 'bs', section: 'assets', label: 'Accounts receivable', order: 20 },
+  inventory: { statement: 'bs', section: 'assets', label: 'Inventory', order: 30 },
+  other_current_assets: { statement: 'bs', section: 'assets', label: 'Other current assets', order: 40 },
+  non_current_assets: { statement: 'bs', section: 'assets', label: 'Non-current assets', order: 50 },
+  payables: { statement: 'bs', section: 'liabilities', label: 'Accounts payable', order: 60 },
+  tax_payable: { statement: 'bs', section: 'liabilities', label: 'Tax payable', order: 70 },
+  other_current_liabilities: { statement: 'bs', section: 'liabilities', label: 'Other current liabilities', order: 80 },
+  loans: { statement: 'bs', section: 'liabilities', label: 'Loans & borrowings', order: 90 },
+  equity: { statement: 'bs', section: 'equity', label: 'Equity', order: 100 },
+  // Profit & loss
+  revenue: { statement: 'pl', section: 'income', label: 'Revenue', order: 10 },
+  other_income: { statement: 'pl', section: 'income', label: 'Other income', order: 20 },
+  cogs: { statement: 'pl', section: 'expense', label: 'Cost of sales', order: 30 },
+  operating_expense: { statement: 'pl', section: 'expense', label: 'Operating expenses', order: 40 },
+  finance_cost: { statement: 'pl', section: 'expense', label: 'Finance costs', order: 50 },
+  tax_expense: { statement: 'pl', section: 'expense', label: 'Tax expense', order: 60 },
+  // Cash flow classification (indirect method tags)
+  cf_operating: { statement: 'cf', section: 'operating', label: 'Operating activities', order: 10 },
+  cf_investing: { statement: 'cf', section: 'investing', label: 'Investing activities', order: 20 },
+  cf_financing: { statement: 'cf', section: 'financing', label: 'Financing activities', order: 30 }
+};
+
 const COA = [
   // Assets
-  { id: '1000', name: 'Cash', type: 'asset' },
-  { id: '1100', name: 'Accounts receivable', type: 'asset' },
-  { id: '1200', name: 'Input VAT / tax recoverable', type: 'asset' },
+  { id: '1000', name: 'Cash', type: 'asset', statement: 'bs', fsLine: 'cash_and_equivalents', cfSection: 'cash' },
+  { id: '1100', name: 'Accounts receivable', type: 'asset', statement: 'bs', fsLine: 'receivables', cfSection: 'operating' },
+  { id: '1200', name: 'Input VAT / tax recoverable', type: 'asset', statement: 'bs', fsLine: 'other_current_assets', cfSection: 'operating' },
+  { id: '1300', name: 'Inventory', type: 'asset', statement: 'bs', fsLine: 'inventory', cfSection: 'operating' },
   // Liabilities
-  { id: '2000', name: 'Accounts payable', type: 'liability' },
-  { id: '2100', name: 'Output VAT / tax payable', type: 'liability' },
+  { id: '2000', name: 'Accounts payable', type: 'liability', statement: 'bs', fsLine: 'payables', cfSection: 'operating' },
+  { id: '2100', name: 'Output VAT / tax payable', type: 'liability', statement: 'bs', fsLine: 'tax_payable', cfSection: 'operating' },
+  { id: '2200', name: 'Loans payable', type: 'liability', statement: 'bs', fsLine: 'loans', cfSection: 'financing' },
   // Equity
-  { id: '3000', name: 'Owner equity', type: 'equity' },
-  { id: '3100', name: 'Owner drawings', type: 'equity' },
+  { id: '3000', name: 'Owner equity', type: 'equity', statement: 'bs', fsLine: 'equity', cfSection: 'financing' },
+  { id: '3100', name: 'Owner drawings', type: 'equity', statement: 'bs', fsLine: 'equity', cfSection: 'financing' },
   // Income
-  { id: '4000', name: 'Sales revenue', type: 'income' },
-  { id: '4100', name: 'Other income', type: 'income' },
+  { id: '4000', name: 'Sales revenue', type: 'income', statement: 'pl', fsLine: 'revenue', cfSection: 'operating' },
+  { id: '4100', name: 'Other income', type: 'income', statement: 'pl', fsLine: 'other_income', cfSection: 'operating' },
   // Expenses
-  { id: '5000', name: 'Cost of sales / supplies', type: 'expense' },
-  { id: '5100', name: 'Rent & workspace', type: 'expense' },
-  { id: '5200', name: 'Utilities, data & airtime', type: 'expense' },
-  { id: '5300', name: 'Transport & logistics', type: 'expense' },
-  { id: '5400', name: 'Salaries & helpers', type: 'expense' },
-  { id: '5500', name: 'Bank, POS & platform fees', type: 'expense' },
-  { id: '5600', name: 'Tax & levies (expense)', type: 'expense' },
-  { id: '5700', name: 'Other expenses', type: 'expense' }
+  { id: '5000', name: 'Cost of sales / supplies', type: 'expense', statement: 'pl', fsLine: 'cogs', cfSection: 'operating' },
+  { id: '5100', name: 'Rent & workspace', type: 'expense', statement: 'pl', fsLine: 'operating_expense', cfSection: 'operating' },
+  { id: '5200', name: 'Utilities, data & airtime', type: 'expense', statement: 'pl', fsLine: 'operating_expense', cfSection: 'operating' },
+  { id: '5300', name: 'Transport & logistics', type: 'expense', statement: 'pl', fsLine: 'operating_expense', cfSection: 'operating' },
+  { id: '5400', name: 'Salaries & helpers', type: 'expense', statement: 'pl', fsLine: 'operating_expense', cfSection: 'operating' },
+  { id: '5500', name: 'Bank, POS & platform fees', type: 'expense', statement: 'pl', fsLine: 'finance_cost', cfSection: 'operating' },
+  { id: '5600', name: 'Tax & levies (expense)', type: 'expense', statement: 'pl', fsLine: 'tax_expense', cfSection: 'operating' },
+  { id: '5700', name: 'Other expenses', type: 'expense', statement: 'pl', fsLine: 'operating_expense', cfSection: 'operating' },
+  { id: '1500', name: 'Equipment & fixed assets', type: 'asset', statement: 'bs', fsLine: 'non_current_assets', cfSection: 'investing' }
 ];
 
 const EXPENSE_ACCOUNT_BY_CATEGORY = {
@@ -7944,20 +7980,52 @@ function ensureBooksDb() {
 function ensureCashEntries() { ensureBooksDb(); }
 
 /** Full chart = system COA + user-added accounts */
+function defaultFsMeta(type) {
+  const t = type || 'asset';
+  if (t === 'income') return { statement: 'pl', fsLine: 'revenue', cfSection: 'operating' };
+  if (t === 'expense') return { statement: 'pl', fsLine: 'operating_expense', cfSection: 'operating' };
+  if (t === 'liability') return { statement: 'bs', fsLine: 'other_current_liabilities', cfSection: 'operating' };
+  if (t === 'equity') return { statement: 'bs', fsLine: 'equity', cfSection: 'financing' };
+  return { statement: 'bs', fsLine: 'other_current_assets', cfSection: 'operating' };
+}
+
 function getCoa() {
   ensureBooksDb();
   const map = new Map();
   COA.forEach(a => map.set(a.id, { ...a, system: true }));
   (db.coaExtra || []).forEach(a => {
-    if (a && a.id) map.set(String(a.id), { id: String(a.id), name: a.name || a.id, type: a.type || 'asset', system: false });
+    if (a && a.id) {
+      const d = defaultFsMeta(a.type);
+      map.set(String(a.id), {
+        id: String(a.id),
+        name: a.name || a.id,
+        type: a.type || 'asset',
+        statement: a.statement || d.statement,
+        fsLine: a.fsLine || d.fsLine,
+        cfSection: a.cfSection || d.cfSection,
+        system: false
+      });
+    }
   });
-  // Name overrides (system or custom)
   const ov = db.coaOverrides || {};
   map.forEach((a, id) => {
     if (ov[id] && ov[id].name) a.name = ov[id].name;
     if (ov[id] && ov[id].type && !a.system) a.type = ov[id].type;
+    if (ov[id] && ov[id].statement) a.statement = ov[id].statement;
+    if (ov[id] && ov[id].fsLine) a.fsLine = ov[id].fsLine;
+    if (ov[id] && ov[id].cfSection) a.cfSection = ov[id].cfSection;
+    if (!a.statement || !a.fsLine) {
+      const d = defaultFsMeta(a.type);
+      a.statement = a.statement || d.statement;
+      a.fsLine = a.fsLine || d.fsLine;
+      a.cfSection = a.cfSection || d.cfSection;
+    }
   });
   return Array.from(map.values()).sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+}
+
+function fsLineLabel(key) {
+  return (FS_LINES[key] && FS_LINES[key].label) || key || 'Other';
 }
 
 function coaName(id) {
@@ -8432,6 +8500,7 @@ const BOOKS_PAGES = {
     tabs: [
       { id: 'pnl', label: 'Profit & loss' },
       { id: 'balance', label: 'Balance sheet' },
+      { id: 'cashflow', label: 'Cash flow' },
       { id: 'trial', label: 'Trial balance' },
       { id: 'ledger', label: 'General ledger' }
     ],
@@ -8527,6 +8596,7 @@ function setBooksTab(tab) {
     receivables: 'booksPanelReceivables',
     coa: 'booksPanelCoa',
     trial: 'booksPanelTrial',
+    cashflow: 'booksPanelCashflow',
     cash: 'booksPanelCash',
     banktx: 'booksPanelBankTx',
     bankrules: 'booksPanelBankRules',
@@ -8540,33 +8610,59 @@ function setBooksTab(tab) {
   });
 }
 
+function accountPeriodNet(accountId, act) {
+  const a = getCoa().find(x => x.id === accountId);
+  if (!a) return 0;
+  const row = act[accountId] || { debit: 0, credit: 0 };
+  if (a.type === 'income' || a.type === 'liability' || a.type === 'equity') {
+    return (row.credit || 0) - (row.debit || 0);
+  }
+  return (row.debit || 0) - (row.credit || 0);
+}
+
 function renderBooksPnl() {
   const el = document.getElementById('booksPnl');
   if (!el) return;
   const act = periodActivity();
-  const income = getCoa().filter(a => a.type === 'income').map(a => {
-    const net = (act[a.id]?.credit || 0) - (act[a.id]?.debit || 0);
-    return { ...a, net };
-  }).filter(a => Math.abs(a.net) > 0.001);
-  const expenses = getCoa().filter(a => a.type === 'expense' || a.id === '3100').map(a => {
-    const net = (act[a.id]?.debit || 0) - (act[a.id]?.credit || 0);
-    return { ...a, net };
-  }).filter(a => Math.abs(a.net) > 0.001);
-  const rev = income.reduce((n, a) => n + a.net, 0);
-  const exp = expenses.reduce((n, a) => n + a.net, 0);
+  const plAccounts = getCoa().filter(a => a.statement === 'pl' || a.type === 'income' || a.type === 'expense');
+  // Group by fsLine
+  const groups = {};
+  plAccounts.forEach(a => {
+    const key = a.fsLine || (a.type === 'income' ? 'revenue' : 'operating_expense');
+    if (!groups[key]) groups[key] = { key, label: fsLineLabel(key), meta: FS_LINES[key] || {}, lines: [], total: 0 };
+    const net = accountPeriodNet(a.id, act);
+    if (Math.abs(net) < 0.001) return;
+    groups[key].lines.push({ ...a, net });
+    groups[key].total += net;
+  });
+  const ordered = Object.values(groups).sort((a, b) => (a.meta.order || 99) - (b.meta.order || 99));
+  const incomeKeys = new Set(['revenue', 'other_income']);
+  let totalIncome = 0, totalExpense = 0;
+  ordered.forEach(g => {
+    if (incomeKeys.has(g.key) || (g.meta.section === 'income')) totalIncome += g.total;
+    else totalExpense += g.total;
+  });
+
   const row = (name, amt, bold, accountId) =>
-    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);${bold ? 'font-weight:700' : ''}">
-      <span>${accountId ? `<button type="button" class="button small" data-gl-drill="${accountId}" style="padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline;cursor:pointer">${name}</button>` : name}</span><span>${money(amt)}</span></div>`;
-  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Accrual basis · reporting currency · click an account to open its ledger</div>';
-  html += '<div style="font-weight:700;margin:8px 0 4px">Income</div>';
-  if (!income.length) html += row('No revenue in period', 0, false, null);
-  income.forEach(a => { html += row(a.name, a.net, false, a.id); });
-  html += row('Total income', rev, true, null);
-  html += '<div style="font-weight:700;margin:16px 0 4px">Expenses</div>';
-  if (!expenses.length) html += row('No expenses in period', 0, false, null);
-  expenses.forEach(a => { html += row(a.name, a.net, false, a.id); });
-  html += row('Total expenses', exp, true, null);
-  html += row('Net profit / (loss)', rev - exp, true, null);
+    '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);' +
+    (bold ? 'font-weight:700' : '') + '"><span>' +
+    (accountId
+      ? '<button type="button" class="button small" data-gl-drill="' + accountId +
+        '" style="padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline;cursor:pointer">' +
+        name + '</button>'
+      : name) +
+    '</span><span>' + money(amt) + '</span></div>';
+
+  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Accrual · reporting currency · grouped by FS line · click account for ledger</div>';
+  ordered.forEach(g => {
+    html += '<div style="font-weight:700;margin:14px 0 4px">' + g.label +
+      ' <span class="mini" style="font-weight:500;color:var(--muted)">FS · ' + g.key + '</span></div>';
+    if (!g.lines.length) html += row('No activity', 0, false, null);
+    g.lines.forEach(a => { html += row(a.id + ' · ' + a.name, a.net, false, a.id); });
+    html += row('Total ' + g.label, g.total, true, null);
+  });
+  const profit = totalIncome - totalExpense;
+  html += row('Net profit / (loss)', profit, true, null);
   el.innerHTML = html;
   el.querySelectorAll('[data-gl-drill]').forEach(btn => {
     btn.addEventListener('click', () => drillToLedger(btn.getAttribute('data-gl-drill')));
@@ -8577,64 +8673,204 @@ function renderBooksBalance() {
   const el = document.getElementById('booksBalanceSheet');
   if (!el) return;
   const bal = accountBalances(null);
-  // Net income all-time from income/expense accounts feeds equity
   let retained = 0;
   getCoa().forEach(a => {
     const b = bal[a.id] || 0;
     if (a.type === 'income') retained += -b;
     if (a.type === 'expense') retained += -b;
   });
+
+  const groups = {};
+  getCoa().filter(a => a.statement === 'bs' || a.type === 'asset' || a.type === 'liability' || a.type === 'equity').forEach(a => {
+    if (a.type === 'income' || a.type === 'expense') return;
+    const key = a.fsLine || defaultFsMeta(a.type).fsLine;
+    if (!groups[key]) groups[key] = { key, label: fsLineLabel(key), meta: FS_LINES[key] || {}, lines: [], total: 0 };
+    let amt = bal[a.id] || 0;
+    // Present BS natural sign: assets debit+, liabilities/equity credit+ as positive
+    if (a.type === 'liability' || a.type === 'equity') amt = -amt;
+    if (Math.abs(amt) < 0.001) return;
+    groups[key].lines.push({ ...a, amt });
+    groups[key].total += amt;
+  });
+  // Retained earnings under equity
+  if (Math.abs(retained) > 0.001) {
+    const key = 'equity';
+    if (!groups[key]) groups[key] = { key, label: fsLineLabel(key), meta: FS_LINES[key] || {}, lines: [], total: 0 };
+    groups[key].lines.push({ id: null, name: 'Retained earnings (P&L)', amt: retained });
+    groups[key].total += retained;
+  }
+
+  const ordered = Object.values(groups).sort((a, b) => (a.meta.order || 99) - (b.meta.order || 99));
   const row = (name, amt, bold, accountId) =>
-    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);${bold ? 'font-weight:700' : ''}">
-      <span>${accountId ? `<button type="button" class="button small" data-gl-drill="${accountId}" style="padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline;cursor:pointer">${name}</button>` : name}</span><span>${money(amt)}</span></div>`;
-  const assets = getCoa().filter(a => a.type === 'asset');
-  const liabilities = getCoa().filter(a => a.type === 'liability');
-  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">As at today · reporting currency · click an account for ledger</div>';
-  html += '<div style="font-weight:700;margin:8px 0 4px">Cash &amp; cash equivalents</div>';
-  let assetTotal = 0;
-  let cashTotal = 0;
-  assets.forEach(a => {
-    const v = bal[a.id] || 0;
-    assetTotal += v;
-    if (!isCashEquivalentAccount(a)) return;
-    cashTotal += v;
-    if (Math.abs(v) > 0.001) html += row(a.name, v, false, a.id);
+    '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);' +
+    (bold ? 'font-weight:700' : '') + '"><span>' +
+    (accountId
+      ? '<button type="button" class="button small" data-gl-drill="' + accountId +
+        '" style="padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline;cursor:pointer">' +
+        name + '</button>'
+      : name) +
+    '</span><span>' + money(amt) + '</span></div>';
+
+  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">As at period end · reporting currency · grouped by FS line</div>';
+  let assetTotal = 0, liabTotal = 0, equityTotal = 0;
+  ordered.forEach(g => {
+    const sec = (g.meta && g.meta.section) || 'assets';
+    html += '<div style="font-weight:700;margin:14px 0 4px">' + g.label +
+      ' <span class="mini" style="font-weight:500;color:var(--muted)">FS · ' + g.key + '</span></div>';
+    g.lines.forEach(a => {
+      html += row((a.id ? a.id + ' · ' : '') + a.name, a.amt, false, a.id);
+    });
+    html += row('Total ' + g.label, g.total, true, null);
+    if (sec === 'assets') assetTotal += g.total;
+    else if (sec === 'liabilities') liabTotal += g.total;
+    else equityTotal += g.total;
   });
-  if (Math.abs(cashTotal) < 0.001) html += row('No cash / bank balances', 0, false, null);
-  html += row('Total cash &amp; equivalents', cashTotal, true, null);
-  html += '<div style="font-weight:700;margin:16px 0 4px">Other assets</div>';
-  let otherShown = false;
-  assets.forEach(a => {
-    if (isCashEquivalentAccount(a)) return;
-    const v = bal[a.id] || 0;
-    if (Math.abs(v) > 0.001) {
-      otherShown = true;
-      html += row(a.name, v, false, a.id);
-    }
-  });
-  if (!otherShown) html += row('None', 0, false, null);
   html += row('Total assets', assetTotal, true, null);
-  html += '<div style="font-weight:700;margin:16px 0 4px">Liabilities</div>';
-  let liabTotal = 0;
-  liabilities.forEach(a => {
-    const v = -(bal[a.id] || 0); // credit-normal
-    liabTotal += v;
-    if (Math.abs(v) > 0.001) html += row(a.name, v, false, a.id);
-  });
-  if (Math.abs(liabTotal) < 0.001) html += row('No liabilities', 0, false, null);
-  html += row('Total liabilities', liabTotal, true, null);
-  const drawings = -(bal['3100'] || 0);
-  const equity = retained - (bal['3100'] || 0);
-  html += '<div style="font-weight:700;margin:16px 0 4px">Equity</div>';
-  html += row('Retained earnings (incl. P&L)', retained, false, null);
-  if (Math.abs(bal['3100'] || 0) > 0.001) html += row('Owner drawings', bal['3100'] || 0, false, '3100');
-  html += row('Total equity', equity, true, null);
-  html += row('Liabilities + equity', liabTotal + equity, true, null);
+  html += row('Total liabilities + equity', liabTotal + equityTotal, true, null);
   el.innerHTML = html;
   el.querySelectorAll('[data-gl-drill]').forEach(btn => {
     btn.addEventListener('click', () => drillToLedger(btn.getAttribute('data-gl-drill')));
   });
 }
+
+/** Indirect cash flow for the selected books period */
+function renderBooksCashflow() {
+  const el = document.getElementById('booksCashflow');
+  if (!el) return;
+  ensureBooksDb();
+  const range = booksDateRange();
+  const act = periodActivity();
+
+  // Net profit from P&L activity
+  let netIncome = 0;
+  getCoa().forEach(a => {
+    if (a.type === 'income') netIncome += accountPeriodNet(a.id, act);
+    if (a.type === 'expense') netIncome -= accountPeriodNet(a.id, act);
+  });
+
+  // Working capital changes: balance before period vs end of period
+  function balancesAsOf(cutExclusive) {
+    const bal = {};
+    getCoa().forEach(a => { bal[a.id] = 0; });
+    (db.journals || []).forEach(j => {
+      if (cutExclusive && String(j.date || '') >= cutExclusive) return;
+      (j.lines || []).forEach(l => {
+        if (!bal.hasOwnProperty(l.accountId)) bal[l.accountId] = 0;
+        bal[l.accountId] += (Number(l.debit) || 0) - (Number(l.credit) || 0);
+      });
+    });
+    return bal;
+  }
+  const startCut = range.from || null;
+  const endCut = range.to ? (function() {
+    // include end date: use day after
+    try {
+      const d = new Date(range.to + 'T12:00:00');
+      d.setDate(d.getDate() + 1);
+      return d.toISOString().slice(0, 10);
+    } catch (_) { return null; }
+  })() : null;
+  const balStart = balancesAsOf(startCut);
+  const balEnd = balancesAsOf(endCut);
+
+  function signedChange(a, start, end) {
+    // asset increase = use of cash (negative for operating WC assets)
+    // liability increase = source of cash
+    const s = start[a.id] || 0;
+    const e = end[a.id] || 0;
+    const delta = e - s; // debit balance increase for assets
+    if (a.type === 'asset') return -delta;
+    if (a.type === 'liability' || a.type === 'equity') return delta; // debit decrease / credit increase → +delta when stored as debit-credit
+    // stored bal is debit - credit, so liability natural is negative; increase in liability means more negative end → delta negative → we want + for cash
+    return 0;
+  }
+  // Fix liability: bal is debit-credit, liability increase → balance becomes more negative → delta < 0, cash source should be positive → use -delta for liability? 
+  // Example: AP credit 100: line credit 100 → bal -= 100. Start 0 end -100, delta=-100. Source of cash +100 → return -delta for liability.
+  function wcCashEffect(a, start, end) {
+    const delta = (end[a.id] || 0) - (start[a.id] || 0);
+    if (a.type === 'asset' && a.cfSection === 'operating' && a.fsLine !== 'cash_and_equivalents') return -delta;
+    if ((a.type === 'liability' || a.type === 'equity') && a.cfSection === 'operating') return -delta;
+    return 0;
+  }
+
+  let operatingAdj = 0;
+  const opLines = [];
+  getCoa().forEach(a => {
+    if (a.cfSection !== 'operating') return;
+    if (a.type === 'income' || a.type === 'expense') return;
+    const eff = wcCashEffect(a, balStart, balEnd);
+    if (Math.abs(eff) < 0.001) return;
+    operatingAdj += eff;
+    opLines.push({ name: a.id + ' · ' + a.name, amt: eff });
+  });
+
+  // Investing: period net movement on investing accounts (asset purchases increase = use of cash)
+  let investing = 0;
+  const invLines = [];
+  getCoa().forEach(a => {
+    if (a.cfSection !== 'investing') return;
+    const delta = (balEnd[a.id] || 0) - (balStart[a.id] || 0);
+    const eff = a.type === 'asset' ? -delta : -delta;
+    if (Math.abs(eff) < 0.001) return;
+    investing += eff;
+    invLines.push({ name: a.id + ' · ' + a.name, amt: eff });
+  });
+
+  // Financing
+  let financing = 0;
+  const finLines = [];
+  getCoa().forEach(a => {
+    if (a.cfSection !== 'financing') return;
+    const delta = (balEnd[a.id] || 0) - (balStart[a.id] || 0);
+    // equity/loan credit increase (more negative bal) → cash in → -delta
+    const eff = -delta;
+    if (Math.abs(eff) < 0.001) return;
+    financing += eff;
+    finLines.push({ name: a.id + ' · ' + a.name, amt: eff });
+  });
+
+  const operating = netIncome + operatingAdj;
+  const netChange = operating + investing + financing;
+
+  // Cash & equivalents change (proof)
+  let cashChange = 0;
+  getCoa().filter(a => a.fsLine === 'cash_and_equivalents' || a.cfSection === 'cash').forEach(a => {
+    cashChange += (balEnd[a.id] || 0) - (balStart[a.id] || 0);
+  });
+
+  const row = (name, amt, bold) =>
+    '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);' +
+    (bold ? 'font-weight:700' : '') + '"><span>' + name + '</span><span>' + money(amt) + '</span></div>';
+
+  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Indirect method · ' +
+    (range.from || range.to ? ((range.from || '…') + ' → ' + (range.to || 'today')) : 'all time') +
+    ' · reporting currency</div>';
+
+  html += '<div style="font-weight:700;margin:12px 0 4px">Operating activities</div>';
+  html += row('Net profit / (loss)', netIncome, false);
+  opLines.forEach(l => { html += row('  ' + l.name, l.amt, false); });
+  html += row('Cash from operating activities', operating, true);
+
+  html += '<div style="font-weight:700;margin:16px 0 4px">Investing activities</div>';
+  if (!invLines.length) html += row('No investing movements', 0, false);
+  invLines.forEach(l => { html += row('  ' + l.name, l.amt, false); });
+  html += row('Cash from investing activities', investing, true);
+
+  html += '<div style="font-weight:700;margin:16px 0 4px">Financing activities</div>';
+  if (!finLines.length) html += row('No financing movements', 0, false);
+  finLines.forEach(l => { html += row('  ' + l.name, l.amt, false); });
+  html += row('Cash from financing activities', financing, true);
+
+  html += row('Net increase / (decrease) in cash', netChange, true);
+  html += row('Change in cash & equivalents (ledger)', cashChange, false);
+  const bridge = Math.round((netChange - cashChange) * 100) / 100;
+  if (Math.abs(bridge) > 1) {
+    html += '<p class="section-sub" style="color:var(--muted)">Bridge difference ' + money(bridge) +
+      ' — usually timing, non-cash equity, or accounts not tagged for cash flow. Refine COA cfSection if needed.</p>';
+  }
+  el.innerHTML = html;
+}
+
 
 function renderBooksJournal() {
   const el = document.getElementById('booksJournal');
@@ -9255,75 +9491,124 @@ function renderBooksCoa() {
   if (!el) return;
   const bal = accountBalances(null);
   const rows = getCoa();
-  el.innerHTML = `<table class="table"><thead><tr><th>Code</th><th>Name</th><th>Type</th><th class="right">Balance</th><th></th></tr></thead><tbody>` +
+  const fsOpts = Object.keys(FS_LINES).map(k =>
+    '<option value="' + k + '">' + k + '</option>'
+  ).join('');
+  el.innerHTML = '<table class="table"><thead><tr>' +
+    '<th>Code</th><th>Name</th><th>Type</th><th>Statement</th><th>FS line</th><th>Cash flow</th>' +
+    '<th class="right">Balance</th><th></th></tr></thead><tbody>' +
     rows.map(a => {
       let display = bal[a.id] || 0;
       if (a.type === 'liability' || a.type === 'equity' || a.type === 'income') display = -display;
-      const del = a.system ? '' : `<button class="button small danger" data-del-account="${a.id}">Remove</button>`;
+      const del = a.system ? '' : '<button class="button small danger" data-del-account="' + a.id + '">Remove</button>';
       const typeCell = a.system
-        ? `<span style="text-transform:capitalize">${a.type}</span>`
-        : `<select data-coa-type="${a.id}" style="max-width:110px">
-            ${['asset','liability','equity','income','expense'].map(t =>
-              `<option value="${t}" ${t === a.type ? 'selected' : ''}>${t}</option>`
-            ).join('')}
-          </select>`;
-      return `<tr>
-        <td><code>${a.id}</code>${a.system ? ' <span class="mini">system</span>' : ''}</td>
-        <td><input data-coa-name="${a.id}" value="${String(a.name || '').replace(/"/g, '&quot;')}" style="width:100%;min-width:140px"></td>
-        <td>${typeCell}</td>
-        <td class="right">${money(display)}</td>
-        <td class="actions">${del}</td>
-      </tr>`;
+        ? '<span style="text-transform:capitalize">' + a.type + '</span>'
+        : '<select data-coa-type="' + a.id + '" style="max-width:100px">' +
+          ['asset','liability','equity','income','expense'].map(tp =>
+            '<option value="' + tp + '"' + (tp === a.type ? ' selected' : '') + '>' + tp + '</option>'
+          ).join('') + '</select>';
+      const stmtCell = '<select data-coa-stmt="' + a.id + '" style="max-width:70px">' +
+        ['bs','pl'].map(s => '<option value="' + s + '"' + (a.statement === s ? ' selected' : '') + '>' + s + '</option>').join('') +
+        '</select>';
+      const fsCell = '<select data-coa-fs="' + a.id + '" style="max-width:140px">' +
+        Object.keys(FS_LINES).map(k =>
+          '<option value="' + k + '"' + (a.fsLine === k ? ' selected' : '') + '>' + k + '</option>'
+        ).join('') + '</select>';
+      const cfCell = '<select data-coa-cf="' + a.id + '" style="max-width:100px">' +
+        ['operating','investing','financing','cash'].map(s =>
+          '<option value="' + s + '"' + (a.cfSection === s ? ' selected' : '') + '>' + s + '</option>'
+        ).join('') + '</select>';
+      return '<tr>' +
+        '<td><code>' + a.id + '</code>' + (a.system ? ' <span class="mini">system</span>' : '') + '</td>' +
+        '<td><input data-coa-name="' + a.id + '" value="' + String(a.name || '').replace(/"/g, '&quot;') + '" style="width:100%;min-width:120px"></td>' +
+        '<td>' + typeCell + '</td>' +
+        '<td>' + stmtCell + '</td>' +
+        '<td>' + fsCell + '</td>' +
+        '<td>' + cfCell + '</td>' +
+        '<td class="right">' + money(display) + '</td>' +
+        '<td>' + del + '</td></tr>';
     }).join('') + '</tbody></table>';
+
+  const persistMeta = (id, patch) => {
+    ensureBooksDb();
+    const system = COA.some(x => x.id === id);
+    const extra = (db.coaExtra || []).find(x => x.id === id);
+    if (extra) Object.assign(extra, patch);
+    else db.coaOverrides[id] = { ...(db.coaOverrides[id] || {}), ...patch };
+    try { persistDb(); } catch (_) {}
+    try { save(); } catch (_) {}
+  };
 
   el.querySelectorAll('[data-coa-name]').forEach(inp => {
     inp.addEventListener('change', () => {
-      ensureBooksDb();
       const id = inp.getAttribute('data-coa-name');
       const name = String(inp.value || '').trim();
       if (!name) return;
-      const extra = (db.coaExtra || []).find(a => a.id === id);
-      if (extra) {
-        extra.name = name;
-      } else {
-        db.coaOverrides[id] = { ...(db.coaOverrides[id] || {}), name };
-      }
-      save();
-      queueBooksCloudSync();
+      persistMeta(id, { name });
       toast('Account updated');
     });
   });
   el.querySelectorAll('[data-coa-type]').forEach(sel => {
     sel.addEventListener('change', () => {
-      ensureBooksDb();
-      const id = sel.getAttribute('data-coa-type');
-      const extra = (db.coaExtra || []).find(a => a.id === id);
-      if (extra) {
-        extra.type = sel.value;
-        save();
-        queueBooksCloudSync();
-        renderBooksCoa();
-      }
+      persistMeta(sel.getAttribute('data-coa-type'), { type: sel.value });
+      renderBooksCoa();
+    });
+  });
+  el.querySelectorAll('[data-coa-stmt]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      persistMeta(sel.getAttribute('data-coa-stmt'), { statement: sel.value });
+      toast('Statement mapping saved');
+    });
+  });
+  el.querySelectorAll('[data-coa-fs]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      persistMeta(sel.getAttribute('data-coa-fs'), { fsLine: sel.value });
+      toast('FS line saved');
+    });
+  });
+  el.querySelectorAll('[data-coa-cf]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      persistMeta(sel.getAttribute('data-coa-cf'), { cfSection: sel.value });
+      toast('Cash-flow section saved');
+    });
+  });
+  el.querySelectorAll('[data-del-account]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-del-account');
+      db.coaExtra = (db.coaExtra || []).filter(a => a.id !== id);
+      try { save(); } catch (_) {}
+      renderBooksCoa();
+      toast('Account removed');
     });
   });
 }
 
+
 function downloadCoaSampleCsv() {
-  const lines = ['code,name,type'];
+  const lines = ['code,name,type,statement,fs_line,cf_section'];
   getCoa().forEach(a => {
-    lines.push([a.id, '"' + String(a.name).replace(/"/g, '""') + '"', a.type].join(','));
+    const cells = [
+      a.id,
+      '"' + String(a.name || '').replace(/"/g, '""') + '"',
+      a.type || '',
+      a.statement || '',
+      a.fsLine || '',
+      a.cfSection || ''
+    ];
+    lines.push(cells.join(','));
   });
-  // extra sample rows for new accounts
-  lines.push('1050,"Bank — GTBank",asset');
-  lines.push('5800,"Marketing & ads",expense');
+  // Extra sample rows for new bank / expense accounts
+  lines.push('1050,"Bank — GTBank",asset,bs,cash_and_equivalents,cash');
+  lines.push('5800,"Marketing & ads",expense,pl,operating_expense,operating');
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'invoicedey-chart-of-accounts.csv';
   a.click();
   URL.revokeObjectURL(a.href);
-  toast('Sample COA downloaded');
+  toast('Sample COA downloaded (includes statement, FS line, cash-flow section)');
 }
+
 
 function importCoaCsvFile(file) {
   if (!file) return;
@@ -9333,10 +9618,13 @@ function importCoaCsvFile(file) {
       ensureBooksDb();
       const rows = parseCsvText(reader.result);
       if (rows.length < 2) { toast('CSV needs a header and rows'); return; }
-      const header = rows[0].map(h => String(h || '').trim().toLowerCase());
-      const iCode = header.findIndex(h => h === 'code' || h === 'id' || h === 'account');
+      const header = rows[0].map(h => String(h || '').trim().toLowerCase().replace(/\s+/g, ' '));
+      const iCode = header.findIndex(h => h === 'code' || h === 'id' || h === 'account' || h === 'account code');
       const iName = header.findIndex(h => h === 'name' || h === 'account name');
-      const iType = header.findIndex(h => h === 'type' || h === 'account_type');
+      const iType = header.findIndex(h => h === 'type' || h === 'account_type' || h === 'account type');
+      const iStmt = header.findIndex(h => h === 'statement' || h === 'fs' || h === 'financial statement');
+      const iFs = header.findIndex(h => h === 'fs_line' || h === 'fs line' || h === 'line' || h === 'statement line');
+      const iCf = header.findIndex(h => h === 'cf_section' || h === 'cf section' || h === 'cash flow' || h === 'cashflow' || h === 'cf');
       if (iCode < 0 || iName < 0) { toast('CSV needs code and name columns'); return; }
       let added = 0, updated = 0;
       rows.slice(1).forEach(r => {
@@ -9344,19 +9632,31 @@ function importCoaCsvFile(file) {
         const name = String(r[iName] || '').trim();
         let type = iType >= 0 ? String(r[iType] || 'asset').trim().toLowerCase() : 'asset';
         if (!['asset','liability','equity','income','expense'].includes(type)) type = 'asset';
+        const d = defaultFsMeta(type);
+        let statement = iStmt >= 0 ? String(r[iStmt] || '').trim().toLowerCase() : d.statement;
+        if (statement === 'balance_sheet' || statement === 'balance sheet') statement = 'bs';
+        if (statement === 'profit_loss' || statement === 'p&l' || statement === 'pnl' || statement === 'income') statement = 'pl';
+        if (!['bs','pl'].includes(statement)) statement = d.statement;
+        let fsLine = iFs >= 0 ? String(r[iFs] || '').trim().toLowerCase().replace(/\s+/g, '_') : d.fsLine;
+        if (!FS_LINES[fsLine]) fsLine = d.fsLine;
+        let cfSection = iCf >= 0 ? String(r[iCf] || '').trim().toLowerCase() : d.cfSection;
+        if (!['operating','investing','financing','cash'].includes(cfSection)) cfSection = d.cfSection;
         if (!code || !name) return;
         const system = COA.some(a => a.id === code);
         if (system) {
-          db.coaOverrides[code] = { ...(db.coaOverrides[code] || {}), name };
+          db.coaOverrides[code] = { ...(db.coaOverrides[code] || {}), name, statement, fsLine, cfSection };
           updated++;
         } else {
           const existing = (db.coaExtra || []).find(a => a.id === code);
           if (existing) {
             existing.name = name;
             existing.type = type;
+            existing.statement = statement;
+            existing.fsLine = fsLine;
+            existing.cfSection = cfSection;
             updated++;
           } else {
-            db.coaExtra.push({ id: code, name, type });
+            db.coaExtra.push({ id: code, name, type, statement, fsLine, cfSection });
             added++;
           }
         }
@@ -9551,6 +9851,7 @@ function booksView() {
 
   renderBooksPnl();
   renderBooksBalance();
+  try { renderBooksCashflow(); } catch (e) { console.warn('cashflow', e); }
   renderBooksJournal();
   renderBooksPayables();
   renderBooksReceivables();
