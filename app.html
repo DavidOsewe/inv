@@ -3404,13 +3404,20 @@ input:focus:not(:focus-visible) {
 </div>
 
 <div class="modalback" id="openingModal">
-  <div class="modal" style="max-width:560px">
+  <div class="modal" style="max-width:640px">
     <h2>Opening balances</h2>
-    <p class="section-sub">Set account balances as at your start date. We post one balanced opening journal (equity plugs the difference).</p>
+    <p class="section-sub">Uses your current Chart of Accounts (including CSV uploads). Enter balances or import a CSV. Equity plugs any difference.</p>
     <div class="field"><label>As at date</label><input id="obDate" type="date"></div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0">
+      <button type="button" class="button small" id="obSampleCsv">Sample CSV</button>
+      <button type="button" class="button small" id="obExportCsv">Export CSV</button>
+      <label class="button small" style="cursor:pointer;margin:0">
+        Import CSV<input type="file" id="obCsvFile" accept=".csv,text/csv,.txt" hidden>
+      </label>
+    </div>
     <div id="obLines" style="max-height:320px;overflow:auto;margin:10px 0"></div>
     <p id="obHint" class="section-sub"></p>
-    <div style="display:flex;gap:8px;margin-top:12px">
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="button primary" type="button" id="obSave">Post opening balances</button>
       <button class="button" type="button" id="obCancel">Cancel</button>
     </div>
@@ -9300,7 +9307,12 @@ function importCoaCsvFile(file) {
       save();
       queueBooksCloudSync();
       renderBooksCoa();
-      toast('COA import: ' + added + ' added, ' + updated + ' updated');
+      try {
+        if (document.getElementById('openingModal')?.classList.contains('show')) {
+          rebuildOpeningBalanceLines();
+        }
+      } catch (_) {}
+      toast('COA import: ' + added + ' added, ' + updated + ' updated — opening balances list updated');
       track('coa_csv_imported', { added, updated });
     } catch (e) {
       console.warn(e);
@@ -9852,47 +9864,152 @@ function openOpeningModal() {
   ensureBooksDb();
   const m = document.getElementById('openingModal');
   if (!m) return;
-  document.getElementById('obDate').value = db.booksSettings?.openingDate || today;
-  const wrap = document.getElementById('obLines');
-  // Show key balance-sheet accounts for opening
-  const focus = getCoa().filter(a =>
-    a.type === 'asset' || a.type === 'liability' || a.type === 'equity'
-  );
-  wrap.innerHTML = focus.map(a => {
-    const bal = (accountBalances(null)[a.id] || 0);
-    // prefill 0 for fresh setup
-    return `<div class="two" style="gap:8px;margin-bottom:6px;align-items:end" data-ob-id="${a.id}">
-      <div class="field" style="flex:2;margin:0"><label>${a.id} · ${a.name}</label>
-        <input type="number" step="0.01" class="ob-amt" placeholder="0" data-ob-type="${a.type}">
-      </div>
-      <div style="font-size:11px;color:var(--muted);padding-bottom:10px;min-width:70px">${a.type}</div>
-    </div>`;
-  }).join('');
-  wrap.querySelectorAll('.ob-amt').forEach(i => i.addEventListener('input', obUpdateHint));
-  obUpdateHint();
+  document.getElementById('obDate').value = db.booksSettings?.openingDate || (typeof today === 'function' ? today() : today);
+  rebuildOpeningBalanceLines();
   m.classList.add('show');
 }
-function closeOpeningModal() {
-  document.getElementById('openingModal')?.classList.remove('show');
+
+function rebuildOpeningBalanceLines(prefill) {
+  ensureBooksDb();
+  const wrap = document.getElementById('obLines');
+  if (!wrap) return;
+  prefill = prefill || {};
+  // Full COA balance-sheet accounts (system + CSV uploaded)
+  const focus = getCoa()
+    .filter(a => a.type === 'asset' || a.type === 'liability' || a.type === 'equity')
+    .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+  if (!focus.length) {
+    wrap.innerHTML = '<p class="section-sub">No balance-sheet accounts. Import a COA CSV under Settings / Chart of accounts first.</p>';
+    return;
+  }
+  wrap.innerHTML = focus.map(a => {
+    const pre = prefill[a.id];
+    const val = pre != null && pre !== '' ? pre : '';
+    return '<div class="two" style="gap:8px;margin-bottom:6px;align-items:end" data-ob-id="' + a.id + '">' +
+      '<div class="field" style="flex:2;margin:0"><label>' + a.id + ' · ' + String(a.name || '').replace(/</g, '') +
+      ' <span class="mini">' + a.type + (a.system ? '' : ' · custom') + '</span></label>' +
+      '<input type="number" step="0.01" class="ob-amt" placeholder="0" data-ob-type="' + a.type + '" value="' + val + '">' +
+      '</div></div>';
+  }).join('');
+  wrap.querySelectorAll('.ob-amt').forEach(inp => {
+    inp.addEventListener('input', updateOpeningHint);
+  });
+  updateOpeningHint();
 }
-function obUpdateHint() {
-  let assets = 0, liabEq = 0;
+
+function updateOpeningHint() {
+  const hint = document.getElementById('obHint');
+  if (!hint) return;
+  let assets = 0, credits = 0;
   document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
     const amt = Number(row.querySelector('.ob-amt')?.value || 0);
     const type = row.querySelector('.ob-amt')?.dataset.obType;
+    if (!(amt > 0)) return;
     if (type === 'asset') assets += amt;
-    else liabEq += amt; // liability + equity as credit balances entered positive
+    else credits += amt;
   });
-  const plug = assets - liabEq;
-  const hint = document.getElementById('obHint');
-  if (!hint) return;
-  if (Math.abs(plug) < 0.02) {
-    hint.textContent = 'Balanced — ready to post.';
-    hint.style.color = 'var(--green-text)';
-  } else {
-    hint.textContent = 'Difference ' + money(plug) + ' will post to Owner equity as the balancing figure.';
-    hint.style.color = 'var(--muted)';
+  const plug = Math.round((assets - credits) * 100) / 100;
+  hint.textContent = 'Assets ' + money(assets) + ' · Liabilities+Equity ' + money(credits) +
+    (Math.abs(plug) > 0.02 ? (' · Equity plug ' + money(plug) + ' (auto)') : ' · Balanced');
+}
+
+function downloadOpeningBalanceSampleCsv() {
+  ensureBooksDb();
+  const rows = [['Account Code', 'Account Name', 'Type', 'Balance']];
+  getCoa()
+    .filter(a => a.type === 'asset' || a.type === 'liability' || a.type === 'equity')
+    .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }))
+    .forEach(a => {
+      // Sample illustrative balances only for core accounts
+      let sample = '';
+      if (a.id === '1000') sample = '500000';
+      if (a.id === '1100') sample = '120000';
+      if (a.id === '2000') sample = '80000';
+      if (a.id === '3000') sample = '540000';
+      rows.push([a.id, a.name, a.type, sample]);
+    });
+  const csv = rows.map(r => r.map(c => {
+    const s = String(c == null ? '' : c);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'invoicedey-opening-balances-sample.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Opening balances sample CSV downloaded');
+}
+
+function exportOpeningBalancesCsv() {
+  ensureBooksDb();
+  const rows = [['Account Code', 'Account Name', 'Type', 'Balance']];
+  document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
+    const id = row.getAttribute('data-ob-id');
+    const a = getCoa().find(x => x.id === id) || { id, name: id, type: '' };
+    const amt = row.querySelector('.ob-amt')?.value || '';
+    rows.push([a.id, a.name, a.type, amt]);
+  });
+  if (rows.length < 2) {
+    // export empty template from COA
+    getCoa().filter(a => a.type === 'asset' || a.type === 'liability' || a.type === 'equity')
+      .forEach(a => rows.push([a.id, a.name, a.type, '']));
   }
+  const csv = rows.map(r => r.map(c => {
+    const s = String(c == null ? '' : c);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'invoicedey-opening-balances.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Opening balances CSV exported');
+}
+
+function importOpeningBalancesCsv(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      ensureBooksDb();
+      const rows = parseCsvText(String(reader.result || ''));
+      if (rows.length < 2) { toast('CSV needs header + rows'); return; }
+      const header = rows[0].map(h => String(h || '').trim().toLowerCase());
+      const iCode = header.findIndex(h => /code|account id|^account$|^id$/.test(h));
+      const iName = header.findIndex(h => /name/.test(h));
+      const iBal = header.findIndex(h => /balance|amount|opening/.test(h));
+      if (iCode < 0 && iName < 0) { toast('Need Account Code or Account Name column'); return; }
+      if (iBal < 0) { toast('Need Balance column'); return; }
+      const prefill = {};
+      let n = 0;
+      rows.slice(1).forEach(r => {
+        const codeRaw = iCode >= 0 ? String(r[iCode] || '').trim() : '';
+        const nameRaw = iName >= 0 ? String(r[iName] || '').trim() : '';
+        const id = resolveAccountId(codeRaw || nameRaw || (codeRaw + ' · ' + nameRaw));
+        const amt = parseMoneyCell(r[iBal]);
+        if (!id || !(Math.abs(amt) > 0)) return;
+        // Ensure account exists on COA if we only have name/code from file
+        if (!getCoa().some(a => a.id === id) && codeRaw) {
+          // skip unknown — user should import COA first
+          return;
+        }
+        prefill[id] = Math.abs(amt);
+        n++;
+      });
+      if (!n) {
+        toast('No matching balances — import COA first, then use codes from your chart');
+        return;
+      }
+      rebuildOpeningBalanceLines(prefill);
+      toast('Loaded ' + n + ' opening balances from CSV');
+    } catch (e) {
+      console.warn(e);
+      toast('Could not import opening balances CSV');
+    }
+  };
+  reader.readAsText(file);
 }
 
 function postOpeningBalances() {
@@ -11608,11 +11725,13 @@ function promptAddBankAccount() {
 
 function downloadSampleJournalCsv() {
   const sample = [
-    'Date,Memo,Account,Debit,Credit',
-    '2026-09-01,Office rent September,5100,150000,0',
-    '2026-09-01,Office rent September,1000,0,150000',
-    '2026-09-02,Client deposit,1000,50000,0',
-    '2026-09-02,Client deposit,4100,0,50000'
+    'Date,Memo,Account Code,Account Name,Debit,Credit',
+    '2026-09-01,Office rent September,5100,Rent expense,150000,0',
+    '2026-09-01,Office rent September,1000,Cash,0,150000',
+    '2026-09-02,Client deposit,1000,Cash,50000,0',
+    '2026-09-02,Client deposit,4100,Service revenue,0,50000',
+    '2026-09-03,Opening inventory,1300,Inventory,200000,0',
+    '2026-09-03,Opening inventory,3000,Owner equity,0,200000'
   ].join('\n');
   const blob = new Blob([sample], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
@@ -11631,6 +11750,114 @@ function closeJournalImportModal() {
   _pendingJournalImport = null;
 }
 
+
+/**
+ * Validate a journal draft before post/import.
+ * Returns { ok, errors[], warnings[], debits, credits, unknownAccounts[] }
+ */
+function validateJournalEntry(g) {
+  const errors = [];
+  const warnings = [];
+  const lines = (g && g.lines) || [];
+  const date = String((g && g.date) || '').trim();
+
+  if (!date) errors.push('Missing date');
+  else if (!/^\d{4}-\d{2}-\d{2}/.test(date) && !/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(date)) {
+    warnings.push('Date format unusual: ' + date);
+  }
+
+  if (!lines.length) errors.push('No lines');
+
+  let debits = 0, credits = 0;
+  const unknownAccounts = [];
+  const seenBoth = [];
+
+  lines.forEach((l, idx) => {
+    const id = String(l.accountId || '').trim();
+    const dr = Number(l.debit) || 0;
+    const cr = Number(l.credit) || 0;
+    if (!id) {
+      errors.push('Line ' + (idx + 1) + ': missing account');
+      return;
+    }
+    if (dr < 0 || cr < 0) errors.push('Line ' + (idx + 1) + ': negative amount not allowed');
+    if (dr > 0 && cr > 0) {
+      errors.push('Line ' + (idx + 1) + ': cannot have both debit and credit');
+      seenBoth.push(id);
+    }
+    if (dr < 0.0001 && cr < 0.0001) warnings.push('Line ' + (idx + 1) + ': zero amount');
+    debits += Math.max(0, dr);
+    credits += Math.max(0, cr);
+    try {
+      if (!getCoa().some(a => a.id === id)) unknownAccounts.push(id);
+    } catch (_) {
+      unknownAccounts.push(id);
+    }
+  });
+
+  if (unknownAccounts.length) {
+    errors.push('Unknown account(s): ' + [...new Set(unknownAccounts)].join(', ') + ' — add to Chart of Accounts first');
+  }
+
+  const diff = Math.round((debits - credits) * 100) / 100;
+  if (lines.length && Math.abs(diff) >= 0.05) {
+    errors.push('Unbalanced: Dr ' + debits.toFixed(2) + ' vs Cr ' + credits.toFixed(2) + ' (diff ' + diff.toFixed(2) + ')');
+  }
+  if (lines.length && debits < 0.001 && credits < 0.001) {
+    errors.push('All amounts are zero');
+  }
+  if (lines.length === 1) {
+    errors.push('Need at least two lines (double-entry)');
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    debits,
+    credits,
+    unknownAccounts: [...new Set(unknownAccounts)]
+  };
+}
+
+function validateOpeningBalancesForm() {
+  const errors = [];
+  const warnings = [];
+  const date = document.getElementById('obDate')?.value || '';
+  if (!date) errors.push('Choose an as-at date');
+
+  let assets = 0, creditSide = 0, lineCount = 0;
+  const unknown = [];
+  document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
+    const id = row.getAttribute('data-ob-id');
+    const amt = Number(row.querySelector('.ob-amt')?.value || 0);
+    if (!(amt > 0)) return;
+    lineCount++;
+    if (amt < 0) errors.push(id + ': balance cannot be negative');
+    try {
+      if (!getCoa().some(a => a.id === id)) unknown.push(id);
+    } catch (_) { unknown.push(id); }
+    const type = row.querySelector('.ob-amt')?.dataset.obType;
+    if (type === 'asset') assets += amt;
+    else creditSide += amt;
+  });
+
+  if (lineCount < 1) errors.push('Enter at least one account balance');
+  if (unknown.length) errors.push('Unknown accounts: ' + unknown.join(', '));
+
+  const plug = Math.round((assets - creditSide) * 100) / 100;
+  if (Math.abs(plug) > 0.02) {
+    warnings.push('Difference ' + plug.toFixed(2) + ' will post to Owner equity (3000)');
+    try {
+      if (!getCoa().some(a => a.id === '3000')) {
+        errors.push('Equity plug needed but account 3000 missing from COA');
+      }
+    } catch (_) {}
+  }
+
+  return { ok: errors.length === 0, errors, warnings, assets, creditSide, plug, lineCount };
+}
+
 function openJournalImportPreview(groups, sourceLabel) {
   ensureBooksDb();
   _pendingJournalImport = { groups: groups || [], sourceLabel: sourceLabel || 'CSV' };
@@ -11642,35 +11869,50 @@ function openJournalImportPreview(groups, sourceLabel) {
     return;
   }
 
-  let ok = 0, bad = 0, dup = 0;
+  let ok = 0, bad = 0, dup = 0, warnN = 0;
   const htmlParts = [];
   groups.forEach((g, i) => {
-    const dr = (g.lines || []).reduce((n, l) => n + (Number(l.debit) || 0), 0);
-    const cr = (g.lines || []).reduce((n, l) => n + (Number(l.credit) || 0), 0);
-    const balanced = Math.abs(dr - cr) < 0.05 && dr > 0;
+    const v = validateJournalEntry(g);
+    const dr = v.debits;
+    const cr = v.credits;
     const sourceKey = 'csvj:' + (g.date || '') + ':' + String(g.memo || '').slice(0, 40) + ':' + dr.toFixed(2);
     const isDup = (db.journals || []).some(j => j.sourceKey === sourceKey);
-    g._balanced = balanced;
+    g._validation = v;
+    g._balanced = v.ok;
     g._dup = isDup;
     g._sourceKey = sourceKey;
     g._dr = dr;
     g._cr = cr;
     if (isDup) dup++;
-    else if (balanced) ok++;
+    else if (v.ok) ok++;
     else bad++;
+    if (v.warnings && v.warnings.length) warnN++;
 
-    const status = isDup
-      ? '<span style="color:var(--muted)">Already in ledger</span>'
-      : (balanced
-        ? '<span style="color:var(--green-text)">Balanced · ready</span>'
-        : '<span style="color:var(--red-text)">Unbalanced · Dr ' + money(dr) + ' / Cr ' + money(cr) + '</span>');
-    const canSelect = balanced && !isDup;
-    const linesHtml = (g.lines || []).map(l =>
-      `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2px 0 2px 22px;color:var(--muted)">
-        <span>${l.accountId} · ${coaName(l.accountId)}</span>
+    let status;
+    if (isDup) {
+      status = '<span style="color:var(--muted)">Already in ledger</span>';
+    } else if (v.ok) {
+      status = '<span style="color:var(--green-text)">Valid · ready to post</span>';
+      if (v.warnings.length) {
+        status += ' <span style="color:var(--muted)">(' + v.warnings[0] + ')</span>';
+      }
+    } else {
+      status = '<span style="color:var(--red-text)">' + (v.errors[0] || 'Invalid') + '</span>';
+      if (v.errors.length > 1) {
+        status += ' <span style="color:var(--muted)">+' + (v.errors.length - 1) + ' more</span>';
+      }
+    }
+    const canSelect = v.ok && !isDup;
+    const linesHtml = (g.lines || []).map(l => {
+      const known = getCoa().some(a => a.id === l.accountId);
+      const label = known
+        ? (l.accountId + ' · ' + coaName(l.accountId))
+        : (l.accountId + ' · ⚠ unknown account — add to COA');
+      return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2px 0 2px 22px;color:${known ? 'var(--muted)' : 'var(--red-text)'}">
+        <span>${label}</span>
         <span style="font-variant-numeric:tabular-nums">${l.debit ? 'Dr ' + money(l.debit) : ''}${l.debit && l.credit ? ' · ' : ''}${l.credit ? 'Cr ' + money(l.credit) : ''}</span>
-      </div>`
-    ).join('');
+      </div>`;
+    }).join('');
 
     htmlParts.push(`<div style="padding:10px 8px;border-bottom:1px solid var(--line);opacity:${canSelect || isDup ? '1' : '0.85'}">
       <label style="display:flex;gap:10px;align-items:flex-start;cursor:${canSelect ? 'pointer' : 'default'}">
@@ -11688,13 +11930,16 @@ function openJournalImportPreview(groups, sourceLabel) {
 
   el.innerHTML = htmlParts.length ? htmlParts.join('') : '<p class="section-sub">No journal groups found in the file.</p>';
   if (sum) {
-    sum.textContent = (sourceLabel || 'Import') + ': ' + ok + ' ready to post'
-      + (bad ? ' · ' + bad + ' unbalanced' : '')
+    sum.textContent = (sourceLabel || 'Import') + ': ' + ok + ' valid'
+      + (bad ? ' · ' + bad + ' failed validation' : '')
       + (dup ? ' · ' + dup + ' already posted' : '')
-      + ' · ' + groups.length + ' group(s) total';
+      + (warnN ? ' · ' + warnN + ' with warnings' : '')
+      + ' · ' + groups.length + ' group(s)';
   }
   if (hint) {
-    hint.textContent = ok ? 'Only checked, balanced rows will post' : 'Fix unbalanced groups in the CSV and re-import';
+    hint.textContent = ok
+      ? 'Only checked, validated rows will post. Unknown accounts must be on the Chart of Accounts first.'
+      : 'Fix validation errors in the CSV (balance, accounts, dates) and re-import.';
     hint.style.color = ok ? 'var(--muted)' : 'var(--red-text)';
   }
   document.getElementById('journalImportModal')?.classList.add('show');
@@ -11713,18 +11958,22 @@ function commitJournalImport() {
   checks.forEach(ch => {
     if (ch.checked && !ch.disabled) selected.add(Number(ch.getAttribute('data-ji-idx')));
   });
+  if (!selected.size) {
+    toast('Select at least one valid journal group');
+    return;
+  }
 
-  let posted = 0, skipped = 0, unbalanced = 0;
+  let posted = 0, skipped = 0, invalid = 0;
+  const failReasons = [];
   _pendingJournalImport.groups.forEach((g, i) => {
     if (!selected.has(i)) return;
     if (g._dup) { skipped++; return; }
-    if (!g._balanced) { unbalanced++; return; }
-    (g.lines || []).forEach(l => {
-      if (!getCoa().some(a => a.id === l.accountId)) {
-        db.coaExtra = db.coaExtra || [];
-        db.coaExtra.push({ id: l.accountId, name: 'Imported ' + l.accountId, type: 'expense' });
-      }
-    });
+    const v = g._validation || validateJournalEntry(g);
+    if (!v.ok) {
+      invalid++;
+      if (failReasons.length < 3) failReasons.push(v.errors[0] || 'invalid');
+      return;
+    }
     const entry = postJournal({
       date: g.date || (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10)),
       memo: g.memo || 'CSV journal',
@@ -11733,7 +11982,10 @@ function commitJournalImport() {
       lines: g.lines
     });
     if (entry) posted++;
-    else skipped++;
+    else {
+      skipped++;
+      if (failReasons.length < 3) failReasons.push('post rejected (duplicate or unbalanced)');
+    }
   });
   save();
   try { queueBooksCloudSync(); } catch {}
@@ -11750,6 +12002,30 @@ function commitJournalImport() {
   if (!posted) msg = 'No journals posted — select balanced rows in the preview';
   toast(msg);
   track('journals_csv_imported', { posted, skipped, unbalanced, preview: true });
+}
+
+function resolveAccountId(raw) {
+  ensureBooksDb();
+  let s = String(raw || '').trim();
+  if (!s) return null;
+  const coa = getCoa();
+  // Exact code
+  if (coa.some(a => a.id === s)) return s;
+  // "1000 · Cash" or "1000 - Cash" or "1000 Cash"
+  let m = s.match(/^(\d{3,6})\s*[·\-|:]\s*(.+)$/);
+  if (m && coa.some(a => a.id === m[1])) return m[1];
+  m = s.match(/^(\d{3,6})\b/);
+  if (m && coa.some(a => a.id === m[1])) return m[1];
+  // Name exact (case-insensitive)
+  const low = s.toLowerCase();
+  let hit = coa.find(a => String(a.name || '').toLowerCase() === low);
+  if (hit) return hit.id;
+  // Name contains / starts with
+  hit = coa.find(a => String(a.name || '').toLowerCase().includes(low) && low.length >= 3);
+  if (hit) return hit.id;
+  // Prefer numeric code even if not in COA yet (will show as code until COA added)
+  if (m) return m[1];
+  return s;
 }
 
 function parseJournalCsvGroups(raw, fileName) {
@@ -11785,11 +12061,13 @@ function parseJournalCsvGroups(raw, fileName) {
   };
   const iDate = idx(['date']);
   const iMemo = idx(['memo', 'description', 'narration', 'reference', 'particulars']);
-  const iAcct = idx(['account', 'account id', 'account code', 'coa', 'gl', 'code']);
+  const iAcct = idx(['account code', 'account id', 'account', 'coa', 'gl', 'code']);
+  const iAcctName = idx(['account name', 'name', 'account description']);
   const iDeb = idx(['debit', 'dr', 'debit amount']);
   const iCred = idx(['credit', 'cr', 'credit amount']);
-  if (iDate < 0 || iAcct < 0 || (iDeb < 0 && iCred < 0)) {
-    throw new Error('Need columns Date, Account, Debit, Credit. Found: ' + header.join(' | '));
+  // Account can be code column OR name column
+  if (iDate < 0 || (iAcct < 0 && iAcctName < 0) || (iDeb < 0 && iCred < 0)) {
+    throw new Error('Need columns Date, Account (code and/or name), Debit, Credit. Found: ' + header.join(' | '));
   }
 
   const body = rows.slice(headerRowIdx + 1);
@@ -11809,9 +12087,16 @@ function parseJournalCsvGroups(raw, fileName) {
       }
     }
     const memo = iMemo >= 0 ? String(r[iMemo] || '').trim() : '';
-    let acct = String(r[iAcct] || '').trim();
-    const am = acct.match(/^(\d{3,6})\b/);
-    if (am) acct = am[1];
+    let acctRaw = iAcct >= 0 ? String(r[iAcct] || '').trim() : '';
+    if (iAcctName >= 0) {
+      const nm = String(r[iAcctName] || '').trim();
+      if (nm) {
+        if (acctRaw && !/\d{3,6}/.test(acctRaw)) acctRaw = nm;
+        else if (acctRaw && nm) acctRaw = acctRaw + ' · ' + nm;
+        else if (!acctRaw) acctRaw = nm;
+      }
+    }
+    const acct = resolveAccountId(acctRaw);
     const deb = iDeb >= 0 ? Math.abs(parseMoneyCell(r[iDeb])) : 0;
     const cred = iCred >= 0 ? Math.abs(parseMoneyCell(r[iCred])) : 0;
     if (!acct || (deb < 0.001 && cred < 0.001)) return;
@@ -13012,6 +13297,13 @@ document.getElementById('xferSave')?.addEventListener('click', postBankTransfer)
 document.getElementById('btnBooksSetup')?.addEventListener('click', openOpeningModal);
 document.getElementById('obCancel')?.addEventListener('click', closeOpeningModal);
 document.getElementById('obSave')?.addEventListener('click', postOpeningBalances);
+document.getElementById('obSampleCsv')?.addEventListener('click', downloadOpeningBalanceSampleCsv);
+document.getElementById('obExportCsv')?.addEventListener('click', exportOpeningBalancesCsv);
+document.getElementById('obCsvFile')?.addEventListener('change', (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (f) importOpeningBalancesCsv(f);
+  e.target.value = '';
+});
 document.getElementById('reconSave')?.addEventListener('click', saveReconciliation);
 document.getElementById('reconAutoBtn')?.addEventListener('click', () => {
   const accountId = document.getElementById('reconAccount')?.value || '1000';
