@@ -3413,7 +3413,7 @@ input:focus:not(:focus-visible) {
 <div class="modalback" id="openingModal">
   <div class="modal" style="max-width:640px">
     <h2>Opening balances</h2>
-    <p class="section-sub">Uses your current Chart of Accounts (including CSV uploads). Enter balances or import a CSV. Equity plugs any difference.</p>
+    <p class="section-sub">Enter asset, liability, and equity balances as at the start date. Any gap so that Assets = Liabilities + Equity posts automatically to Retained earnings (3200).</p>
     <div class="field"><label>As at date</label><input id="obDate" type="date"></div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0">
       <button type="button" class="button small" id="obSampleCsv">Sample CSV</button>
@@ -7903,6 +7903,7 @@ const COA = [
   // Equity
   { id: '3000', name: 'Owner equity', type: 'equity', statement: 'bs', fsLine: 'equity', cfSection: 'financing' },
   { id: '3100', name: 'Owner drawings', type: 'equity', statement: 'bs', fsLine: 'equity', cfSection: 'financing' },
+  { id: '3200', name: 'Retained earnings', type: 'equity', statement: 'bs', fsLine: 'equity', cfSection: 'operating' },
   // Income
   { id: '4000', name: 'Sales revenue', type: 'income', statement: 'pl', fsLine: 'revenue', cfSection: 'operating' },
   { id: '4100', name: 'Other income', type: 'income', statement: 'pl', fsLine: 'other_income', cfSection: 'operating' },
@@ -8010,10 +8011,51 @@ function getCoa() {
   const ov = db.coaOverrides || {};
   map.forEach((a, id) => {
     if (ov[id] && ov[id].name) a.name = ov[id].name;
-    if (ov[id] && ov[id].type && !a.system) a.type = ov[id].type;
+    // System accounts: name, type, statement, fsLine, cfSection all overridable
+    if (ov[id] && ov[id].type) a.type = ov[id].type;
     if (ov[id] && ov[id].statement) a.statement = ov[id].statement;
     if (ov[id] && ov[id].fsLine) a.fsLine = ov[id].fsLine;
     if (ov[id] && ov[id].cfSection) a.cfSection = ov[id].cfSection;
+    if (ov[id] && ov[id].hidden) a.hidden = true;
+    if (!a.statement || !a.fsLine) {
+      const d = defaultFsMeta(a.type);
+      a.statement = a.statement || d.statement;
+      a.fsLine = a.fsLine || d.fsLine;
+      a.cfSection = a.cfSection || d.cfSection;
+    }
+  });
+  return Array.from(map.values())
+    .filter(a => !a.hidden)
+    .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+}
+
+/** Full COA including hidden (for settings UI) */
+function getCoaAll() {
+  ensureBooksDb();
+  const map = new Map();
+  COA.forEach(a => map.set(a.id, { ...a, system: true }));
+  (db.coaExtra || []).forEach(a => {
+    if (a && a.id) {
+      const d = defaultFsMeta(a.type);
+      map.set(String(a.id), {
+        id: String(a.id),
+        name: a.name || a.id,
+        type: a.type || 'asset',
+        statement: a.statement || d.statement,
+        fsLine: a.fsLine || d.fsLine,
+        cfSection: a.cfSection || d.cfSection,
+        system: false
+      });
+    }
+  });
+  const ov = db.coaOverrides || {};
+  map.forEach((a, id) => {
+    if (ov[id] && ov[id].name) a.name = ov[id].name;
+    if (ov[id] && ov[id].type) a.type = ov[id].type;
+    if (ov[id] && ov[id].statement) a.statement = ov[id].statement;
+    if (ov[id] && ov[id].fsLine) a.fsLine = ov[id].fsLine;
+    if (ov[id] && ov[id].cfSection) a.cfSection = ov[id].cfSection;
+    if (ov[id] && ov[id].hidden) a.hidden = true;
     if (!a.statement || !a.fsLine) {
       const d = defaultFsMeta(a.type);
       a.statement = a.statement || d.statement;
@@ -8696,7 +8738,7 @@ function renderBooksBalance() {
   if (Math.abs(retained) > 0.001) {
     const key = 'equity';
     if (!groups[key]) groups[key] = { key, label: fsLineLabel(key), meta: FS_LINES[key] || {}, lines: [], total: 0 };
-    groups[key].lines.push({ id: null, name: 'Retained earnings (P&L)', amt: retained });
+    groups[key].lines.push({ id: '3200', name: 'Retained earnings (current year P&L)', amt: retained });
     groups[key].total += retained;
   }
 
@@ -9489,24 +9531,27 @@ function renderBooksReceivables() {
 function renderBooksCoa() {
   const el = document.getElementById('booksCoaList');
   if (!el) return;
+  ensureBooksDb();
   const bal = accountBalances(null);
-  const rows = getCoa();
-  const fsOpts = Object.keys(FS_LINES).map(k =>
-    '<option value="' + k + '">' + k + '</option>'
-  ).join('');
-  el.innerHTML = '<table class="table"><thead><tr>' +
+  const showHidden = !!(db.booksSettings && db.booksSettings.showHiddenCoa);
+  const rows = showHidden ? getCoaAll() : getCoaAll().filter(a => !a.hidden);
+
+  el.innerHTML =
+    '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center">' +
+    '<label style="font-size:12px;display:flex;gap:6px;align-items:center;cursor:pointer">' +
+    '<input type="checkbox" id="coaShowHidden"' + (showHidden ? ' checked' : '') + '> Show hidden system accounts</label>' +
+    '<span class="section-sub" style="margin:0">System accounts can be renamed, re-mapped, or hidden — not permanently deleted (posting rules keep codes stable).</span>' +
+    '</div>' +
+    '<table class="table"><thead><tr>' +
     '<th>Code</th><th>Name</th><th>Type</th><th>Statement</th><th>FS line</th><th>Cash flow</th>' +
     '<th class="right">Balance</th><th></th></tr></thead><tbody>' +
     rows.map(a => {
       let display = bal[a.id] || 0;
       if (a.type === 'liability' || a.type === 'equity' || a.type === 'income') display = -display;
-      const del = a.system ? '' : '<button class="button small danger" data-del-account="' + a.id + '">Remove</button>';
-      const typeCell = a.system
-        ? '<span style="text-transform:capitalize">' + a.type + '</span>'
-        : '<select data-coa-type="' + a.id + '" style="max-width:100px">' +
-          ['asset','liability','equity','income','expense'].map(tp =>
-            '<option value="' + tp + '"' + (tp === a.type ? ' selected' : '') + '>' + tp + '</option>'
-          ).join('') + '</select>';
+      const typeCell = '<select data-coa-type="' + a.id + '" style="max-width:100px">' +
+        ['asset','liability','equity','income','expense'].map(tp =>
+          '<option value="' + tp + '"' + (tp === a.type ? ' selected' : '') + '>' + tp + '</option>'
+        ).join('') + '</select>';
       const stmtCell = '<select data-coa-stmt="' + a.id + '" style="max-width:70px">' +
         ['bs','pl'].map(s => '<option value="' + s + '"' + (a.statement === s ? ' selected' : '') + '>' + s + '</option>').join('') +
         '</select>';
@@ -9518,20 +9563,29 @@ function renderBooksCoa() {
         ['operating','investing','financing','cash'].map(s =>
           '<option value="' + s + '"' + (a.cfSection === s ? ' selected' : '') + '>' + s + '</option>'
         ).join('') + '</select>';
-      return '<tr>' +
-        '<td><code>' + a.id + '</code>' + (a.system ? ' <span class="mini">system</span>' : '') + '</td>' +
+      let action = '';
+      if (a.system) {
+        action = a.hidden
+          ? '<button type="button" class="button small" data-unhide-account="' + a.id + '">Unhide</button>'
+          : '<button type="button" class="button small" data-hide-account="' + a.id + '">Hide</button>';
+      } else {
+        action = '<button type="button" class="button small danger" data-del-account="' + a.id + '">Remove</button>';
+      }
+      const hiddenMark = a.hidden ? ' <span class="mini">hidden</span>' : '';
+      return '<tr style="' + (a.hidden ? 'opacity:0.55' : '') + '">' +
+        '<td><code>' + a.id + '</code>' + (a.system ? ' <span class="mini">system</span>' : '') + hiddenMark + '</td>' +
         '<td><input data-coa-name="' + a.id + '" value="' + String(a.name || '').replace(/"/g, '&quot;') + '" style="width:100%;min-width:120px"></td>' +
         '<td>' + typeCell + '</td>' +
         '<td>' + stmtCell + '</td>' +
         '<td>' + fsCell + '</td>' +
         '<td>' + cfCell + '</td>' +
         '<td class="right">' + money(display) + '</td>' +
-        '<td>' + del + '</td></tr>';
+        '<td>' + action + '</td></tr>';
     }).join('') + '</tbody></table>';
 
   const persistMeta = (id, patch) => {
     ensureBooksDb();
-    const system = COA.some(x => x.id === id);
+    if (!db.coaOverrides) db.coaOverrides = {};
     const extra = (db.coaExtra || []).find(x => x.id === id);
     if (extra) Object.assign(extra, patch);
     else db.coaOverrides[id] = { ...(db.coaOverrides[id] || {}), ...patch };
@@ -9539,18 +9593,28 @@ function renderBooksCoa() {
     try { save(); } catch (_) {}
   };
 
+  document.getElementById('coaShowHidden')?.addEventListener('change', (e) => {
+    ensureBooksDb();
+    if (!db.booksSettings) db.booksSettings = {};
+    db.booksSettings.showHiddenCoa = !!e.target.checked;
+    try { persistDb(); } catch (_) {}
+    renderBooksCoa();
+  });
+
   el.querySelectorAll('[data-coa-name]').forEach(inp => {
     inp.addEventListener('change', () => {
       const id = inp.getAttribute('data-coa-name');
       const name = String(inp.value || '').trim();
       if (!name) return;
       persistMeta(id, { name });
-      toast('Account updated');
+      toast('Account renamed');
     });
   });
   el.querySelectorAll('[data-coa-type]').forEach(sel => {
     sel.addEventListener('change', () => {
-      persistMeta(sel.getAttribute('data-coa-type'), { type: sel.value });
+      const id = sel.getAttribute('data-coa-type');
+      persistMeta(id, { type: sel.value });
+      toast('Type updated');
       renderBooksCoa();
     });
   });
@@ -9572,13 +9636,30 @@ function renderBooksCoa() {
       toast('Cash-flow section saved');
     });
   });
+  el.querySelectorAll('[data-hide-account]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-hide-account');
+      if (!confirm('Hide account ' + id + ' from lists and reports? Existing journals stay intact. You can unhide later.')) return;
+      persistMeta(id, { hidden: true });
+      toast('Account hidden');
+      renderBooksCoa();
+    });
+  });
+  el.querySelectorAll('[data-unhide-account]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-unhide-account');
+      persistMeta(id, { hidden: false });
+      toast('Account restored');
+      renderBooksCoa();
+    });
+  });
   el.querySelectorAll('[data-del-account]').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-del-account');
       db.coaExtra = (db.coaExtra || []).filter(a => a.id !== id);
       try { save(); } catch (_) {}
       renderBooksCoa();
-      toast('Account removed');
+      toast('Custom account removed');
     });
   });
 }
@@ -10237,8 +10318,9 @@ function rebuildOpeningBalanceLines(prefill) {
   if (!wrap) return;
   prefill = prefill || {};
   // Full COA balance-sheet accounts (system + CSV uploaded)
+  // Retained earnings (3200) is the balancing plug — not entered manually
   const focus = getCoa()
-    .filter(a => a.type === 'asset' || a.type === 'liability' || a.type === 'equity')
+    .filter(a => (a.type === 'asset' || a.type === 'liability' || a.type === 'equity') && a.id !== '3200')
     .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
   if (!focus.length) {
     wrap.innerHTML = '<p class="section-sub">No balance-sheet accounts. Import a COA CSV under Settings / Chart of accounts first.</p>';
@@ -10262,20 +10344,28 @@ function rebuildOpeningBalanceLines(prefill) {
 function updateOpeningHint() {
   const hint = document.getElementById('obHint');
   if (!hint) return;
-  let assets = 0, credits = 0;
+  let assets = 0, liab = 0, equity = 0;
   document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
     const amt = Number(row.querySelector('.ob-amt')?.value || 0);
     const type = row.querySelector('.ob-amt')?.dataset.obType;
     if (!(amt > 0)) return;
     if (type === 'asset') assets += amt;
-    else credits += amt;
+    else if (type === 'liability') liab += amt;
+    else equity += amt;
   });
-  const plug = Math.round((assets - credits) * 100) / 100;
+  // Accounting equation: Assets = Liabilities + Equity (+ Retained earnings plug)
+  const plug = Math.round((assets - liab - equity) * 100) / 100;
   const plugAbs = Math.abs(plug) > 0.02;
-  hint.textContent = 'Assets ' + money(assets) + ' · Liabilities+Equity ' + money(credits) +
-    (plugAbs ? (' · Equity plug ' + money(plug) + ' (auto)') : ' · Balanced');
-  hint.style.color = (assets + credits) === 0 ? 'var(--muted)' : (plugAbs ? 'var(--muted)' : 'var(--green-text)');
+  let msg = 'Assets ' + money(assets) + ' · Liabilities ' + money(liab) + ' · Equity entered ' + money(equity);
+  if (plugAbs) {
+    msg += ' · Retained earnings (3200) plug ' + money(plug) + ' so Assets = Liabilities + Equity';
+  } else {
+    msg += ' · Balanced (A = L + E)';
+  }
+  hint.textContent = msg;
+  hint.style.color = (assets + liab + equity) === 0 ? 'var(--muted)' : (plugAbs ? 'var(--muted)' : 'var(--green-text)');
 }
+
 
 function downloadOpeningBalanceSampleCsv() {
   ensureBooksDb();
@@ -10413,9 +10503,10 @@ function postOpeningBalances() {
     }
   });
   const plug = Math.round((assets - credits) * 100) / 100;
+  // Assets − (Liabilities + Equity entered) → Retained earnings (3200)
   if (Math.abs(plug) > 0.02) {
-    if (plug > 0) lines.push({ accountId: '3000', debit: 0, credit: plug });
-    else lines.push({ accountId: '3000', debit: -plug, credit: 0 });
+    if (plug > 0) lines.push({ accountId: '3200', debit: 0, credit: plug });
+    else lines.push({ accountId: '3200', debit: -plug, credit: 0 });
   }
   if (lines.length < 2) {
     toast('Enter at least two account balances');
@@ -12220,10 +12311,10 @@ function validateOpeningBalancesForm() {
 
   const plug = Math.round((assets - creditSide) * 100) / 100;
   if (Math.abs(plug) > 0.02) {
-    warnings.push('Difference ' + plug.toFixed(2) + ' will post to Owner equity (3000)');
+    warnings.push('Difference ' + plug.toFixed(2) + ' posts to Retained earnings (3200) so Assets = Liabilities + Equity');
     try {
-      if (!getCoa().some(a => a.id === '3000')) {
-        errors.push('Equity plug needed but account 3000 missing from COA');
+      if (!getCoaAll().some(a => a.id === '3200') && !getCoa().some(a => a.id === '3200')) {
+        errors.push('Retained earnings account 3200 missing from COA');
       }
     } catch (_) {}
   }
