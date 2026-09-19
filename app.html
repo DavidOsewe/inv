@@ -2590,7 +2590,7 @@ input:focus:not(:focus-visible) {
             </div>
             <button type="button" class="button small" id="bankTxAutoMatch">Auto-match all</button>
             <button type="button" class="button small" id="bankTxNewRule" title="Create a bank rule">New rule</button>
-            <button type="button" class="button small primary" id="bankTxApplyRules" title="Review proposed journals for lines that match bank rules, then post">Apply rules → Review</button>
+            <button type="button" class="button small primary" id="bankTxApplyRules" title="Review proposed journals for lines that match bank rules, then post" onclick="try{bulkApplyBankRules()}catch(e){console.error(e);alert(e.message||e)}">Apply rules → Review</button>
             <button type="button" class="button small primary" id="bankTxAutoReconcile">Auto-reconcile</button>
             <button type="button" class="button small" id="bankTxClearPending" title="Remove pending lines (zeros or all)">Clear pending</button>
           </div>
@@ -3322,7 +3322,7 @@ input:focus:not(:focus-visible) {
   </div>
 </div>
 
-<div class="modalback" id="bankRulesReviewModal">
+<div class="modalback" id="bankRulesReviewModal" style="z-index:80">
   <div class="modal" style="max-width:820px">
     <h2>Review postings before ledger</h2>
     <p class="section-sub" style="margin-top:-4px">Rules propose these journals. Edit accounts or uncheck rows. Nothing hits the books until you click <b>Post selected</b>.</p>
@@ -11191,11 +11191,12 @@ function proposeBankJournalFromRule(tx, rule) {
       { accountId: bankId, debit: 0, credit: amt }
     ];
   }
+  const dateStr = (tx.date && String(tx.date).slice(0, 10)) || (typeof today === 'function' ? today() : String(today || new Date().toISOString()).slice(0, 10));
   return {
     txId: tx.id,
-    ruleId: rule.id,
+    ruleId: rule.id || 'default',
     action: rule.action || 'add',
-    date: tx.date || (typeof today === 'function' ? today() : String(today || '').slice(0, 10)),
+    date: dateStr,
     memo,
     description: tx.description || '',
     amount: Number(tx.amount) || 0,
@@ -11208,21 +11209,31 @@ function proposeBankJournalFromRule(tx, rule) {
 }
 
 function accountLabel(id) {
-  const a = getCoa().find(x => x.id === id);
-  return a ? (a.id + ' · ' + a.name) : String(id || '—');
+  try {
+    const a = (typeof getCoa === 'function' ? getCoa() : []).find(x => x.id === id);
+    return a ? (a.id + ' · ' + a.name) : String(id || '—');
+  } catch {
+    return String(id || '—');
+  }
 }
 
 let _bankRulesReview = [];
 
 function openBankRulesReviewModal(proposals) {
-  _bankRulesReview = proposals || [];
-  const modal = document.getElementById('bankRulesReviewModal');
-  if (!modal) {
-    toast('Review modal missing — hard-refresh');
-    return;
+  try {
+    _bankRulesReview = proposals || [];
+    const modal = document.getElementById('bankRulesReviewModal');
+    if (!modal) {
+      toast('Review modal missing — hard-refresh the page');
+      console.error('bankRulesReviewModal not in DOM');
+      return;
+    }
+    renderBankRulesReviewList();
+    modal.classList.add('show');
+  } catch (err) {
+    console.error('openBankRulesReviewModal', err);
+    toast('Could not open review: ' + (err && err.message ? err.message : String(err)));
   }
-  renderBankRulesReviewList();
-  modal.classList.add('show');
 }
 
 function closeBankRulesReviewModal() {
@@ -11342,40 +11353,62 @@ function syncBankRulesReviewFromDom() {
 }
 
 function bulkApplyBankRules() {
-  ensureBooksDb();
-  const accountId = document.getElementById('bankTxAccount')?.value || '';
-  const rules = (db.bankRules || []).filter(r => r.active !== false);
-  const pendingAll = (db.bankTransactions || []).filter(t => {
-    if (t.status !== 'pending') return false;
-    if (accountId && t.accountId !== accountId) return false;
-    return true;
-  });
-  const matched = pendingAll.filter(t => !!findMatchingBankRule(t));
+  try {
+    ensureBooksDb();
+    const accountId = document.getElementById('bankTxAccount')?.value || '';
+    const rules = (db.bankRules || []).filter(r => r.active !== false);
 
-  if (!rules.length) {
-    toast('No bank rules yet — click New rule first');
-    return;
-  }
-  if (!pendingAll.length) {
-    toast('No lines waiting for review on this account. Import a CSV first.');
-    return;
-  }
-  if (!matched.length) {
-    toast(pendingAll.length + ' pending, but none match your ' + rules.length + ' rule(s).');
-    return;
-  }
+    let pendingAll = (db.bankTransactions || []).filter(t => t.status === 'pending');
+    if (accountId) {
+      const filtered = pendingAll.filter(t => t.accountId === accountId);
+      // If filter empties the queue but other accounts have pending, fall back
+      if (filtered.length) pendingAll = filtered;
+      else if (pendingAll.length) {
+        toast('No pending on selected account — showing all accounts (' + pendingAll.length + ')');
+      }
+    }
 
-  // Tag suggestions only — do not post yet
-  const proposals = [];
-  matched.forEach(tx => {
-    const rule = findMatchingBankRule(tx);
-    if (!rule) return;
-    tx.suggestedRuleId = rule.id;
-    proposals.push(proposeBankJournalFromRule(tx, rule));
-  });
-  save();
-  openBankRulesReviewModal(proposals);
-  track('bank_rules_review_open', { n: proposals.length });
+    if (!pendingAll.length) {
+      toast('No pending bank lines. Import a CSV first (status must be For review).');
+      return;
+    }
+
+    let matched = pendingAll.filter(t => !!findMatchingBankRule(t));
+
+    // If no explicit rules, still open review with default COA proposals for all pending
+    if (!matched.length) {
+      if (!rules.length) {
+        toast('No rules yet — building default proposals for ' + pendingAll.length + ' pending line(s)');
+      } else {
+        toast('No description match — opening review with defaults for ' + pendingAll.length + ' pending line(s)');
+      }
+      matched = pendingAll;
+    }
+
+    const proposals = [];
+    matched.forEach(tx => {
+      const rule = findMatchingBankRule(tx) || {
+        id: 'default',
+        action: 'add',
+        memo: tx.description || '',
+        coaId: Number(tx.amount) > 0 ? '4100' : '5700',
+        contains: ''
+      };
+      tx.suggestedRuleId = rule.id !== 'default' ? rule.id : (tx.suggestedRuleId || null);
+      proposals.push(proposeBankJournalFromRule(tx, rule));
+    });
+
+    if (!proposals.length) {
+      toast('Nothing to review');
+      return;
+    }
+    save();
+    openBankRulesReviewModal(proposals);
+    track('bank_rules_review_open', { n: proposals.length });
+  } catch (err) {
+    console.error('bulkApplyBankRules', err);
+    toast('Review failed: ' + (err && err.message ? err.message : String(err)));
+  }
 }
 
 function commitBankRulesReview() {
