@@ -7992,10 +7992,30 @@ function postJournal({ date, memo, source, sourceKey, lines, currency, reversedF
   const rep = db.profile.reporting || 'USD';
   const cur = currency || rep;
   const normalized = (lines || []).map(l => ({
-    accountId: l.accountId,
-    debit: Number(l.debit) || 0,
-    credit: Number(l.credit) || 0
-  })).filter(l => l.debit > 0 || l.credit > 0);
+    accountId: String(l.accountId || '').trim(),
+    debit: Math.max(0, Number(l.debit) || 0),
+    credit: Math.max(0, Number(l.credit) || 0)
+  })).filter(l => l.accountId && (l.debit > 0 || l.credit > 0));
+
+  // Reject lines with both debit and credit
+  if (normalized.some(l => l.debit > 0 && l.credit > 0)) {
+    console.warn('journal line has both debit and credit', memo);
+    return null;
+  }
+  if (normalized.length < 2) {
+    console.warn('journal needs at least 2 lines', memo);
+    return null;
+  }
+
+  const unknown = normalized.filter(l => !getCoa().some(a => a.id === l.accountId)).map(l => l.accountId);
+  if (unknown.length) {
+    console.warn('unknown accounts', unknown);
+    // Allow system posts that may create accounts elsewhere; block pure CSV-style unknowns
+    if (source === 'csv_import' || source === 'opening_balance' || source === 'manual') {
+      return null;
+    }
+  }
+
   const debits = normalized.reduce((n, l) => n + l.debit, 0);
   const credits = normalized.reduce((n, l) => n + l.credit, 0);
   if (Math.abs(debits - credits) > 0.02) {
@@ -9909,8 +9929,10 @@ function updateOpeningHint() {
     else credits += amt;
   });
   const plug = Math.round((assets - credits) * 100) / 100;
+  const plugAbs = Math.abs(plug) > 0.02;
   hint.textContent = 'Assets ' + money(assets) + ' · Liabilities+Equity ' + money(credits) +
-    (Math.abs(plug) > 0.02 ? (' · Equity plug ' + money(plug) + ' (auto)') : ' · Balanced');
+    (plugAbs ? (' · Equity plug ' + money(plug) + ' (auto)') : ' · Balanced');
+  hint.style.color = (assets + credits) === 0 ? 'var(--muted)' : (plugAbs ? 'var(--muted)' : 'var(--green-text)');
 }
 
 function downloadOpeningBalanceSampleCsv() {
@@ -10003,7 +10025,14 @@ function importOpeningBalancesCsv(file) {
         return;
       }
       rebuildOpeningBalanceLines(prefill);
-      toast('Loaded ' + n + ' opening balances from CSV');
+      const check = validateOpeningBalancesForm();
+      if (!check.ok) {
+        toast('Loaded ' + n + ' rows · validation: ' + (check.errors[0] || 'review amounts'));
+      } else if (check.warnings.length) {
+        toast('Loaded ' + n + ' rows · ' + check.warnings[0]);
+      } else {
+        toast('Loaded ' + n + ' opening balances — ready to post');
+      }
     } catch (e) {
       console.warn(e);
       toast('Could not import opening balances CSV');
@@ -10014,6 +10043,14 @@ function importOpeningBalancesCsv(file) {
 
 function postOpeningBalances() {
   ensureBooksDb();
+  const v = validateOpeningBalancesForm();
+  if (!v.ok) {
+    toast('Opening balances invalid: ' + (v.errors[0] || 'check form'));
+    return;
+  }
+  if (v.warnings.length) {
+    if (!confirm(v.warnings.join('\n') + '\n\nPost anyway?')) return;
+  }
   const date = document.getElementById('obDate')?.value || today;
   if (db.journals.some(j => j.source === 'opening_balance')) {
     if (!confirm('Opening balances were already posted. Post another opening journal anyway?')) return;
@@ -11998,10 +12035,11 @@ function commitJournalImport() {
   booksView();
   let msg = 'Posted ' + posted + ' journal(s)';
   if (skipped) msg += ' · skipped ' + skipped;
-  if (unbalanced) msg += ' · ' + unbalanced + ' unbalanced left out';
-  if (!posted) msg = 'No journals posted — select balanced rows in the preview';
+  if (invalid) msg += ' · ' + invalid + ' failed validation';
+  if (failReasons.length) msg += ' · ' + failReasons[0];
+  if (!posted) msg = 'No journals posted — fix validation errors or select valid rows';
   toast(msg);
-  track('journals_csv_imported', { posted, skipped, unbalanced, preview: true });
+  track('journals_csv_imported', { posted, skipped, invalid, preview: true });
 }
 
 function resolveAccountId(raw) {
