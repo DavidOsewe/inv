@@ -12835,6 +12835,56 @@ function postBankTxFromRule(tx, rule) {
   return entry;
 }
 
+function bankRuleAccountOptionsHtml(selected) {
+  const coa = getCoa();
+  // Prefer cash / bank accounts; if none tagged, list all assets
+  let banks = coa.filter(a => isCashEquivalentAccount(a));
+  if (!banks.length) banks = coa.filter(a => a.type === 'asset');
+  // Always include any selected id even if not in filtered list
+  if (selected && selected !== '*' && !banks.some(a => a.id === selected)) {
+    const hit = coa.find(a => a.id === selected);
+    if (hit) banks = [hit].concat(banks);
+  }
+  banks = banks.slice().sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+  return '<option value="*">All cash / bank accounts</option>' +
+    banks.map(a =>
+      '<option value="' + a.id + '"' + (a.id === selected ? ' selected' : '') + '>' +
+      a.id + ' · ' + a.name + '</option>'
+    ).join('');
+}
+
+/** Full ledger for "Post to account" — income, expense, liability, equity, non-cash assets */
+function bankRuleCoaOptionsHtml(selected) {
+  const coa = getCoa();
+  const order = { income: 1, expense: 2, liability: 3, equity: 4, asset: 5 };
+  const list = coa
+    .filter(a => !isCashEquivalentAccount(a)) // post the other side of the bank entry
+    .slice()
+    .sort((a, b) => {
+      const ta = order[a.type] || 9, tb = order[b.type] || 9;
+      if (ta !== tb) return ta - tb;
+      return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+    });
+  // If everything was cash, fall back to full chart
+  const rows = list.length ? list : coa;
+  // Ensure selected exists
+  if (selected && !rows.some(a => a.id === selected)) {
+    const hit = coa.find(a => a.id === selected);
+    if (hit) rows.unshift(hit);
+  }
+  let html = '';
+  let lastType = '';
+  rows.forEach(a => {
+    if (a.type !== lastType) {
+      lastType = a.type;
+      html += '<option disabled value="">—— ' + (a.type || 'other').toUpperCase() + ' ——</option>';
+    }
+    html += '<option value="' + a.id + '"' + (a.id === selected ? ' selected' : '') + '>' +
+      a.id + ' · ' + a.name + '</option>';
+  });
+  return html;
+}
+
 function openBankRuleModal(editId, prefills) {
   ensureBooksDb();
   const m = document.getElementById('bankRuleModal');
@@ -12843,37 +12893,44 @@ function openBankRuleModal(editId, prefills) {
     return;
   }
   try {
-  const banks = getCoa().filter(a => a.type === 'asset' && (a.id === '1000' || /cash|bank|moniepoint|opay|wallet/i.test(a.name)));
-  const allAssets = getCoa().filter(a => a.type === 'asset');
-  const bankList = banks.length ? banks : allAssets;
-  const accSel = document.getElementById('brAccount');
-  if (accSel) {
-    accSel.innerHTML = '<option value="*">All cash / bank accounts</option>' +
-      bankList.map(a => `<option value="${a.id}">${a.id} · ${a.name}</option>`).join('');
-  }
-  const coaSel = document.getElementById('brCoa');
-  if (coaSel) {
-    coaSel.innerHTML = getCoa()
-      .filter(a => a.type === 'expense' || a.type === 'income' || a.id === '3100')
-      .map(a => `<option value="${a.id}">${a.id} · ${a.name}</option>`).join('');
-  }
+    const rule = editId ? (db.bankRules || []).find(r => r.id === editId) : null;
+    const selBank = rule?.accountId || prefills?.accountId || '*';
+    const selCoa = rule?.coaId || prefills?.coaId || '5700';
 
-  const rule = editId ? (db.bankRules || []).find(r => r.id === editId) : null;
-  document.getElementById('bankRuleEditId').value = editId || '';
-  document.getElementById('bankRuleModalTitle').textContent = rule ? 'Edit bank rule' : 'New bank rule';
-  document.getElementById('brName').value = rule?.name || prefills?.name || '';
-  document.getElementById('brDirection').value = rule?.direction || prefills?.direction || 'out';
-  document.getElementById('brAccount').value = rule?.accountId || prefills?.accountId || '*';
-  document.getElementById('brContains').value = rule?.contains || prefills?.contains || '';
-  document.getElementById('brAmount').value = rule?.amount != null && rule.amount !== '' ? rule.amount : (prefills?.amount || '');
-  document.getElementById('brAction').value = rule?.action || 'add';
-  document.getElementById('brCoa').value = rule?.coaId || prefills?.coaId || '5700';
-  document.getElementById('brMemo').value = rule?.memo || prefills?.memo || '';
-  document.getElementById('brAuto').checked = rule ? (rule.autoApply !== false) : true;
-  m.classList.add('show');
+    const accSel = document.getElementById('brAccount');
+    if (accSel) accSel.innerHTML = bankRuleAccountOptionsHtml(selBank);
+
+    const coaSel = document.getElementById('brCoa');
+    if (coaSel) coaSel.innerHTML = bankRuleCoaOptionsHtml(selCoa);
+
+    document.getElementById('bankRuleEditId').value = editId || '';
+    document.getElementById('bankRuleModalTitle').textContent = rule ? 'Edit bank rule' : 'New bank rule';
+    document.getElementById('brName').value = rule?.name || prefills?.name || '';
+    document.getElementById('brDirection').value = rule?.direction || prefills?.direction || 'out';
+    if (accSel) accSel.value = selBank;
+    document.getElementById('brContains').value = rule?.contains || prefills?.contains || '';
+    document.getElementById('brAmount').value = rule?.amount != null && rule.amount !== '' ? rule.amount : (prefills?.amount || '');
+    document.getElementById('brAction').value = rule?.action || 'add';
+    if (coaSel) {
+      // If default 5700 missing, pick first real option
+      if (![...coaSel.options].some(o => o.value === selCoa && o.value)) {
+        const first = [...coaSel.options].find(o => o.value);
+        if (first) coaSel.value = first.value;
+      } else {
+        coaSel.value = selCoa;
+      }
+    }
+    document.getElementById('brMemo').value = rule?.memo || prefills?.memo || '';
+    document.getElementById('brAuto').checked = rule ? (rule.autoApply !== false) : true;
+
+    if (typeof showModal === 'function') showModal('bankRuleModal');
+    else {
+      m.classList.add('show');
+      m.style.display = 'grid';
+    }
   } catch (err) {
     console.warn('openBankRuleModal', err);
-    toast('Could not open rule form');
+    toast('Could not open rule form — ' + (err.message || 'error'));
   }
 }
 function closeBankRuleModal() {
