@@ -2429,13 +2429,8 @@ input:focus:not(:focus-visible) {
           <h2>Books</h2>
           <p class="section-sub">See money in, money out, and whether your bank matches — without drowning in menus.</p>
         </div>
-        <div style="display:none">
-          <button type="button" id="btnBooksSetup"></button>
-          <button type="button" id="btnExportBooks"></button>
-          <button type="button" id="btnAddBill"></button>
-          <button type="button" id="btnAddCashEntry"></button>
-          <button type="button" id="btnAddRecurringJournal"></button>
-        </div>
+        <!-- legacy id stubs removed: duplicate IDs stole event listeners from real buttons -->
+        <div style="display:none" aria-hidden="true"></div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center" id="booksPrimaryActions">
           <div style="position:relative" id="booksCreateWrap">
             <button class="button primary" type="button" id="btnBooksCreate">+ Create</button>
@@ -2445,6 +2440,7 @@ input:focus:not(:focus-visible) {
               <button type="button" class="button small" data-create="expense" style="justify-content:flex-start;border:0;background:transparent">Expense</button>
               <button type="button" class="button small" data-create="bill" style="justify-content:flex-start;border:0;background:transparent">Supplier bill</button>
               <button type="button" class="button small" data-create="journal" style="justify-content:flex-start;border:0;background:transparent">Journal entry</button>
+              <button type="button" class="button small" data-create="recurring-journal" style="justify-content:flex-start;border:0;background:transparent">Recurring journal</button>
               <button type="button" class="button small" data-create="journal-csv" style="justify-content:flex-start;border:0;background:transparent">Bulk journals (CSV)</button>
               <button type="button" class="button small" data-create="transfer" style="justify-content:flex-start;border:0;background:transparent">Bank transfer</button>
             </div>
@@ -2646,7 +2642,7 @@ input:focus:not(:focus-visible) {
         <div class="insight">
           <h3>Recurring journals</h3>
           <p class="section-sub">Rent, subscriptions, retainers — post the same balanced entry on a schedule when you open Books.</p>
-          <button type="button" class="button primary" id="btnAddRecurringJournal" style="margin-bottom:12px">New recurring journal</button>
+          <button type="button" class="button primary" id="btnAddRecurringJournal" data-open-recurring-journal style="margin-bottom:12px">New recurring journal</button>
           <div id="booksRecurringJList"></div>
         </div>
       </div>
@@ -8579,6 +8575,10 @@ function runBooksAction(kind) {
     setTimeout(() => document.getElementById('bankTxCsvFile')?.click(), 50);
   }
   else if (kind === 'transfer') openTransferModal();
+  else if (kind === 'recurring-journal' || kind === 'recurringj') {
+    setBooksPage('home', 'recurringj');
+    setTimeout(() => openRecurringJournalModal(), 60);
+  }
   else if (kind === 'payment') {
     try { switchTo('invoices'); toast('Open an invoice to record a payment'); } catch {}
   }
@@ -8715,34 +8715,72 @@ function renderBooksBalance() {
   const el = document.getElementById('booksBalanceSheet');
   if (!el) return;
   const bal = accountBalances(null);
-  let retained = 0;
+
+  function bsDisplay(a, raw) {
+    const v = Number(raw) || 0;
+    if (a.type === 'liability' || a.type === 'equity') return -v;
+    return v;
+  }
+
+  let currentEarnings = 0;
   getCoa().forEach(a => {
     const b = bal[a.id] || 0;
-    if (a.type === 'income') retained += -b;
-    if (a.type === 'expense') retained += -b;
+    if (a.type === 'income') currentEarnings += -b;
+    if (a.type === 'expense') currentEarnings += -b;
   });
 
   const groups = {};
-  getCoa().filter(a => a.statement === 'bs' || a.type === 'asset' || a.type === 'liability' || a.type === 'equity').forEach(a => {
+  getCoa().forEach(a => {
     if (a.type === 'income' || a.type === 'expense') return;
+    if (a.statement === 'pl') return;
     const key = a.fsLine || defaultFsMeta(a.type).fsLine;
-    if (!groups[key]) groups[key] = { key, label: fsLineLabel(key), meta: FS_LINES[key] || {}, lines: [], total: 0 };
-    let amt = bal[a.id] || 0;
-    // Present BS natural sign: assets debit+, liabilities/equity credit+ as positive
-    if (a.type === 'liability' || a.type === 'equity') amt = -amt;
+    if (!groups[key]) {
+      groups[key] = {
+        key,
+        label: fsLineLabel(key),
+        section: (FS_LINES[key] && FS_LINES[key].section) || (a.type === 'liability' ? 'liabilities' : a.type === 'equity' ? 'equity' : 'assets'),
+        order: (FS_LINES[key] && FS_LINES[key].order) || 50,
+        lines: [],
+        total: 0
+      };
+    }
+    const amt = bsDisplay(a, bal[a.id] || 0);
     if (Math.abs(amt) < 0.001) return;
-    groups[key].lines.push({ ...a, amt });
+    groups[key].lines.push({ id: a.id, name: a.name, amt });
     groups[key].total += amt;
   });
-  // Retained earnings under equity
-  if (Math.abs(retained) > 0.001) {
-    const key = 'equity';
-    if (!groups[key]) groups[key] = { key, label: fsLineLabel(key), meta: FS_LINES[key] || {}, lines: [], total: 0 };
-    groups[key].lines.push({ id: '3200', name: 'Retained earnings (current year P&L)', amt: retained });
-    groups[key].total += retained;
-  }
 
-  const ordered = Object.values(groups).sort((a, b) => (a.meta.order || 99) - (b.meta.order || 99));
+  // Reclassify cash equivalents into cash_and_equivalents
+  getCoa().forEach(a => {
+    if (!isCashEquivalentAccount(a)) return;
+    const amt = bsDisplay(a, bal[a.id] || 0);
+    if (Math.abs(amt) < 0.001) return;
+    const key = 'cash_and_equivalents';
+    if (!groups[key]) groups[key] = { key, label: fsLineLabel(key), section: 'assets', order: 10, lines: [], total: 0 };
+    if (groups[key].lines.some(l => l.id === a.id)) return;
+    Object.keys(groups).forEach(k => {
+      if (k === key) return;
+      const before = groups[k].lines.length;
+      groups[k].lines = groups[k].lines.filter(l => l.id !== a.id);
+      if (groups[k].lines.length !== before) groups[k].total = groups[k].lines.reduce((n, l) => n + l.amt, 0);
+    });
+    groups[key].lines.push({ id: a.id, name: a.name, amt });
+    groups[key].total += amt;
+  });
+
+  let assetT = 0, liabT = 0, equityAcctT = 0;
+  Object.values(groups).forEach(g => {
+    if (g.section === 'assets') assetT += g.total;
+    else if (g.section === 'liabilities') liabT += g.total;
+    else if (g.section === 'equity') equityAcctT += g.total;
+  });
+
+  let equityT = equityAcctT + currentEarnings;
+  let balancingRE = Math.round((assetT - liabT - equityT) * 100) / 100;
+  if (Math.abs(balancingRE) < 0.02) balancingRE = 0;
+  else equityT += balancingRE;
+
+  const ordered = Object.values(groups).sort((a, b) => a.order - b.order);
   const row = (name, amt, bold, accountId) =>
     '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);' +
     (bold ? 'font-weight:700' : '') + '"><span>' +
@@ -8753,29 +8791,39 @@ function renderBooksBalance() {
       : name) +
     '</span><span>' + money(amt) + '</span></div>';
 
-  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">As at period end · reporting currency · grouped by FS line</div>';
-  let assetTotal = 0, liabTotal = 0, equityTotal = 0;
-  ordered.forEach(g => {
-    const sec = (g.meta && g.meta.section) || 'assets';
+  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">As at period end · reporting currency · FS lines · cash auto-detected</div>';
+  ordered.filter(g => g.section === 'assets' && (g.lines.length || Math.abs(g.total) >= 0.001)).forEach(g => {
     html += '<div style="font-weight:700;margin:14px 0 4px">' + g.label +
       ' <span class="mini" style="font-weight:500;color:var(--muted)">FS · ' + g.key + '</span></div>';
-    g.lines.forEach(a => {
-      html += row((a.id ? a.id + ' · ' : '') + a.name, a.amt, false, a.id);
-    });
+    g.lines.forEach(a => html += row(a.id + ' · ' + a.name, a.amt, false, a.id));
     html += row('Total ' + g.label, g.total, true, null);
-    if (sec === 'assets') assetTotal += g.total;
-    else if (sec === 'liabilities') liabTotal += g.total;
-    else equityTotal += g.total;
   });
-  html += row('Total assets', assetTotal, true, null);
-  html += row('Total liabilities + equity', liabTotal + equityTotal, true, null);
+  html += row('Total assets', assetT, true, null);
+
+  ordered.filter(g => g.section === 'liabilities' && g.lines.length).forEach(g => {
+    html += '<div style="font-weight:700;margin:14px 0 4px">' + g.label + '</div>';
+    g.lines.forEach(a => html += row(a.id + ' · ' + a.name, a.amt, false, a.id));
+    html += row('Total ' + g.label, g.total, true, null);
+  });
+  html += row('Total liabilities', liabT, true, null);
+
+  html += '<div style="font-weight:700;margin:14px 0 4px">Equity</div>';
+  ordered.filter(g => g.section === 'equity' && g.lines.length).forEach(g => {
+    g.lines.forEach(a => html += row(a.id + ' · ' + a.name, a.amt, false, a.id));
+  });
+  if (Math.abs(currentEarnings) >= 0.02) html += row('Current year profit / (loss)', currentEarnings, false, null);
+  if (Math.abs(balancingRE) >= 0.02) {
+    html += row('Retained earnings (balancing figure)', balancingRE, false, '3200');
+    html += '<p class="section-sub">Plug so Assets = Liabilities + Equity. Post opening equity / retained earnings to clear this.</p>';
+  }
+  html += row('Total equity', equityT, true, null);
+  html += row('Liabilities + equity', liabT + equityT, true, null);
   el.innerHTML = html;
   el.querySelectorAll('[data-gl-drill]').forEach(btn => {
     btn.addEventListener('click', () => drillToLedger(btn.getAttribute('data-gl-drill')));
   });
 }
 
-/** Indirect cash flow for the selected books period */
 function renderBooksCashflow() {
   const el = document.getElementById('booksCashflow');
   if (!el) return;
@@ -9831,8 +9879,10 @@ function renderBooksAttention() {
 
 function isCashEquivalentAccount(a) {
   if (!a || a.type !== 'asset') return false;
-  if (a.id === '1000') return true;
-  return /cash|bank|moniepoint|opay|gtbank|access|zenith|uba|wallet|till|petty|equivalent/i.test(a.name || '');
+  if (a.fsLine === 'cash_and_equivalents' || a.cfSection === 'cash') return true;
+  if (a.id === '1000' || a.id === '1050') return true;
+  const n = String(a.name || '');
+  return /cash|bank|monie\s*point|opay|palm\s*pay|gt\s*bank|gtbank|access|zenith|uba|first\s*bank|fidelity|sterling|wema|wallet|till|petty|mfb|equivalent/i.test(n);
 }
 
 function cashEquivalentsTotal(bal) {
@@ -10099,45 +10149,129 @@ function buildBooksReportHtml(kind) {
   if (kind === 'balance' || kind === 'all') {
     if (kind === 'balance') title = 'Balance Sheet';
     const bal = accountBalances(null);
-    body += '<h2 style="margin:18px 0 8px;font-size:16px">Balance Sheet</h2>';
-    body += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;border-bottom:1px solid #ddd;padding:6px">Account</th><th style="text-align:right;border-bottom:1px solid #ddd;padding:6px">Amount (' + currency + ')</th></tr></thead><tbody>';
-    body += '<tr><td colspan="2" style="padding:6px;font-weight:700">Cash &amp; cash equivalents</td></tr>';
-    let cashT = 0, assetT = 0;
-    getCoa().filter(a => a.type === 'asset').forEach(a => {
-      const v = bal[a.id] || 0;
-      assetT += v;
-      if (!isCashEquivalentAccount(a) || Math.abs(v) < 0.001) return;
-      cashT += v;
-      body += '<tr><td style="padding:4px 6px">' + a.id + ' · ' + a.name + '</td><td style="text-align:right;padding:4px 6px">' + money(v) + '</td></tr>';
-    });
-    body += '<tr><td style="padding:6px;font-weight:700">Total cash &amp; equivalents</td><td style="text-align:right;padding:6px;font-weight:700">' + money(cashT) + '</td></tr>';
-    body += '<tr><td colspan="2" style="padding:6px;font-weight:700">Other assets</td></tr>';
-    getCoa().filter(a => a.type === 'asset' && !isCashEquivalentAccount(a)).forEach(a => {
-      const v = bal[a.id] || 0;
-      if (Math.abs(v) < 0.001) return;
-      body += '<tr><td style="padding:4px 6px">' + a.id + ' · ' + a.name + '</td><td style="text-align:right;padding:4px 6px">' + money(v) + '</td></tr>';
-    });
-    body += '<tr><td style="padding:6px;font-weight:700">Total assets</td><td style="text-align:right;padding:6px;font-weight:700">' + money(assetT) + '</td></tr>';
-    body += '<tr><td colspan="2" style="padding:6px;font-weight:700">Liabilities</td></tr>';
-    let liabT = 0;
-    getCoa().filter(a => a.type === 'liability').forEach(a => {
-      const v = -(bal[a.id] || 0);
-      liabT += v;
-      if (Math.abs(v) < 0.001) return;
-      body += '<tr><td style="padding:4px 6px">' + a.id + ' · ' + a.name + '</td><td style="text-align:right;padding:4px 6px">' + money(v) + '</td></tr>';
-    });
-    body += '<tr><td style="padding:6px;font-weight:700">Total liabilities</td><td style="text-align:right;padding:6px;font-weight:700">' + money(liabT) + '</td></tr>';
-    let retained = 0;
+
+    // Display amount on BS (natural sign): assets debit+, liabilities/equity credit+
+    function bsDisplay(a, raw) {
+      const v = Number(raw) || 0;
+      if (a.type === 'liability' || a.type === 'equity') return -v;
+      return v;
+    }
+
+    // Current-year (or cumulative unclosed) earnings from P&L accounts
+    let currentEarnings = 0;
     getCoa().forEach(a => {
       const b = bal[a.id] || 0;
-      if (a.type === 'income') retained += -b;
-      if (a.type === 'expense') retained += -b;
+      if (a.type === 'income') currentEarnings += -b;
+      if (a.type === 'expense') currentEarnings += -b;
     });
-    const equity = retained - (bal['3100'] || 0);
-    body += '<tr><td colspan="2" style="padding:6px;font-weight:700">Equity</td></tr>';
-    body += '<tr><td style="padding:4px 6px">Retained earnings</td><td style="text-align:right;padding:4px 6px">' + money(retained) + '</td></tr>';
-    body += '<tr><td style="padding:6px;font-weight:700">Total equity</td><td style="text-align:right;padding:6px;font-weight:700">' + money(equity) + '</td></tr>';
-    body += '<tr><td style="padding:8px 6px;font-weight:700;border-top:2px solid #111">Liabilities + equity</td><td style="text-align:right;padding:8px 6px;font-weight:700;border-top:2px solid #111">' + money(liabT + equity) + '</td></tr>';
+
+    // Group BS accounts by fsLine
+    const groups = {};
+    getCoa().forEach(a => {
+      if (a.type === 'income' || a.type === 'expense') return;
+      if (a.statement === 'pl') return;
+      const key = a.fsLine || defaultFsMeta(a.type).fsLine;
+      if (!groups[key]) {
+        groups[key] = {
+          key,
+          label: fsLineLabel(key),
+          section: (FS_LINES[key] && FS_LINES[key].section) || (a.type === 'liability' ? 'liabilities' : a.type === 'equity' ? 'equity' : 'assets'),
+          order: (FS_LINES[key] && FS_LINES[key].order) || 50,
+          lines: [],
+          total: 0
+        };
+      }
+      const amt = bsDisplay(a, bal[a.id] || 0);
+      if (Math.abs(amt) < 0.001) return;
+      groups[key].lines.push({ id: a.id, name: a.name, amt });
+      groups[key].total += amt;
+    });
+
+    // Force cash group to include isCashEquivalent even if fsLine wrong
+    getCoa().forEach(a => {
+      if (!isCashEquivalentAccount(a)) return;
+      const amt = bsDisplay(a, bal[a.id] || 0);
+      if (Math.abs(amt) < 0.001) return;
+      const key = 'cash_and_equivalents';
+      if (!groups[key]) {
+        groups[key] = { key, label: fsLineLabel(key), section: 'assets', order: 10, lines: [], total: 0 };
+      }
+      if (groups[key].lines.some(l => l.id === a.id)) return;
+      // Remove from wrong group if present
+      Object.keys(groups).forEach(k => {
+        if (k === key) return;
+        const before = groups[k].lines.length;
+        groups[k].lines = groups[k].lines.filter(l => l.id !== a.id);
+        if (groups[k].lines.length !== before) {
+          groups[k].total = groups[k].lines.reduce((n, l) => n + l.amt, 0);
+        }
+      });
+      groups[key].lines.push({ id: a.id, name: a.name, amt });
+      groups[key].total += amt;
+    });
+
+    let assetT = 0, liabT = 0, equityAcctT = 0;
+    Object.values(groups).forEach(g => {
+      if (g.section === 'assets') assetT += g.total;
+      else if (g.section === 'liabilities') liabT += g.total;
+      else if (g.section === 'equity') equityAcctT += g.total;
+    });
+
+    // Balancing residual → retained earnings (so Assets = Liab + Equity on the face of the report)
+    // equityAcctT already includes 3200 if posted; currentEarnings is unclosed P&L
+    let equityT = equityAcctT + currentEarnings;
+    let balancingRE = Math.round((assetT - liabT - equityT) * 100) / 100;
+    if (Math.abs(balancingRE) >= 0.02) {
+      equityT += balancingRE;
+    } else {
+      balancingRE = 0;
+    }
+
+    const ordered = Object.values(groups).sort((a, b) => a.order - b.order);
+
+    body += '<h2 style="margin:18px 0 8px;font-size:16px">Balance Sheet</h2>';
+    body += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;border-bottom:1px solid #ddd;padding:6px">Account</th><th style="text-align:right;border-bottom:1px solid #ddd;padding:6px">Amount (' + currency + ')</th></tr></thead><tbody>';
+
+    function emitSection(title, filterFn) {
+      const list = ordered.filter(filterFn).filter(g => g.lines.length || Math.abs(g.total) >= 0.001);
+      if (!list.length && title !== 'Equity') return;
+      body += '<tr><td colspan="2" style="padding:8px 6px 4px;font-weight:700;background:#f8fafc">' + title + '</td></tr>';
+      list.forEach(g => {
+        body += '<tr><td colspan="2" style="padding:6px 6px 2px;font-weight:600;color:#334155">' + g.label + '</td></tr>';
+        g.lines.forEach(l => {
+          body += '<tr><td style="padding:3px 6px 3px 16px">' + l.id + ' · ' + String(l.name || '').replace(/</g, '') + '</td><td style="text-align:right;padding:3px 6px">' + money(l.amt) + '</td></tr>';
+        });
+        body += '<tr><td style="padding:4px 6px;font-weight:600">Total ' + g.label + '</td><td style="text-align:right;padding:4px 6px;font-weight:600">' + money(g.total) + '</td></tr>';
+      });
+    }
+
+    emitSection('Assets', g => g.section === 'assets');
+    body += '<tr><td style="padding:8px 6px;font-weight:700;border-top:1px solid #111">Total assets</td><td style="text-align:right;padding:8px 6px;font-weight:700;border-top:1px solid #111">' + money(assetT) + '</td></tr>';
+
+    emitSection('Liabilities', g => g.section === 'liabilities');
+    body += '<tr><td style="padding:6px;font-weight:700">Total liabilities</td><td style="text-align:right;padding:6px;font-weight:700">' + money(liabT) + '</td></tr>';
+
+    body += '<tr><td colspan="2" style="padding:8px 6px 4px;font-weight:700;background:#f8fafc">Equity</td></tr>';
+    ordered.filter(g => g.section === 'equity').forEach(g => {
+      if (!g.lines.length) return;
+      body += '<tr><td colspan="2" style="padding:6px 6px 2px;font-weight:600;color:#334155">' + g.label + '</td></tr>';
+      g.lines.forEach(l => {
+        body += '<tr><td style="padding:3px 6px 3px 16px">' + l.id + ' · ' + String(l.name || '').replace(/</g, '') + '</td><td style="text-align:right;padding:3px 6px">' + money(l.amt) + '</td></tr>';
+      });
+      body += '<tr><td style="padding:4px 6px;font-weight:600">Total ' + g.label + '</td><td style="text-align:right;padding:4px 6px;font-weight:600">' + money(g.total) + '</td></tr>';
+    });
+    if (Math.abs(currentEarnings) >= 0.02) {
+      body += '<tr><td style="padding:4px 6px 3px 16px">Current year profit / (loss)</td><td style="text-align:right;padding:3px 6px">' + money(currentEarnings) + '</td></tr>';
+    }
+    if (Math.abs(balancingRE) >= 0.02) {
+      body += '<tr><td style="padding:4px 6px 3px 16px">Retained earnings (balancing figure)</td><td style="text-align:right;padding:3px 6px">' + money(balancingRE) + '</td></tr>';
+      body += '<tr><td colspan="2" style="padding:2px 6px;font-size:10px;color:#64748b">Plug so Assets = Liabilities + Equity. Post opening balances or equity journals to clear this line.</td></tr>';
+    }
+    if (Math.abs(currentEarnings) < 0.02 && Math.abs(balancingRE) < 0.02 && Math.abs(equityAcctT) < 0.02) {
+      body += '<tr><td style="padding:4px 6px 3px 16px">Retained earnings</td><td style="text-align:right;padding:3px 6px">' + money(0) + '</td></tr>';
+    }
+    body += '<tr><td style="padding:6px;font-weight:700">Total equity</td><td style="text-align:right;padding:6px;font-weight:700">' + money(equityT) + '</td></tr>';
+    body += '<tr><td style="padding:8px 6px;font-weight:700;border-top:2px solid #111">Liabilities + equity</td><td style="text-align:right;padding:8px 6px;font-weight:700;border-top:2px solid #111">' + money(liabT + equityT) + '</td></tr>';
     body += '</tbody></table>';
   }
 
@@ -11294,15 +11428,39 @@ function rjUpdateHint() {
   hint.style.color = diff < 0.02 ? 'var(--green-text)' : 'var(--red-text)';
 }
 function openRecurringJournalModal() {
-  document.getElementById('rjMemo').value = '';
-  document.getElementById('rjInterval').value = 'monthly';
-  document.getElementById('rjNext').value = today;
-  rjLineCount = 2;
-  rjRenderLines();
-  document.getElementById('recurringJournalModal')?.classList.add('show');
+  try {
+    const modal = document.getElementById('recurringJournalModal');
+    if (!modal) {
+      toast('Recurring journal UI missing — hard-refresh the app');
+      return;
+    }
+    const memo = document.getElementById('rjMemo');
+    const interval = document.getElementById('rjInterval');
+    const next = document.getElementById('rjNext');
+    if (memo) memo.value = '';
+    if (interval) interval.value = 'monthly';
+    if (next) next.value = (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
+    rjLineCount = 2;
+    try { rjRenderLines(); } catch (e) { console.warn('rjRenderLines', e); }
+    if (typeof showModal === 'function') showModal('recurringJournalModal');
+    else {
+      modal.classList.add('show');
+      modal.style.display = 'grid';
+    }
+  } catch (e) {
+    console.warn(e);
+    toast('Could not open recurring journal — ' + (e.message || 'error'));
+  }
 }
 function closeRecurringJournalModal() {
-  document.getElementById('recurringJournalModal')?.classList.remove('show');
+  if (typeof hideModal === 'function') hideModal('recurringJournalModal');
+  else {
+    const modal = document.getElementById('recurringJournalModal');
+    if (modal) {
+      modal.classList.remove('show');
+      modal.style.display = '';
+    }
+  }
 }
 function nextRunAfter(dateStr, interval) {
   const d = new Date(dateStr + 'T12:00:00');
@@ -11723,6 +11881,10 @@ function handleBooksCreate(kind) {
     setTimeout(() => document.getElementById('journalCsvFile')?.click(), 80);
   }
   else if (kind === 'transfer') openTransferModal();
+  else if (kind === 'recurring-journal' || kind === 'recurringj') {
+    setBooksPage('home', 'recurringj');
+    setTimeout(() => openRecurringJournalModal(), 60);
+  }
 }
 
 /* ========== Bank transfer ========== */
@@ -13803,6 +13965,13 @@ document.getElementById('reconCsvFile')?.addEventListener('change', (e) => {
   e.target.value = '';
 });
 document.getElementById('btnAddRecurringJournal')?.addEventListener('click', openRecurringJournalModal);
+// Delegation backup — duplicate empty IDs used to steal the only listener
+document.addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest && e.target.closest('#btnAddRecurringJournal, [data-open-recurring-journal]');
+  if (!btn) return;
+  e.preventDefault();
+  openRecurringJournalModal();
+});
 document.getElementById('rjCancel')?.addEventListener('click', closeRecurringJournalModal);
 document.getElementById('rjAddLine')?.addEventListener('click', () => { rjLineCount++; rjRenderLines(); });
 document.getElementById('rjSave')?.addEventListener('click', () => {
