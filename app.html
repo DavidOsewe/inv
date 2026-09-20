@@ -3288,7 +3288,10 @@ input:focus:not(:focus-visible) {
 
 <div class="modalback" id="bankRuleModal">
   <div class="modal" style="max-width:480px">
-    <h2 id="bankRuleModalTitle">Bank rule</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:4px">
+      <h2 id="bankRuleModalTitle" style="margin:0">Bank rule</h2>
+      <button type="button" class="button small" id="brCloseX" aria-label="Close" onclick="closeBankRuleModal(event)" style="min-width:36px;padding:6px 10px">✕</button>
+    </div>
     <input type="hidden" id="bankRuleEditId">
     <div class="field"><label>Name</label><input id="brName" placeholder="e.g. MTN data"></div>
     <div class="two">
@@ -3325,7 +3328,7 @@ input:focus:not(:focus-visible) {
     </div>
     <div style="display:flex;gap:8px;margin-top:12px">
       <button class="button primary" type="button" id="brSave">Save rule</button>
-      <button class="button" type="button" id="brCancel">Cancel</button>
+      <button class="button" type="button" id="brCancel" onclick="closeBankRuleModal(event)">Cancel</button>
     </div>
   </div>
 </div>
@@ -12933,8 +12936,16 @@ function openBankRuleModal(editId, prefills) {
     toast('Could not open rule form — ' + (err.message || 'error'));
   }
 }
-function closeBankRuleModal() {
-  document.getElementById('bankRuleModal')?.classList.remove('show');
+function closeBankRuleModal(e) {
+  try { if (e && e.preventDefault) e.preventDefault(); } catch (_) {}
+  const m = document.getElementById('bankRuleModal');
+  if (!m) return;
+  m.classList.remove('show');
+  m.style.display = 'none';
+  m.style.removeProperty('display');
+  m.style.zIndex = '';
+  // Also clear via helper if present
+  try { if (typeof hideModal === 'function') hideModal('bankRuleModal'); } catch (_) {}
 }
 function saveBankRule() {
   ensureBooksDb();
@@ -13970,6 +13981,12 @@ document.getElementById('booksDateTo')?.addEventListener('change', () => {
 });
 
 document.getElementById('brCancel')?.addEventListener('click', closeBankRuleModal);
+document.getElementById('brCloseX')?.addEventListener('click', closeBankRuleModal);
+document.getElementById('bankRuleModal')?.addEventListener('click', (e) => {
+  // Click dimmed backdrop only (not inner .modal)
+  if (e.target && e.target.id === 'bankRuleModal') closeBankRuleModal(e);
+});
+
 document.getElementById('brSave')?.addEventListener('click', saveBankRule);
 
 document.getElementById('xferCancel')?.addEventListener('click', closeTransferModal);
