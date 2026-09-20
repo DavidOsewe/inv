@@ -2474,6 +2474,7 @@ input:focus:not(:focus-visible) {
         <button type="button" class="button small" data-books-page="ar">Money in</button>
         <button type="button" class="button small" data-books-page="ap">Money out</button>
         <button type="button" class="button small" data-books-page="banking">Banking</button>
+        <button type="button" class="button small" data-books-page="recurring">Recurring</button>
         <button type="button" class="button small" data-books-page="reports">Reports</button>
         <button type="button" class="button small" data-books-page="setup">Settings</button>
       </nav>
@@ -2661,8 +2662,11 @@ input:focus:not(:focus-visible) {
       <div id="booksPanelRecurringJ" hidden>
         <div class="insight">
           <h3>Recurring journals</h3>
-          <p class="section-sub">Rent, subscriptions, retainers — post the same balanced entry on a schedule when you open Books.</p>
-          <button type="button" class="button primary" id="btnAddRecurringJournal" data-open-recurring-journal style="margin-bottom:12px">New recurring journal</button>
+          <p class="section-sub">Rent, subscriptions, retainers — post on a schedule when you open Books. Pause, edit, or run once from the list.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center">
+            <button type="button" class="button primary" id="btnAddRecurringJournal" data-open-recurring-journal>New schedule</button>
+            <span id="booksRecurringJStats" class="section-sub"></span>
+          </div>
           <div id="booksRecurringJList"></div>
         </div>
       </div>
@@ -3280,8 +3284,12 @@ input:focus:not(:focus-visible) {
 
 <div class="modalback" id="recurringJournalModal">
   <div class="modal" style="max-width:560px">
-    <h2>Recurring journal</h2>
-    <p class="section-sub">Balanced entry that posts automatically on the schedule.</p>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <h2 id="rjModalTitle" style="margin:0">New recurring journal</h2>
+      <button type="button" class="button small" id="rjCloseX" aria-label="Close" style="min-width:36px;padding:6px 10px">✕</button>
+    </div>
+    <input type="hidden" id="rjEditId" value="">
+    <p class="section-sub">Balanced entry that posts on schedule. Pause from the list without deleting.</p>
     <div class="field"><label>Memo</label><input id="rjMemo" placeholder="e.g. Office rent"></div>
     <div class="two">
       <div class="field"><label>Interval</label>
@@ -5533,22 +5541,42 @@ document.addEventListener('click', (e) => {
   if (brUp) { e.preventDefault(); moveBankRule(brUp.getAttribute('data-br-up'), -1); return; }
   const brDown = e.target.closest('[data-br-down]');
   if (brDown) { e.preventDefault(); moveBankRule(brDown.getAttribute('data-br-down'), 1); return; }
+  const rjEdit = e.target.closest('[data-rj-edit]');
+  if (rjEdit) {
+    e.preventDefault();
+    openRecurringJournalModal(rjEdit.getAttribute('data-rj-edit'));
+    return;
+  }
+  const rjRun = e.target.closest('[data-rj-run]');
+  if (rjRun) {
+    e.preventDefault();
+    runRecurringJournalOnce(rjRun.getAttribute('data-rj-run'));
+    return;
+  }
   const rjToggle = e.target.closest('[data-rj-toggle]');
   if (rjToggle) {
     e.preventDefault();
     const id = rjToggle.getAttribute('data-rj-toggle');
     const sch = (db.recurringJournals || []).find(s => s.id === id);
-    if (sch) { sch.active = sch.active === false; save(); queueBooksCloudSync(); booksView(); }
+    if (sch) {
+      sch.active = sch.active === false ? true : false;
+      save();
+      try { queueBooksCloudSync(); } catch (_) {}
+      try { renderBooksRecurringJ(); } catch (_) { booksView(); }
+      toast(sch.active === false ? 'Paused — will not post until resumed' : 'Resumed');
+    }
     return;
   }
   const rjDel = e.target.closest('[data-rj-del]');
   if (rjDel) {
     e.preventDefault();
     const id = rjDel.getAttribute('data-rj-del');
+    const sch = (db.recurringJournals || []).find(s => s.id === id);
+    if (!confirm('Delete schedule “' + ((sch && sch.memo) || 'this') + '”? Posted journals stay in the ledger.')) return;
     db.recurringJournals = (db.recurringJournals || []).filter(s => s.id !== id);
     save();
-    queueBooksCloudSync();
-    booksView();
+    try { queueBooksCloudSync(); } catch (_) {}
+    try { renderBooksRecurringJ(); } catch (_) { booksView(); }
     toast('Schedule deleted');
     return;
   }
@@ -8685,6 +8713,14 @@ const BOOKS_PAGES = {
     actionLabel: 'Import CSV',
     action: 'importcsv'
   },
+  recurring: {
+    tabs: [
+      { id: 'recurringj', label: 'Schedules' }
+    ],
+    defaultTab: 'recurringj',
+    actionLabel: 'New schedule',
+    action: 'recurringj'
+  },
   reports: {
     tabs: [
       { id: 'pnl', label: 'Profit & loss' },
@@ -8727,7 +8763,7 @@ function runBooksAction(kind) {
   }
   else if (kind === 'transfer') openTransferModal();
   else if (kind === 'recurring-journal' || kind === 'recurringj') {
-    setBooksPage('home', 'recurringj');
+    setBooksPage('recurring', 'recurringj');
     setTimeout(() => openRecurringJournalModal(), 60);
   }
   else if (kind === 'payment') {
@@ -10071,6 +10107,7 @@ function booksView() {
 
   setBooksPage(booksPage, booksTab);
   try { renderBooksAttention(); } catch (e) {}
+  try { if (booksTab === 'recurringj' || booksPage === 'recurring') renderBooksRecurringJ(); } catch (e) {}
   try {
     const z = (db.bankTransactions || []).filter(t => t.status === 'pending' && Math.abs(Number(t.amount) || 0) < 0.001);
     if (z.length) {
@@ -11552,23 +11589,28 @@ function renderStatementImportPreview() {
 
 /* ========== Recurring journals ========== */
 let rjLineCount = 2;
-function rjRenderLines() {
+function rjRenderLines(prefills) {
   const wrap = document.getElementById('rjLines');
   if (!wrap) return;
   if (rjLineCount < 2) rjLineCount = 2;
+  const rows = Array.isArray(prefills) ? prefills : [];
   let html = '';
   for (let i = 0; i < rjLineCount; i++) {
-    html += `<div class="two" style="gap:8px;margin-bottom:8px" data-rj-row="${i}">
-      <div class="field" style="flex:2"><label>Account</label><select class="rj-account">${coaOptionsHtml('5100')}</select></div>
-      <div class="field"><label>Debit</label><input type="number" min="0" step="0.01" class="rj-debit"></div>
-      <div class="field"><label>Credit</label><input type="number" min="0" step="0.01" class="rj-credit"></div>
-    </div>`;
+    const pre = rows[i] || {};
+    const acc = pre.accountId || (i === 0 ? '5100' : '1000');
+    const deb = pre.debit != null && Number(pre.debit) > 0 ? Number(pre.debit) : '';
+    const cre = pre.credit != null && Number(pre.credit) > 0 ? Number(pre.credit) : '';
+    const opts = (typeof coaOptionsHtml === 'function') ? coaOptionsHtml(acc) : '';
+    html += '<div class="two" style="gap:8px;margin-bottom:8px" data-rj-row="' + i + '">' +
+      '<div class="field" style="flex:2"><label>Account</label><select class="rj-account searchable" data-searchable="1">' + opts + '</select></div>' +
+      '<div class="field"><label>Debit</label><input type="number" min="0" step="0.01" class="rj-debit" value="' + deb + '"></div>' +
+      '<div class="field"><label>Credit</label><input type="number" min="0" step="0.01" class="rj-credit" value="' + cre + '"></div>' +
+      '</div>';
   }
   wrap.innerHTML = html;
   try { initSearchableSelects(wrap); } catch (_) {}
-  wrap.querySelectorAll('input').forEach(inp => inp.addEventListener('input', rjUpdateHint));
-  rjUpdateHint();
 }
+
 function rjUpdateHint() {
   let dr = 0, cr = 0;
   document.querySelectorAll('#rjLines [data-rj-row]').forEach(row => {
@@ -11581,41 +11623,54 @@ function rjUpdateHint() {
   hint.textContent = diff < 0.02 ? 'Balanced' : 'Out of balance by ' + money(diff);
   hint.style.color = diff < 0.02 ? 'var(--green-text)' : 'var(--red-text)';
 }
-function openRecurringJournalModal() {
+function openRecurringJournalModal(editId) {
   try {
+    ensureBooksDb();
     const modal = document.getElementById('recurringJournalModal');
     if (!modal) {
       toast('Recurring journal UI missing — hard-refresh the app');
       return;
     }
+    const sch = editId ? (db.recurringJournals || []).find(s => s.id === editId) : null;
+    const editEl = document.getElementById('rjEditId');
+    if (editEl) editEl.value = sch ? sch.id : '';
+    const title = document.getElementById('rjModalTitle');
+    if (title) title.textContent = sch ? 'Edit recurring journal' : 'New recurring journal';
     const memo = document.getElementById('rjMemo');
     const interval = document.getElementById('rjInterval');
     const next = document.getElementById('rjNext');
-    if (memo) memo.value = '';
-    if (interval) interval.value = 'monthly';
-    if (next) next.value = (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
-    rjLineCount = 2;
-    try { rjRenderLines(); } catch (e) { console.warn('rjRenderLines', e); }
+    if (memo) memo.value = sch ? (sch.memo || '') : '';
+    if (interval) interval.value = sch ? (sch.interval || 'monthly') : 'monthly';
+    if (next) {
+      next.value = sch && sch.nextRunDate
+        ? String(sch.nextRunDate).slice(0, 10)
+        : (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
+    }
+    const lines = sch && Array.isArray(sch.lines) && sch.lines.length ? sch.lines : null;
+    rjLineCount = lines ? Math.max(2, lines.length) : 2;
+    try { rjRenderLines(lines); } catch (e) { console.warn('rjRenderLines', e); }
     if (typeof showModal === 'function') showModal('recurringJournalModal');
     else {
       modal.classList.add('show');
       modal.style.display = 'grid';
     }
+    try { initSearchableSelects(modal); } catch (_) {}
   } catch (e) {
     console.warn(e);
     toast('Could not open recurring journal — ' + (e.message || 'error'));
   }
 }
+
 function closeRecurringJournalModal() {
   if (typeof hideModal === 'function') hideModal('recurringJournalModal');
   else {
-    const modal = document.getElementById('recurringJournalModal');
-    if (modal) {
-      modal.classList.remove('show');
-      modal.style.display = '';
-    }
+    const m = document.getElementById('recurringJournalModal');
+    if (m) { m.classList.remove('show'); m.style.display = ''; }
   }
+  const editEl = document.getElementById('rjEditId');
+  if (editEl) editEl.value = '';
 }
+
 function nextRunAfter(dateStr, interval) {
   const d = new Date(dateStr + 'T12:00:00');
   if (interval === 'weekly') d.setDate(d.getDate() + 7);
@@ -11624,11 +11679,56 @@ function nextRunAfter(dateStr, interval) {
   else d.setMonth(d.getMonth() + 1);
   return d.toISOString().slice(0, 10);
 }
+function advanceRecurringNextDate(sch) {
+  const base = sch.nextRunDate || (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
+  const d = new Date(String(base).slice(0, 10) + 'T12:00:00');
+  const iv = String(sch.interval || 'monthly').toLowerCase();
+  if (iv === 'weekly') d.setDate(d.getDate() + 7);
+  else if (iv === 'quarterly') d.setMonth(d.getMonth() + 3);
+  else if (iv === 'yearly') d.setFullYear(d.getFullYear() + 1);
+  else d.setMonth(d.getMonth() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function runRecurringJournalOnce(id) {
+  ensureBooksDb();
+  const sch = (db.recurringJournals || []).find(s => s.id === id);
+  if (!sch) { toast('Schedule not found'); return; }
+  if (sch.active === false) { toast('Resume the schedule before running'); return; }
+  const runDate = String(sch.nextRunDate || (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10))).slice(0, 10);
+  const key = 'j:rj:' + sch.id + ':' + runDate;
+  if ((db.journals || []).some(j => j.sourceKey === key)) {
+    toast('Already posted for ' + runDate);
+    sch.nextRunDate = advanceRecurringNextDate(sch);
+    save();
+    renderBooksRecurringJ();
+    return;
+  }
+  const entry = postJournal({
+    date: runDate,
+    memo: (sch.memo || 'Recurring') + ' · ' + runDate,
+    source: 'recurring_journal',
+    sourceKey: key,
+    lines: (sch.lines || []).map(l => ({
+      accountId: l.accountId,
+      debit: Number(l.debit) || 0,
+      credit: Number(l.credit) || 0
+    }))
+  });
+  if (!entry) { toast('Could not post — check lines balance'); return; }
+  sch.lastRunDate = runDate;
+  sch.nextRunDate = advanceRecurringNextDate(sch);
+  save();
+  try { queueBooksCloudSync(); } catch (_) {}
+  try { renderBooksRecurringJ(); } catch (_) { booksView(); }
+  toast('Posted · next ' + sch.nextRunDate);
+}
+
 function processDueRecurringJournals() {
   ensureBooksDb();
   let n = 0;
   (db.recurringJournals || []).forEach(sch => {
-    if (!sch.active) return;
+    if (sch.active === false) return; // paused
     let guard = 0;
     while (sch.nextRunDate && sch.nextRunDate <= today && guard < 24) {
       const key = 'j:rj:' + sch.id + ':' + sch.nextRunDate;
@@ -11653,32 +11753,63 @@ function processDueRecurringJournals() {
 }
 function renderBooksRecurringJ() {
   const el = document.getElementById('booksRecurringJList');
+  const stats = document.getElementById('booksRecurringJStats');
   if (!el) return;
   ensureBooksDb();
-  const list = db.recurringJournals || [];
+  const list = (db.recurringJournals || []).slice().sort((a, b) => {
+    const aa = a.active === false ? 1 : 0;
+    const bb = b.active === false ? 1 : 0;
+    if (aa !== bb) return aa - bb;
+    return String(a.nextRunDate || '').localeCompare(String(b.nextRunDate || ''));
+  });
+  const activeN = list.filter(s => s.active !== false).length;
+  const pausedN = list.length - activeN;
+  if (stats) {
+    stats.textContent = list.length
+      ? (list.length + ' schedule' + (list.length === 1 ? '' : 's') + ' · ' + activeN + ' active' + (pausedN ? (' · ' + pausedN + ' paused') : ''))
+      : '';
+  }
   if (!list.length) {
-    el.innerHTML = '<p class="section-sub">No recurring journals yet. Example: Dr Rent / Cr Cash every month.</p>';
+    el.innerHTML = '<div style="padding:16px;border:1px dashed var(--line);border-radius:12px">' +
+      '<p class="section-sub" style="margin:0">No recurring journals yet.</p>' +
+      '<p class="section-sub" style="margin:8px 0 0">Example: Dr Rent expense / Cr Bank every month.</p></div>';
     return;
   }
+  const day = (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
   el.innerHTML = list.map(sch => {
-    const lines = (sch.lines || []).map(l =>
-      `${coaName(l.accountId)} ${l.debit ? 'Dr ' + money(l.debit) : 'Cr ' + money(l.credit)}`
-    ).join(' · ');
-    return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-        <div style="flex:1;min-width:160px">
-          <b style="font-size:13px">${sch.memo || 'Schedule'}</b>
-          <div style="font-size:12px;color:var(--muted)">${sch.interval || 'monthly'} · next ${sch.nextRunDate || '—'} · ${sch.active === false ? 'paused' : 'active'}</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:4px">${lines}</div>
-        </div>
-        <button type="button" class="button small" data-rj-toggle="${sch.id}">${sch.active === false ? 'Resume' : 'Pause'}</button>
-        <button type="button" class="button small danger" data-rj-del="${sch.id}">Delete</button>
-      </div>
-    </div>`;
+    const paused = sch.active === false;
+    const due = !paused && sch.nextRunDate && String(sch.nextRunDate).slice(0, 10) <= day;
+    const lines = (sch.lines || []).map(l => {
+      const nm = (typeof coaName === 'function' ? coaName(l.accountId) : l.accountId);
+      const side = Number(l.debit) > 0
+        ? ('Dr ' + (typeof money === 'function' ? money(l.debit) : l.debit))
+        : ('Cr ' + (typeof money === 'function' ? money(l.credit) : l.credit));
+      return '<span style="display:inline-block;margin:2px 6px 2px 0;padding:2px 8px;background:var(--panel-2,var(--panel));border-radius:6px;font-size:11px">' +
+        String(nm).replace(/</g, '') + ' · ' + side + '</span>';
+    }).join('');
+    const badge = paused
+      ? '<span style="font-size:11px;padding:2px 8px;border-radius:999px;background:#fef3c7;color:#92400e">Paused</span>'
+      : (due
+        ? '<span style="font-size:11px;padding:2px 8px;border-radius:999px;background:#dcfce7;color:#166534">Due</span>'
+        : '<span style="font-size:11px;padding:2px 8px;border-radius:999px;background:var(--blue-soft);color:var(--blue-soft-text)">Active</span>');
+    return '<div style="padding:14px;margin-bottom:10px;border:1px solid var(--line);border-radius:12px">' +
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;justify-content:space-between">' +
+      '<div style="flex:1;min-width:200px">' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><b style="font-size:14px">' +
+      String(sch.memo || 'Schedule').replace(/</g, '') + '</b> ' + badge + '</div>' +
+      '<div style="font-size:12px;color:var(--muted);margin-top:4px">' +
+      String(sch.interval || 'monthly') + ' · next <b>' + (sch.nextRunDate || '—') + '</b>' +
+      (sch.lastRunDate ? (' · last ' + sch.lastRunDate) : '') + '</div>' +
+      '<div style="margin-top:8px">' + lines + '</div></div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+      '<button type="button" class="button small" data-rj-edit="' + sch.id + '">Edit</button>' +
+      '<button type="button" class="button small" data-rj-toggle="' + sch.id + '">' + (paused ? 'Resume' : 'Pause') + '</button>' +
+      (paused ? '' : '<button type="button" class="button small primary" data-rj-run="' + sch.id + '">Run now</button>') +
+      '<button type="button" class="button small danger" data-rj-del="' + sch.id + '">Delete</button>' +
+      '</div></div></div>';
   }).join('');
 }
 
-/* ========== Cloud sync for Books ========== */
 function queueBooksCloudSync() {
   if (!cloud.client || !cloud.user) return;
   clearTimeout(cloud.booksTimer);
@@ -12036,7 +12167,7 @@ function handleBooksCreate(kind) {
   }
   else if (kind === 'transfer') openTransferModal();
   else if (kind === 'recurring-journal' || kind === 'recurringj') {
-    setBooksPage('home', 'recurringj');
+    setBooksPage('recurring', 'recurringj');
     setTimeout(() => openRecurringJournalModal(), 60);
   }
 }
@@ -14414,23 +14545,51 @@ document.getElementById('rjSave')?.addEventListener('click', () => {
   });
   const dr = lines.reduce((n, l) => n + l.debit, 0);
   const cr = lines.reduce((n, l) => n + l.credit, 0);
-  if (lines.length < 2 || Math.abs(dr - cr) > 0.02) { toast('Lines must balance'); return; }
-  db.recurringJournals.push({
-    id: crypto.randomUUID(),
-    memo: (document.getElementById('rjMemo')?.value || '').trim() || 'Recurring journal',
-    interval: document.getElementById('rjInterval')?.value || 'monthly',
-    nextRunDate: document.getElementById('rjNext')?.value || today,
-    active: true,
-    lines
-  });
+  if (lines.length < 2 || Math.abs(dr - cr) > 0.02) { toast('Lines must balance (Dr = Cr)'); return; }
+  const memo = (document.getElementById('rjMemo')?.value || '').trim() || 'Recurring journal';
+  const interval = document.getElementById('rjInterval')?.value || 'monthly';
+  const nextRunDate = document.getElementById('rjNext')?.value || (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
+  const editId = (document.getElementById('rjEditId')?.value || '').trim();
+  db.recurringJournals = db.recurringJournals || [];
+  if (editId) {
+    const sch = db.recurringJournals.find(s => s.id === editId);
+    if (sch) {
+      sch.memo = memo;
+      sch.interval = interval;
+      sch.nextRunDate = nextRunDate;
+      sch.lines = lines;
+      // keep active / lastRunDate
+      toast('Schedule updated');
+      try { track('recurring_journal_updated', {}); } catch (_) {}
+    } else {
+      toast('Schedule not found');
+      return;
+    }
+  } else {
+    db.recurringJournals.push({
+      id: crypto.randomUUID(),
+      memo,
+      interval,
+      nextRunDate,
+      active: true,
+      lastRunDate: null,
+      lines
+    });
+    toast('Recurring journal saved');
+    try { track('recurring_journal_created', {}); } catch (_) {}
+  }
   save();
-  queueBooksCloudSync();
+  try { queueBooksCloudSync(); } catch (_) {}
   closeRecurringJournalModal();
-  toast('Recurring journal saved');
-  booksTab = 'recurringj';
-  booksView();
-  track('recurring_journal_created', {});
+  try {
+    booksPage = 'recurring';
+    booksTab = 'recurringj';
+    booksView();
+  } catch (_) {
+    try { renderBooksRecurringJ(); } catch (_) {}
+  }
 });
+document.getElementById('rjCloseX')?.addEventListener('click', closeRecurringJournalModal);
 
 document.getElementById('reconClearTicks')?.addEventListener('click', () => {
   if (!confirm('Clear all reconciliation ticks?')) return;
