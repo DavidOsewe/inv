@@ -12173,11 +12173,13 @@ function applyBankRulesToPending(opts = {}) {
 
 
 function proposeBankJournalFromRule(tx, rule) {
+  rule = rule || {};
   const amt = Math.abs(Number(tx.amount) || 0);
   const isIn = Number(tx.amount) > 0;
   const memo = (rule.memo || tx.description || (isIn ? 'Bank deposit' : 'Bank charge')).slice(0, 120);
-  const coaId = rule.coaId || (isIn ? '4100' : '5700');
-  const bankId = tx.accountId;
+  // Always use the rule's post-to account when present
+  const coaId = (rule.coaId && String(rule.coaId).trim()) || (isIn ? '4100' : '5700');
+  const bankId = tx.accountId || rule.accountId || '1000';
   let lines;
   if (isIn) {
     lines = [
@@ -12194,6 +12196,7 @@ function proposeBankJournalFromRule(tx, rule) {
   return {
     txId: tx.id,
     ruleId: rule.id || 'default',
+    ruleName: rule.name || rule.contains || '',
     action: rule.action || 'add',
     date: dateStr,
     memo,
@@ -12258,14 +12261,44 @@ function renderBankRulesReviewList() {
   const hint = document.getElementById('bankRulesReviewHint');
   if (!list) return;
 
-  let coaOpts = '';
-  try {
-    coaOpts = (getCoa() || [])
-      .filter(a => a && (a.type === 'expense' || a.type === 'income' || a.type === 'asset' || a.id === '3100'))
-      .map(a => '<option value="' + a.id + '">' + a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>')
-      .join('');
-  } catch (e) {
-    coaOpts = '<option value="5700">5700 · Expense</option><option value="4100">4100 · Income</option>';
+  // Full COA for counterparty (same scope as bank rule "Post to account")
+  function coaOptionsForReview(selectedId) {
+    let rows = [];
+    try {
+      const order = { income: 1, expense: 2, liability: 3, equity: 4, asset: 5 };
+      rows = (getCoa() || [])
+        .filter(a => a && a.id && !isCashEquivalentAccount(a))
+        .slice()
+        .sort((a, b) => {
+          const ta = order[a.type] || 9, tb = order[b.type] || 9;
+          if (ta !== tb) return ta - tb;
+          return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+        });
+      if (!rows.length) rows = (getCoa() || []).filter(a => a && a.id);
+    } catch (_) {
+      rows = [
+        { id: '4100', name: 'Other income', type: 'income' },
+        { id: '5700', name: 'Other expenses', type: 'expense' },
+        { id: '3000', name: 'Owner equity', type: 'equity' }
+      ];
+    }
+    // Ensure rule target is present even if hidden/filtered
+    if (selectedId && !rows.some(a => a.id === selectedId)) {
+      let hit = null;
+      try { hit = (typeof getCoaAll === 'function' ? getCoaAll() : getCoa()).find(a => a.id === selectedId); } catch (_) {}
+      rows.unshift(hit || { id: selectedId, name: selectedId, type: 'expense' });
+    }
+    let html = '<option value="">— choose account —</option>';
+    let lastType = '';
+    rows.forEach(a => {
+      if (a.type !== lastType) {
+        lastType = a.type;
+        html += '<option disabled value="">—— ' + String(a.type || 'other').toUpperCase() + ' ——</option>';
+      }
+      const sel = a.id === selectedId ? ' selected' : '';
+      html += '<option value="' + a.id + '"' + sel + '>' + a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>';
+    });
+    return html;
   }
 
   let nAdd = 0, nEx = 0, totalOut = 0, totalIn = 0;
@@ -12294,31 +12327,82 @@ function renderBankRulesReviewList() {
         '<label style="display:flex;gap:8px"><input type="checkbox" data-brrev-sel="' + idx + '" checked style="width:auto">' +
         '<span><b>' + (p.date || '') + '</b> · EXCLUDE · ' + amtStr + '<br><span style="color:var(--muted);font-size:12px">' + desc + '</span></span></label></div>';
     }
+
+    // Resolve rule label + ensure coaId from matched rule
+    let ruleName = '';
+    try {
+      const rule = (db.bankRules || []).find(r => r.id === p.ruleId);
+      if (rule) {
+        ruleName = rule.name || rule.contains || '';
+        if (rule.coaId && (!p.coaId || p.coaId === '5700' || p.coaId === '4100')) {
+          // Prefer explicit rule account when proposal still has generic default
+          if (rule.coaId) p.coaId = rule.coaId;
+        }
+        if (rule.coaId) p.coaId = rule.coaId;
+        // Keep lines in sync
+        if (p.lines && p.lines.length >= 2) {
+          if (p.isIn) {
+            p.lines[1].accountId = p.coaId;
+          } else {
+            p.lines[0].accountId = p.coaId;
+          }
+        }
+      }
+    } catch (_) {}
+
     const bankLab = accountLabel(p.bankId);
-    const coaSelect = '<select data-brrev-coa="' + idx + '" style="font-size:12px;max-width:100%">' + coaOpts + '</select>';
+    const coaSelect = '<select data-brrev-coa="' + idx + '" class="brrev-coa searchable" data-searchable="1" style="font-size:12px;max-width:100%;width:100%">' +
+      coaOptionsForReview(p.coaId) + '</select>';
     const journal = p.isIn
-      ? ('<div style="font-size:12px"><div><b>Dr</b> ' + bankLab + ' · ' + amtStr + '</div><div style="margin-top:4px"><b>Cr</b> ' + coaSelect + '</div></div>')
-      : ('<div style="font-size:12px"><div><b>Dr</b> ' + coaSelect + '</div><div style="margin-top:4px"><b>Cr</b> ' + bankLab + ' · ' + amtStr + '</div></div>');
+      ? ('<div style="font-size:12px"><div><b>Dr</b> ' + bankLab + ' · ' + amtStr + '</div>' +
+         '<div style="margin-top:6px"><b>Cr</b> (rule account)</div><div style="margin-top:2px">' + coaSelect + '</div></div>')
+      : ('<div style="font-size:12px"><div><b>Dr</b> (rule account)</div><div style="margin-top:2px">' + coaSelect + '</div>' +
+         '<div style="margin-top:6px"><b>Cr</b> ' + bankLab + ' · ' + amtStr + '</div></div>');
+    const ruleBadge = ruleName
+      ? '<div style="font-size:11px;color:var(--blue-soft-text);margin-top:2px">Rule: ' + String(ruleName).replace(/</g, '') +
+        (p.coaId ? (' → ' + accountLabel(p.coaId)) : '') + '</div>'
+      : (p.coaId ? '<div style="font-size:11px;color:var(--muted);margin-top:2px">Account: ' + accountLabel(p.coaId) + '</div>' : '');
+
     return '<div style="padding:10px;margin-bottom:8px;border:1px solid var(--line);border-radius:10px">' +
       '<label style="display:flex;gap:8px;align-items:flex-start">' +
       '<input type="checkbox" data-brrev-sel="' + idx + '" checked style="width:auto;margin-top:3px">' +
       '<div style="flex:1;min-width:0">' +
       '<div><b>' + (p.date || '') + '</b> · ' + (p.isIn ? 'In' : 'Out') + ' · <b>' + amtStr + '</b></div>' +
       '<div style="font-size:12px;color:var(--muted)">' + desc + '</div>' +
+      ruleBadge +
       '<div style="margin:6px 0"><input data-brrev-memo="' + idx + '" value="' + memo + '" placeholder="Memo" style="font-size:12px;width:100%"></div>' +
-      '<div style="padding:8px;background:var(--panel);border-radius:8px">' + journal + '</div>' +
+      '<div style="padding:8px;background:var(--panel-2,var(--panel));border-radius:8px">' + journal + '</div>' +
       '</div></label></div>';
   }).join('') || '<p class="section-sub">No proposals</p>';
 
   list.querySelectorAll('[data-brrev-coa]').forEach(sel => {
     const idx = Number(sel.getAttribute('data-brrev-coa'));
     const p = _bankRulesReview[idx];
-    if (p && p.coaId) {
-      try { sel.value = p.coaId; } catch (_) {}
+    if (!p) return;
+    if (p.coaId) {
+      sel.value = p.coaId;
+      if (sel.value !== p.coaId) {
+        // Option missing — inject
+        const opt = document.createElement('option');
+        opt.value = p.coaId;
+        opt.textContent = accountLabel(p.coaId);
+        opt.selected = true;
+        sel.insertBefore(opt, sel.firstChild);
+        sel.value = p.coaId;
+      }
     }
+    sel.addEventListener('change', () => {
+      p.coaId = sel.value;
+      if (p.lines && p.lines.length >= 2) {
+        if (p.isIn) p.lines[1].accountId = sel.value;
+        else p.lines[0].accountId = sel.value;
+      }
+    });
   });
+  try { initSearchableSelects(list); } catch (_) {}
   if (hint) hint.textContent = (_bankRulesReview.filter(p => p.selected !== false).length) + ' selected';
 }
+
 
 function syncBankRulesReviewFromDom() {
   const list = document.getElementById('bankRulesReviewList');
@@ -13202,14 +13286,119 @@ function clearPendingBankTx(opts) {
     });
   } else {
     const n = (db.bankTransactions || []).filter(t => t.status === 'pending').length;
-    if (n > 0 && !confirm('Remove ' + n + ' pending bank lines? Matched/added/excluded stay.')) return;
+    if (n > 0 && !confirm('Remove ' + n + ' pending bank lines? Matched/added/excluded stay.\n\nFile locks for empty imports are also cleared so you can re-upload and re-map.')) return;
     db.bankTransactions = (db.bankTransactions || []).filter(t => t.status !== 'pending');
   }
+  const pruned = pruneOrphanStatementImports();
   save();
   renderBankTransactions();
   const removed = before - (db.bankTransactions || []).length;
-  toast(removed ? ('Cleared ' + removed + ' lines') : 'Nothing to clear');
+  toast(
+    (removed ? ('Cleared ' + removed + ' lines') : 'Nothing to clear') +
+    (pruned ? (' · ' + pruned + ' file lock(s) freed') : '')
+  );
 }
+
+
+/**
+ * Soft re-import control:
+ * - Exact same file is still detected (control retained)
+ * - User may undo *pending* lines from that import and re-map
+ * - Added / matched / excluded lines are never deleted
+ */
+function countBankImportBatch(batchId) {
+  const txs = (db.bankTransactions || []).filter(t => t.importBatchId === batchId);
+  return {
+    total: txs.length,
+    pending: txs.filter(t => t.status === 'pending').length,
+    locked: txs.filter(t => t.status !== 'pending').length
+  };
+}
+
+/** Remove pending rows from a batch and drop the statementImports lock so file can be re-mapped. */
+function undoPendingBankImport(batchId) {
+  ensureBooksDb();
+  if (!batchId) return { removed: 0 };
+  const before = (db.bankTransactions || []).length;
+  db.bankTransactions = (db.bankTransactions || []).filter(t => {
+    if (t.importBatchId !== batchId) return true;
+    // Keep posted/matched/excluded
+    return t.status !== 'pending';
+  });
+  const removed = before - (db.bankTransactions || []).length;
+  // Drop file lock so the same CSV can open the mapper again
+  db.statementImports = (db.statementImports || []).filter(s => s.id !== batchId);
+  try { save(); } catch (_) {}
+  try { renderBankTransactions(); } catch (_) {}
+  try { updateBankTxReconHint(); } catch (_) {}
+  return { removed };
+}
+
+/**
+ * @returns {boolean} true if caller should stop (user cancelled or handled async)
+ * onProceed called after undo when user confirms re-map
+ */
+function offerReimportBankFile(prior, onProceed) {
+  ensureBooksDb();
+  const counts = countBankImportBatch(prior.id);
+  const when = String(prior.importedAt || '').slice(0, 10) || 'earlier';
+  const fname = prior.fileName || 'this file';
+  const lines = prior.rowCount != null ? prior.rowCount : counts.total;
+  let msg =
+    'This file was already imported on ' + when +
+    ' (' + fname + ', ' + lines + ' lines).\n\n';
+  if (counts.pending > 0) {
+    msg += 'Remove ' + counts.pending + ' pending line(s) from that import and re-map the columns?\n';
+    if (counts.locked > 0) {
+      msg += '(' + counts.locked + ' already added/matched/excluded will stay in the books.)\n';
+    }
+    msg += '\nOK = undo pending + open mapper again\nCancel = keep as-is (no duplicates)';
+  } else if (counts.locked > 0) {
+    msg +=
+      'All lines from that import are already posted (' + counts.locked + ').\n' +
+      'You can still clear the file lock and import again — row-level duplicates will be skipped.\n\n' +
+      'OK = clear file lock + open mapper\nCancel = keep lock';
+  } else {
+    msg +=
+      'No lines remain from that import (already cleared). Clear the file lock and map again?\n\n' +
+      'OK = open mapper\nCancel = keep lock';
+  }
+  if (!confirm(msg)) {
+    toast('Import cancelled — existing data kept');
+    try { track('bank_tx_import_dup_cancel', {}); } catch (_) {}
+    return true;
+  }
+  // Clear lock + pending
+  const r = undoPendingBankImport(prior.id);
+  // If prior was only a lock with no batch id match, still remove by contentHash
+  db.statementImports = (db.statementImports || []).filter(s => s.contentHash !== prior.contentHash);
+  try { save(); } catch (_) {}
+  toast(
+    (r.removed ? ('Removed ' + r.removed + ' pending · ') : '') +
+    'Re-map columns for a clean import'
+  );
+  try { track('bank_tx_import_remap', { removed: r.removed }); } catch (_) {}
+  if (typeof onProceed === 'function') onProceed();
+  return true;
+}
+
+/** Drop stale file locks when no bank lines still reference that batch. */
+function pruneOrphanStatementImports() {
+  ensureBooksDb();
+  const used = new Set(
+    (db.bankTransactions || []).map(t => t.importBatchId).filter(Boolean)
+  );
+  const before = (db.statementImports || []).length;
+  db.statementImports = (db.statementImports || []).filter(s => {
+    if (!s || !s.id) return false;
+    // Keep if any tx still references batch, or if we have no id linkage (legacy)
+    if (used.has(s.id)) return true;
+    // Orphan lock with no txs → drop
+    return false;
+  });
+  return before - (db.statementImports || []).length;
+}
+
 
 function importBankTxCsv(file) {
   if (!file) return;
@@ -13328,8 +13517,18 @@ function commitBankTxImport(txs, meta) {
     return;
   }
   if (meta.contentHash && (db.statementImports || []).some(s => s.contentHash === meta.contentHash)) {
-    toast('This exact file was already imported — blocked');
-    return;
+    // Stale lock after user cleared pending — prune and continue
+    const prior = (db.statementImports || []).find(s => s.contentHash === meta.contentHash);
+    const counts = prior ? countBankImportBatch(prior.id) : { pending: 0, locked: 0 };
+    if (prior && counts.pending === 0 && counts.locked === 0) {
+      db.statementImports = (db.statementImports || []).filter(s => s.contentHash !== meta.contentHash);
+    } else if (prior && counts.pending === 0) {
+      // Posted only — allow re-import; row fingerprints will skip true dups
+      db.statementImports = (db.statementImports || []).filter(s => s.contentHash !== meta.contentHash);
+    } else {
+      toast('This file still has pending lines from an earlier import. Use Clear pending, or re-choose the file to undo & re-map.');
+      return;
+    }
   }
   const accountId = document.getElementById('bankTxAccount')?.value || '1000';
   let added = 0;
@@ -13735,8 +13934,14 @@ function applyBankColumnMapper() {
   // re-check file hash
   const contentHash = _bankMapState.contentHash;
   if (contentHash && (db.statementImports || []).some(s => s.contentHash === contentHash)) {
-    toast('This exact file was already imported — blocked to prevent duplicates');
-    return;
+    const prior = (db.statementImports || []).find(s => s.contentHash === contentHash);
+    const counts = prior ? countBankImportBatch(prior.id) : { pending: 0, locked: 0 };
+    if (counts.pending > 0) {
+      toast('Pending lines still exist from this file. Confirm re-import on file choose, or Clear pending first.');
+      return;
+    }
+    // Drop stale lock (all posted or empty) so remap can complete
+    db.statementImports = (db.statementImports || []).filter(s => s.contentHash !== contentHash);
   }
   // save profile
   const name = (document.getElementById('bankMapName')?.value || '').trim();
