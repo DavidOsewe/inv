@@ -2237,6 +2237,26 @@ input:focus:not(:focus-visible) {
 .books-create-menu:not([hidden]) {
   display: flex;
 }
+
+/* Searchable select (combobox) */
+.searchable-select-wrap { position: relative; width: 100%; }
+.searchable-select-wrap > select.searchable-native { position: absolute; opacity: 0; pointer-events: none; height: 0; width: 0; }
+.searchable-select-input {
+  width: 100%; box-sizing: border-box;
+  padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--panel); color: var(--text); font: inherit;
+}
+.searchable-select-input:focus { outline: 2px solid var(--blue-soft); border-color: var(--blue); }
+.searchable-select-list {
+  position: absolute; z-index: 200; left: 0; right: 0; top: calc(100% + 4px);
+  max-height: 240px; overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+.searchable-select-item { padding: 8px 12px; cursor: pointer; font-size: 13px; }
+.searchable-select-item:hover, .searchable-select-item.active { background: var(--blue-soft); color: var(--blue-soft-text); }
+.searchable-select-group { padding: 6px 12px; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; }
+
 </style>
 </head>
 <body>
@@ -3644,6 +3664,134 @@ function hideAllModals() {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') hideAllModals();
 });
+
+/** Turn a <select> into a searchable combobox. Safe to call repeatedly. */
+function enhanceSearchableSelect(sel) {
+  if (!sel || sel.tagName !== 'SELECT') return;
+  if (sel.dataset.searchable === '1' && sel._ssInput) {
+    // options may have changed — refresh label only
+    try {
+      const opt = sel.options[sel.selectedIndex];
+      sel._ssInput.value = opt && !opt.disabled ? opt.textContent : '';
+    } catch (_) {}
+    return;
+  }
+  sel.dataset.searchable = '1';
+  sel.classList.add('searchable-native');
+
+  const wrap = document.createElement('div');
+  wrap.className = 'searchable-select-wrap';
+  if (sel.parentNode) {
+    sel.parentNode.insertBefore(wrap, sel);
+    wrap.appendChild(sel);
+  }
+
+  const input = document.createElement('input');
+  input.type = 'search';
+  input.className = 'searchable-select-input';
+  input.placeholder = sel.getAttribute('data-placeholder') || 'Type to search…';
+  input.autocomplete = 'off';
+  input.setAttribute('aria-label', 'Search options');
+  sel._ssInput = input;
+
+  const list = document.createElement('div');
+  list.className = 'searchable-select-list';
+  list.hidden = true;
+  list.setAttribute('role', 'listbox');
+
+  wrap.appendChild(input);
+  wrap.appendChild(list);
+
+  const syncLabel = () => {
+    const opt = sel.options[sel.selectedIndex];
+    input.value = opt && opt.value !== undefined && !opt.disabled ? String(opt.textContent || '').trim() : '';
+  };
+  syncLabel();
+
+  const rebuild = (filter) => {
+    const q = String(filter || '').toLowerCase().trim();
+    list.innerHTML = '';
+    let any = false;
+    [...sel.options].forEach((opt, idx) => {
+      const text = String(opt.textContent || '');
+      const val = String(opt.value || '');
+      if (opt.disabled && !val) {
+        if (!q) {
+          const g = document.createElement('div');
+          g.className = 'searchable-select-group';
+          g.textContent = text;
+          list.appendChild(g);
+        }
+        return;
+      }
+      if (q && !text.toLowerCase().includes(q) && !val.toLowerCase().includes(q)) return;
+      any = true;
+      const item = document.createElement('div');
+      item.className = 'searchable-select-item' + (opt.selected ? ' active' : '');
+      item.textContent = text;
+      item.setAttribute('role', 'option');
+      item.onmousedown = (e) => {
+        e.preventDefault();
+        sel.selectedIndex = idx;
+        try { sel.value = opt.value; } catch (_) {}
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        syncLabel();
+        list.hidden = true;
+      };
+      list.appendChild(item);
+    });
+    if (!any) {
+      const empty = document.createElement('div');
+      empty.className = 'searchable-select-item';
+      empty.style.color = 'var(--muted)';
+      empty.textContent = 'No matches';
+      list.appendChild(empty);
+    }
+    list.hidden = false;
+  };
+
+  input.addEventListener('focus', () => {
+    input.select();
+    rebuild('');
+  });
+  input.addEventListener('input', () => rebuild(input.value));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { list.hidden = true; input.blur(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const first = list.querySelector('.searchable-select-item:not([style*="muted"])');
+      if (first) first.dispatchEvent(new MouseEvent('mousedown'));
+    }
+  });
+  input.addEventListener('blur', () => {
+    setTimeout(() => { list.hidden = true; syncLabel(); }, 180);
+  });
+
+  sel.addEventListener('change', syncLabel);
+}
+
+function initSearchableSelects(root) {
+  const scope = root || document;
+  const selectors = [
+    'select#brCoa', 'select#brAccount', 'select#bankTxAccount',
+    'select#booksLedgerAccount', 'select#xferFrom', 'select#xferTo',
+    'select#obAccount', 'select#jeAccount',
+    'select.je-account', 'select.rj-account', 'select.recon-account',
+    'select[data-searchable="1"]', 'select.searchable'
+  ];
+  selectors.forEach(q => {
+    try { scope.querySelectorAll(q).forEach(enhanceSearchableSelect); } catch (_) {}
+  });
+  // Any select with more than 12 options becomes searchable (account lists)
+  try {
+    scope.querySelectorAll('select').forEach(sel => {
+      if (sel.closest('.searchable-select-wrap')) return;
+      if (sel.options && sel.options.length > 12) enhanceSearchableSelect(sel);
+    });
+  } catch (_) {}
+}
+
+
 // Click on backdrop (not modal content) closes
 document.addEventListener('click', (e) => {
   const back = e.target && e.target.classList && e.target.classList.contains('modalback') ? e.target : null;
@@ -9986,6 +10134,7 @@ function booksView() {
   renderBooksPnl();
   renderBooksBalance();
   try { renderBooksCashflow(); } catch (e) { console.warn('cashflow', e); }
+  try { initSearchableSelects(document.getElementById('view-books') || document); } catch (_) {}
   renderBooksJournal();
   renderBooksPayables();
   renderBooksReceivables();
@@ -10419,6 +10568,7 @@ function jeRenderLines() {
   wrap.innerHTML = html;
   wrap.querySelectorAll('input').forEach(inp => inp.addEventListener('input', jeUpdateHint));
   jeUpdateHint();
+  try { initSearchableSelects(wrap); } catch (_) {}
 }
 function jeUpdateHint() {
   let dr = 0, cr = 0;
@@ -11415,6 +11565,7 @@ function rjRenderLines() {
     </div>`;
   }
   wrap.innerHTML = html;
+  try { initSearchableSelects(wrap); } catch (_) {}
   wrap.querySelectorAll('input').forEach(inp => inp.addEventListener('input', rjUpdateHint));
   rjUpdateHint();
 }
@@ -12003,8 +12154,8 @@ function findMatchingBankRule(tx) {
  */
 function applyBankRulesToPending(opts = {}) {
   ensureBooksDb();
-  const suggestOnly = !!opts.suggestOnly;
-  let suggested = 0, applied = 0;
+  // Suggest only — never auto-post. Use Apply rules → Review to post.
+  let suggested = 0;
   (db.bankTransactions || []).filter(t => t.status === 'pending').forEach(tx => {
     const rule = findMatchingBankRule(tx);
     if (!rule) {
@@ -12013,22 +12164,13 @@ function applyBankRulesToPending(opts = {}) {
     }
     tx.suggestedRuleId = rule.id;
     suggested++;
-    // Rules apply automatically unless explicitly turned off (autoApply === false)
-    const shouldApply = !suggestOnly && rule.autoApply !== false;
-    if (!shouldApply) return;
-    if (rule.action === 'exclude') {
-      tx.status = 'excluded';
-      tx.appliedRuleId = rule.id;
-      applied++;
-    } else {
-      // default action: add
-      const entry = postBankTxFromRule(tx, rule);
-      if (entry || tx.status === 'added') applied++;
-    }
   });
-  if (suggested || applied) save();
-  return { suggested, applied };
+  if (suggested) {
+    try { persistDb(); } catch (_) { try { save(); } catch (_) {} }
+  }
+  return { suggested, applied: 0 };
 }
+
 
 function proposeBankJournalFromRule(tx, rule) {
   const amt = Math.abs(Number(tx.amount) || 0);
@@ -12223,8 +12365,12 @@ function bulkApplyBankRules() {
       const all = db.bankTransactions || [];
       const counts = {};
       all.forEach(t => { counts[t.status || '?'] = (counts[t.status || '?'] || 0) + 1; });
-      const msg = 'No pending lines. Counts: ' + JSON.stringify(counts) +
-        (all.length ? ' — select the bank account used on import.' : ' — import a CSV first.');
+      const added = counts.added || 0;
+      const msg = !all.length
+        ? 'Import a bank CSV first — lines stay For review until you Apply rules → Review.'
+        : (added
+          ? ('No lines left For review (' + added + ' already added). Import a new statement, or clear pending is empty — review only runs on pending lines.')
+          : ('No pending lines for this account. Status counts: ' + JSON.stringify(counts)));
       if (typeof toast === 'function') toast(msg); else alert(msg);
       return;
     }
@@ -12931,6 +13077,7 @@ function openBankRuleModal(editId, prefills) {
       m.classList.add('show');
       m.style.display = 'grid';
     }
+    try { initSearchableSelects(m); } catch (_) {}
   } catch (err) {
     console.warn('openBankRuleModal', err);
     toast('Could not open rule form — ' + (err.message || 'error'));
@@ -13868,10 +14015,13 @@ function openJournalModal() {
   document.getElementById('jeMemo').value = '';
   jeLineCount = 2;
   jeRenderLines();
-  m.classList.add('show');
+  if (typeof showModal === 'function') showModal('journalModal');
+  else m.classList.add('show');
+  try { initSearchableSelects(m); } catch (_) {}
 }
 function closeJournalModal() {
-  document.getElementById('journalModal')?.classList.remove('show');
+  if (typeof hideModal === 'function') hideModal('journalModal');
+  else document.getElementById('journalModal')?.classList.remove('show');
 }
 function openAccountModal() {
   document.getElementById('accCode').value = '';
@@ -16133,6 +16283,7 @@ async function maybeAcceptInviteFromUrl() {
 }
 
 /* Init */
+try { initSearchableSelects(document); } catch (_) {}
 try { hideAllModals(); } catch (_) {}
 try {
   // Recover if a previous session left modal overlays stuck with inline display
