@@ -6,7 +6,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>invoicedey — App</title>
+<link rel="preload" href="fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
 <style>
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('fonts/InterVariable.woff2') format('woff2');
+}
+
 /* =========================================================
    DESIGN TOKENS
    ========================================================= */
@@ -303,6 +312,98 @@ input:focus:not(:focus-visible) {
 .bottom-nav button span { font-size: 20px; line-height: 1; }
 .bottom-nav button.active { color: var(--blue); }
 .bottom-nav button:active { background: var(--blue-soft); }
+
+/* More sheet (mobile) — holds the views and account controls that do not fit the tab bar */
+.more-sheet-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,0.45);
+  z-index: 55;
+}
+.more-sheet-backdrop.show { display: block; }
+.more-sheet {
+  display: none;
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  max-height: 88vh;
+  overflow-y: auto;
+  z-index: 56;
+  background: var(--panel);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -12px 40px rgba(15,23,42,0.2);
+  padding: 12px 16px calc(20px + var(--safe-bottom));
+}
+.more-sheet.show { display: block; }
+.more-sheet .grab {
+  width: 40px; height: 4px; border-radius: 99px;
+  background: var(--line-strong);
+  margin: 0 auto 14px;
+  display: block;
+}
+.more-account {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  margin-bottom: 14px;
+}
+.more-account-copy { display: grid; gap: 2px; min-width: 0; }
+.more-account-copy b { font-size: 14px; }
+.more-account-copy span {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.more-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.more-grid button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.more-grid button span { font-size: 20px; line-height: 1; color: var(--muted); }
+.more-grid button.active { border-color: var(--blue); color: var(--blue); }
+.more-grid button.active span { color: var(--blue); }
+.more-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.more-actions button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.more-actions button.danger-text { color: var(--red-text); border-color: var(--red-border); }
 
 /* Main */
 .main {
@@ -3247,9 +3348,32 @@ input:focus:not(:focus-visible) {
   <button class="active" data-view="dashboard"><span>⌂</span>Home</button>
   <button data-view="invoices"><span>▤</span>Invoices</button>
   <button data-view="clients"><span>♙</span>Clients</button>
-  <button data-view="profile"><span>⚙</span>Profile</button>
-  <button data-view="plan"><span>◆</span>Plan</button>
+  <button data-view="books"><span>◎</span>Books</button>
+  <button id="moreNavBtn" type="button" aria-haspopup="dialog" aria-expanded="false"><span>☰</span>More</button>
 </nav>
+
+<div class="more-sheet-backdrop" id="moreSheetBackdrop" hidden></div>
+<div class="more-sheet" id="moreSheet" role="dialog" aria-modal="true" aria-label="More" hidden>
+  <span class="grab"></span>
+  <div class="more-account">
+    <span class="account-avatar" id="moreAccountAvatar">ID</span>
+    <span class="more-account-copy">
+      <b id="moreAccountName">Account</b>
+      <span id="moreAccountEmail">Sign in to sync</span>
+    </span>
+  </div>
+  <div class="more-grid">
+    <button type="button" data-view="receipts"><span>◈</span>Receipts</button>
+    <button type="button" data-view="recurring"><span>↻</span>Recurring</button>
+    <button type="button" data-view="profile"><span>⚙</span>Profile</button>
+    <button type="button" data-view="plan"><span>◆</span>Plan</button>
+  </div>
+  <div class="more-actions">
+    <button type="button" id="moreThemeToggle"><span id="moreThemeIcon">◐</span><span id="moreThemeLabel">Dark theme</span></button>
+    <button type="button" id="moreReferralBtn">Copy referral link</button>
+    <button type="button" id="moreAuthBtn">Sign in to sync</button>
+  </div>
+</div>
 
 
 <div class="modalback" id="cashModal">
@@ -3566,12 +3690,36 @@ input:focus:not(:focus-visible) {
 </div>
 
 <div class="modalback" id="confirmModal">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
     <h2 id="confirmTitle">Confirm</h2>
-    <p id="confirmMessage"></p>
+    <p id="confirmMessage" style="white-space:pre-line"></p>
     <div class="buttons" style="justify-content:flex-end;margin-top:20px;gap:10px">
-      <button class="button" id="confirmCancel">Cancel</button>
-      <button class="button danger" id="confirmOk">Delete</button>
+      <button class="button" id="confirmCancel" type="button">Cancel</button>
+      <button class="button danger" id="confirmOk" type="button">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="copyModal">
+  <div class="modal" style="max-width:460px" role="dialog" aria-modal="true" aria-labelledby="copyModalTitle">
+    <h2 id="copyModalTitle">Copy</h2>
+    <p class="section-sub" style="margin:0 0 12px">Your browser blocked the clipboard. Select the text below and copy it.</p>
+    <textarea id="copyModalText" readonly rows="4" style="width:100%;padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--panel-2);color:var(--text);resize:vertical"></textarea>
+    <div class="buttons" style="justify-content:flex-end;margin-top:16px;gap:10px">
+      <button class="button" id="copyModalClose" type="button">Close</button>
+      <button class="button primary" id="copyModalCopy" type="button">Copy</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="promptModal">
+  <div class="modal" style="max-width:420px" role="dialog" aria-modal="true" aria-labelledby="promptModalTitle">
+    <h2 id="promptModalTitle">Enter a value</h2>
+    <p class="section-sub" id="promptModalMessage" style="margin:0 0 12px"></p>
+    <input id="promptModalInput" type="text" style="width:100%;padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--panel-2);color:var(--text)">
+    <div class="buttons" style="justify-content:flex-end;margin-top:16px;gap:10px">
+      <button class="button" id="promptModalCancel" type="button">Cancel</button>
+      <button class="button primary" id="promptModalOk" type="button">Save</button>
     </div>
   </div>
 </div>
@@ -3636,7 +3784,7 @@ input:focus:not(:focus-visible) {
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 
 <script>
@@ -4043,7 +4191,7 @@ function paintProfileReferralUI(code, state = 'ready') {
         await track('referral_link_copied', { referral_code: liveCode });
         toast('Referral link copied.');
       } catch {
-        window.prompt('Copy your referral link:', url);
+        copyDialog(url, 'Copy your referral link');
       }
       paintProfileReferralUI(liveCode, 'ready');
       copyReferralBtn.disabled = false;
@@ -4767,7 +4915,10 @@ async function shareInvoice() {
     return url;
   } catch (error) {
     console.error('SHARE FAILED:', error);
-    alert('SHARE FAILED: ' + (error?.message || JSON.stringify(error)));
+    alertDialog({
+      title: 'Share failed',
+      message: error?.message || 'Could not build the share link. Please try again.'
+    });
     return null;
   }
 }
@@ -5440,9 +5591,13 @@ async function cancelPlanRenewal() {
     toast('You are on the Free plan.');
     return;
   }
-  if (!confirm('Cancel automatic renewal? You will keep ' + (e.plan_name || plan) + ' until the end of the current period.')) {
-    return;
-  }
+  const confirmedCancel = await confirmDialog({
+    title: 'Cancel automatic renewal?',
+    message: 'You will keep ' + (e.plan_name || plan) + ' until the end of the current period.',
+    confirmLabel: 'Cancel renewal',
+    cancelLabel: 'Keep plan'
+  });
+  if (!confirmedCancel) return;
   const btn = document.getElementById('btnCancelRenewal');
   if (btn) btn.disabled = true;
   try {
@@ -5477,7 +5632,7 @@ document.getElementById('btnCancelRenewal')?.addEventListener('click', () => {
   cancelPlanRenewal();
 });
 
-document.addEventListener('click', (e) => {
+document.addEventListener('click', async (e) => {
   const delCash = e.target.closest('[data-del-cash]');
   if (delCash) {
     e.preventDefault();
@@ -5575,7 +5730,11 @@ document.addEventListener('click', (e) => {
     e.preventDefault();
     const id = rjDel.getAttribute('data-rj-del');
     const sch = (db.recurringJournals || []).find(s => s.id === id);
-    if (!confirm('Delete schedule “' + ((sch && sch.memo) || 'this') + '”? Posted journals stay in the ledger.')) return;
+    if (!await confirmDialog({
+      title: 'Delete schedule?',
+      message: '“' + ((sch && sch.memo) || 'This schedule') + '” will stop running. Posted journals stay in the ledger.',
+      confirmLabel: 'Delete schedule'
+    })) return;
     db.recurringJournals = (db.recurringJournals || []).filter(s => s.id !== id);
     save();
     try { queueBooksCloudSync(); } catch (_) {}
@@ -5747,11 +5906,12 @@ async function startPaystackCheckout(plan, source) {
     if (!canUpgradeTo(planId, current)) {
       track('upgrade_blocked_already_on_plan', { plan: planId, current, source: source || 'unknown' });
       paintUpgradeButtons(current);
-      if (current === planId) {
-        alert('You are already on the ' + (e?.plan_name || label) + ' plan. No need to purchase again.');
-      } else {
-        alert('Your ' + (e?.plan_name || current) + ' plan already includes ' + label + '.');
-      }
+      await alertDialog({
+        title: 'Nothing to upgrade',
+        message: current === planId
+          ? 'You are already on the ' + (e?.plan_name || label) + ' plan. No need to purchase again.'
+          : 'Your ' + (e?.plan_name || current) + ' plan already includes ' + label + '.'
+      });
       return;
     }
   } catch (err) {
@@ -5769,7 +5929,12 @@ async function startPaystackCheckout(plan, source) {
 
   if (!cloud.user) {
     track('upgrade_signin_required', { plan: planId, source: source || 'unknown' });
-    if (confirm(`${priceLine}\n\nSign in to upgrade your plan.`)) {
+    if (await confirmDialog({
+      title: 'Sign in to upgrade',
+      message: `${priceLine}\n\nCreate a free account or sign in to continue to checkout.`,
+      confirmLabel: 'Sign in',
+      tone: 'primary'
+    })) {
       goToSignup();
     }
     return;
@@ -5777,9 +5942,10 @@ async function startPaystackCheckout(plan, source) {
 
   if (!BILLING_READY) {
     track('upgrade_billing_not_ready', { plan: planId, source: source || 'unknown' });
-    alert(
-      `${priceLine}\n\nPaystack billing is almost ready. We’re finishing account setup — you’ll be able to upgrade here shortly.\n\nYour current plan remains active.`
-    );
+    await alertDialog({
+      title: 'Billing is almost ready',
+      message: `${priceLine}\n\nWe’re finishing account setup — you’ll be able to upgrade here shortly. Your current plan remains active.`
+    });
     return;
   }
 
@@ -5818,16 +5984,25 @@ async function startPaystackCheckout(plan, source) {
     track('checkout_failed', { plan: planId, error: String(e.message || e) });
     const msg = String(e.message || e);
     if (msg.includes('SIGN_IN_REQUIRED') || msg.includes('not authenticated')) {
-      if (confirm('Sign in to upgrade your plan.')) goToSignup();
+      if (await confirmDialog({
+        title: 'Sign in to upgrade',
+        message: 'Sign in to your invoicedey account to continue to checkout.',
+        confirmLabel: 'Sign in',
+        tone: 'primary'
+      })) goToSignup();
       return;
     }
     if (msg.includes('FunctionsFetchError') || msg.includes('Failed to send') || msg.includes('404')) {
-      alert(
-        `${priceLine}\n\nPaystack checkout is not live yet (Edge Function pending). Your current plan remains active.`
-      );
+      await alertDialog({
+        title: 'Checkout not live yet',
+        message: `${priceLine}\n\nPaystack checkout is not available yet. Your current plan remains active.`
+      });
       return;
     }
-    alert(`Could not start checkout for ${label}. Please try again in a moment.\n\n${msg}`);
+    await alertDialog({
+      title: 'Could not start checkout',
+      message: `We could not open checkout for ${label}. Please try again in a moment.\n\n${msg}`
+    });
   }
 }
 
@@ -5843,6 +6018,7 @@ document.querySelectorAll('[data-upgrade-plan]').forEach(btn => btn.addEventList
 let edit = null;
 let editingClientId = null;
 let pendingConfirm = null;
+let confirmResolve = null;
 const fx = {
   USD: 1, EUR: 1.08, GBP: 1.27, AUD: 0.66, CAD: 0.74, NZD: 0.60,
   CHF: 1.12, JPY: 0.0067, CNY: 0.14, HKD: 0.13, SGD: 0.74,
@@ -5947,6 +6123,10 @@ function applyTheme(theme) {
   const isDark = theme === 'dark';
   $('#themeIcon').textContent = isDark ? '☀' : '◐';
   $('#themeLabel').textContent = isDark ? 'Light' : 'Dark';
+  const moreIcon = document.getElementById('moreThemeIcon');
+  const moreLabel = document.getElementById('moreThemeLabel');
+  if (moreIcon) moreIcon.textContent = isDark ? '☀' : '◐';
+  if (moreLabel) moreLabel.textContent = isDark ? 'Light theme' : 'Dark theme';
 }
 applyTheme(getPreferredTheme());
 $('#themeToggle').onclick = () => {
@@ -6191,9 +6371,11 @@ function updateHeaderActions(view) {
 
 function switchTo(v) {
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('active', x.id === v));
-  document.querySelectorAll('.nav button, .bottom-nav button').forEach(x => {
+  document.querySelectorAll('.nav button, .bottom-nav button, .more-grid button').forEach(x => {
     x.classList.toggle('active', x.dataset.view === v);
   });
+  const moreBtn = document.getElementById('moreNavBtn');
+  if (moreBtn) moreBtn.classList.toggle('active', ['receipts', 'recurring', 'profile', 'plan'].includes(v));
   const h = {
     dashboard: ['Invoice control centre', 'Know what has been paid and what needs attention.'],
     invoices: ['Invoices', 'Simple invoicing. Nothing you do not need.'],
@@ -6231,11 +6413,69 @@ function switchTo(v) {
   if (v === 'plan') planView();
 }
 
+/* In-app replacements for window.confirm / alert / prompt.
+   All resolve when the user closes the dialog; confirmDialog resolves false on
+   cancel, backdrop click and Escape. */
+function openConfirmModal(opts) {
+  const modal = $('#confirmModal');
+  const ok = $('#confirmOk');
+  const cancel = $('#confirmCancel');
+  $('#confirmTitle').textContent = opts.title || 'Confirm';
+  $('#confirmMessage').textContent = opts.message || '';
+  ok.textContent = opts.confirmLabel || 'Confirm';
+  ok.className = 'button ' + (opts.tone === 'danger' ? 'danger' : 'primary');
+  cancel.textContent = opts.cancelLabel || 'Cancel';
+  cancel.style.display = opts.hideCancel ? 'none' : '';
+  modal.classList.add('show');
+  setTimeout(() => ok.focus(), 0);
+  return new Promise(resolve => { confirmResolve = resolve; });
+}
+
+function confirmDialog(opts) {
+  return openConfirmModal({ tone: 'danger', confirmLabel: 'Confirm', ...opts });
+}
+
+function alertDialog(opts) {
+  return openConfirmModal({ tone: 'primary', confirmLabel: 'OK', ...opts, hideCancel: true });
+}
+
+function copyDialog(text, title) {
+  const modal = $('#copyModal');
+  const field = $('#copyModalText');
+  $('#copyModalTitle').textContent = title || 'Copy';
+  field.value = text || '';
+  modal.classList.add('show');
+  setTimeout(() => { field.focus(); field.select(); }, 0);
+}
+
+let promptResolve = null;
+function promptDialog(opts) {
+  const modal = $('#promptModal');
+  const input = $('#promptModalInput');
+  $('#promptModalTitle').textContent = opts.title || 'Enter a value';
+  $('#promptModalMessage').textContent = opts.message || '';
+  input.value = opts.value || '';
+  input.placeholder = opts.placeholder || '';
+  $('#promptModalOk').textContent = opts.confirmLabel || 'Save';
+  modal.classList.add('show');
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+  return new Promise(resolve => { promptResolve = resolve; });
+}
+
+async function copyText(text, okMessage, fallbackTitle) {
+  try {
+    await navigator.clipboard.writeText(text);
+    if (okMessage) toast(okMessage);
+    return true;
+  } catch {
+    copyDialog(text, fallbackTitle);
+    return false;
+  }
+}
+
 function confirmAction(title, message, onConfirm) {
   pendingConfirm = onConfirm;
-  $('#confirmTitle').textContent = title;
-  $('#confirmMessage').textContent = message;
-  $('#confirmModal').classList.add('show');
+  openConfirmModal({ title, message, confirmLabel: 'Delete', tone: 'danger' });
 }
 
 function relativeDueLabel(due) {
@@ -6464,7 +6704,7 @@ async function remindInvoice(invoiceId, channel) {
     await navigator.clipboard.writeText(msg);
     toast('Reminder copied — paste into WhatsApp or email.');
   } catch {
-    window.prompt('Copy this reminder:', msg);
+    copyDialog(msg, 'Copy this reminder');
   }
 }
 
@@ -9190,8 +9430,13 @@ function renderBooksJournal() {
     btn.addEventListener('click', () => openJournalActivityModal(btn.getAttribute('data-j-activity')));
   });
   el.querySelectorAll('[data-j-reverse]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (!confirm('Post a reversing journal? The original stays for the audit trail.')) return;
+    btn.addEventListener('click', async () => {
+      if (!await confirmDialog({
+        title: 'Post a reversing journal?',
+        message: 'The original journal stays in the ledger for the audit trail.',
+        confirmLabel: 'Post reversal',
+        tone: 'primary'
+      })) return;
       reverseJournal(btn.getAttribute('data-j-reverse'));
       booksView();
     });
@@ -9946,9 +10191,13 @@ function renderBooksCoa() {
     });
   });
   el.querySelectorAll('[data-hide-account]').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const id = btn.getAttribute('data-hide-account');
-      if (!confirm('Hide account ' + id + ' from lists and reports? Existing journals stay intact. You can unhide later.')) return;
+      if (!await confirmDialog({
+        title: 'Hide account ' + id + '?',
+        message: 'It disappears from lists and reports. Existing journals stay intact and you can unhide it later.',
+        confirmLabel: 'Hide account'
+      })) return;
       persistMeta(id, { hidden: true });
       toast('Account hidden');
       renderBooksCoa();
@@ -10872,7 +11121,7 @@ function importOpeningBalancesCsv(file) {
   reader.readAsText(file);
 }
 
-function postOpeningBalances() {
+async function postOpeningBalances() {
   ensureBooksDb();
   const v = validateOpeningBalancesForm();
   if (!v.ok) {
@@ -10880,11 +11129,21 @@ function postOpeningBalances() {
     return;
   }
   if (v.warnings.length) {
-    if (!confirm(v.warnings.join('\n') + '\n\nPost anyway?')) return;
+    if (!await confirmDialog({
+      title: 'Post opening balances?',
+      message: v.warnings.join('\n'),
+      confirmLabel: 'Post anyway',
+      tone: 'primary'
+    })) return;
   }
   const date = document.getElementById('obDate')?.value || today;
   if (db.journals.some(j => j.source === 'opening_balance')) {
-    if (!confirm('Opening balances were already posted. Post another opening journal anyway?')) return;
+    if (!await confirmDialog({
+      title: 'Opening balances already posted',
+      message: 'Post another opening journal anyway?',
+      confirmLabel: 'Post anyway',
+      tone: 'primary'
+    })) return;
   }
   const lines = [];
   let assets = 0, credits = 0;
@@ -11262,7 +11521,7 @@ function updateReconSummary() {
   }
 }
 
-function saveReconciliation() {
+async function saveReconciliation() {
   ensureBooksDb();
   const accountId = document.getElementById('reconAccount')?.value || '1000';
   const statement = Number(document.getElementById('reconStatementBal')?.value || 0);
@@ -11278,7 +11537,12 @@ function saveReconciliation() {
   });
   const diff = statement - cleared;
   if (Math.abs(diff) > 0.05) {
-    if (!confirm('Difference is ' + money(diff) + '. Save this reconciliation anyway?')) return;
+    if (!await confirmDialog({
+      title: 'Reconciliation does not match',
+      message: 'Difference is ' + money(diff) + '. Save this reconciliation anyway?',
+      confirmLabel: 'Save anyway',
+      tone: 'primary'
+    })) return;
   }
   db.reconciliations.push({
     id: crypto.randomUUID(),
@@ -12434,7 +12698,7 @@ function openBankRulesReviewModal(proposals) {
     const msg = 'Review modal not in page — deploy latest app.html and hard-refresh';
     console.error(msg);
     if (typeof toast === 'function') toast(msg);
-    else alert(msg);
+    else alertDialog({ title: 'Review unavailable', message: msg });
     return;
   }
   try {
@@ -12661,7 +12925,7 @@ function bulkApplyBankRules() {
         : (added
           ? ('No lines left For review (' + added + ' already added). Import a new statement, or clear pending is empty — review only runs on pending lines.')
           : ('No pending lines for this account. Status counts: ' + JSON.stringify(counts)));
-      if (typeof toast === 'function') toast(msg); else alert(msg);
+      if (typeof toast === 'function') toast(msg); else alertDialog({ title: 'Nothing to review', message: msg });
       return;
     }
 
@@ -12692,7 +12956,7 @@ function bulkApplyBankRules() {
     console.error('bulkApplyBankRules', err);
     const msg = 'Review failed: ' + (err && err.message ? err.message : String(err));
     if (typeof toast === 'function') toast(msg);
-    alert(msg);
+    else alertDialog({ title: 'Review failed', message: msg });
   }
 }
 
@@ -12763,9 +13027,15 @@ function excludeSelectedBankRulesReview() {
   toast('Excluded ' + n + ' line(s)');
 }
 
-function promptAddBankAccount() {
+async function promptAddBankAccount() {
   ensureBooksDb();
-  const code = (prompt('New bank account code (e.g. 1010)', '1010') || '').trim();
+  const code = (await promptDialog({
+    title: 'Add a bank account',
+    message: 'Choose an account code for the new bank account.',
+    value: '1010',
+    placeholder: 'e.g. 1010',
+    confirmLabel: 'Next'
+  }) || '').trim();
   if (!code) return;
   if (getCoa().some(a => a.id === code)) {
     toast('Account code already exists — select it from the list');
@@ -12773,7 +13043,12 @@ function promptAddBankAccount() {
     if (sel) { sel.value = code; sel.dispatchEvent(new Event('change')); }
     return;
   }
-  const name = (prompt('Account name (e.g. Moniepoint Business)', 'Bank account') || '').trim() || 'Bank account';
+  const name = (await promptDialog({
+    title: 'Name this account',
+    message: 'Shown in your chart of accounts and reports.',
+    value: 'Bank account',
+    placeholder: 'e.g. Moniepoint Business'
+  }) || '').trim() || 'Bank account';
   db.coaExtra = db.coaExtra || [];
   db.coaExtra.push({ id: code, name, type: 'asset' });
   if (!db.booksSettings) db.booksSettings = {};
@@ -13481,7 +13756,7 @@ function moveBankRule(id, dir) {
 
 
 
-function clearPendingBankTx(opts) {
+async function clearPendingBankTx(opts) {
   ensureBooksDb();
   opts = opts || {};
   const before = (db.bankTransactions || []).length;
@@ -13492,7 +13767,11 @@ function clearPendingBankTx(opts) {
     });
   } else {
     const n = (db.bankTransactions || []).filter(t => t.status === 'pending').length;
-    if (n > 0 && !confirm('Remove ' + n + ' pending bank lines? Matched/added/excluded stay.\n\nFile locks for empty imports are also cleared so you can re-upload and re-map.')) return;
+    if (n > 0 && !await confirmDialog({
+      title: 'Remove ' + n + ' pending bank lines?',
+      message: 'Matched, added and excluded lines stay. File locks for empty imports are cleared so you can re-upload and re-map.',
+      confirmLabel: 'Remove lines'
+    })) return;
     db.bankTransactions = (db.bankTransactions || []).filter(t => t.status !== 'pending');
   }
   const pruned = pruneOrphanStatementImports();
@@ -13544,7 +13823,7 @@ function undoPendingBankImport(batchId) {
  * @returns {boolean} true if caller should stop (user cancelled or handled async)
  * onProceed called after undo when user confirms re-map
  */
-function offerReimportBankFile(prior, onProceed) {
+async function offerReimportBankFile(prior, onProceed) {
   ensureBooksDb();
   const counts = countBankImportBatch(prior.id);
   const when = String(prior.importedAt || '').slice(0, 10) || 'earlier';
@@ -13558,18 +13837,21 @@ function offerReimportBankFile(prior, onProceed) {
     if (counts.locked > 0) {
       msg += '(' + counts.locked + ' already added/matched/excluded will stay in the books.)\n';
     }
-    msg += '\nOK = undo pending + open mapper again\nCancel = keep as-is (no duplicates)';
+    msg += '\nAlready added, matched or excluded lines are never touched.';
   } else if (counts.locked > 0) {
     msg +=
       'All lines from that import are already posted (' + counts.locked + ').\n' +
-      'You can still clear the file lock and import again — row-level duplicates will be skipped.\n\n' +
-      'OK = clear file lock + open mapper\nCancel = keep lock';
+      'You can still clear the file lock and import again — row-level duplicates will be skipped.';
   } else {
     msg +=
-      'No lines remain from that import (already cleared). Clear the file lock and map again?\n\n' +
-      'OK = open mapper\nCancel = keep lock';
+      'No lines remain from that import (already cleared). Clear the file lock and map again?';
   }
-  if (!confirm(msg)) {
+  if (!await confirmDialog({
+    title: 'File already imported',
+    message: msg,
+    confirmLabel: 'Clear lock and re-map',
+    cancelLabel: 'Keep lock'
+  })) {
     toast('Import cancelled — existing data kept');
     try { track('bank_tx_import_dup_cancel', {}); } catch (_) {}
     return true;
@@ -14666,8 +14948,12 @@ document.getElementById('rjSave')?.addEventListener('click', () => {
 });
 document.getElementById('rjCloseX')?.addEventListener('click', closeRecurringJournalModal);
 
-document.getElementById('reconClearTicks')?.addEventListener('click', () => {
-  if (!confirm('Clear all reconciliation ticks?')) return;
+document.getElementById('reconClearTicks')?.addEventListener('click', async () => {
+  if (!await confirmDialog({
+    title: 'Clear all reconciliation ticks?',
+    message: 'Every line you ticked for this account becomes uncleared.',
+    confirmLabel: 'Clear ticks'
+  })) return;
   db.clearedJournalLines = {};
   save();
   renderBooksReconcile();
@@ -15280,6 +15566,14 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     $('#accountMenuName').textContent = name;
     $('#accountMenuEmail').textContent = email;
     lineLogout.style.display = session?.user ? 'block' : 'none';
+    $('#moreAccountAvatar').textContent = initialsFor(name, email);
+    $('#moreAccountName').textContent = name;
+    $('#moreAccountEmail').textContent = email;
+    const mobileAuth = document.getElementById('moreAuthBtn');
+    if (mobileAuth) {
+      mobileAuth.textContent = session?.user ? 'Log out' : 'Sign in to sync';
+      mobileAuth.classList.toggle('danger-text', !!session?.user);
+    }
   }
 
   function closeMenu() {
@@ -15304,8 +15598,7 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
       const code = await getMyReferralCode();
       if (!code) { toast(cloud.user ? 'Referral link is not available yet.' : 'Sign in to use your referral link.'); return; }
       const url = referralLink(code);
-      try { await navigator.clipboard.writeText(url); toast('Referral link copied.'); }
-      catch { window.prompt('Copy your referral link:', url); }
+      await copyText(url, 'Referral link copied.', 'Copy your referral link');
       return;
     }
     const action = e.target.closest('[data-account-action]')?.dataset.accountAction;
@@ -16159,7 +16452,7 @@ function addPaymentToEdit(amount, date, note, method) {
     addPaymentToEdit(bal, $('#payDate')?.value || today, 'Paid in full', $('#payMethod')?.value);
   };
 
-  document.addEventListener('click', e => {
+  document.addEventListener('click', async e => {
     const rc = e.target.closest('[data-receipt]');
     if (rc) {
       e.preventDefault();
@@ -16192,7 +16485,11 @@ function addPaymentToEdit(amount, date, note, method) {
     if (rDel) {
       e.preventDefault();
       const id = rDel.getAttribute('data-recurring-delete');
-      if (!confirm('Delete this recurring schedule? Existing invoices stay.')) return;
+      if (!await confirmDialog({
+        title: 'Delete this recurring schedule?',
+        message: 'No new invoices will be created from it. Invoices it already created stay.',
+        confirmLabel: 'Delete schedule'
+      })) return;
       db.recurring = (db.recurring || []).filter(x => x.id !== id);
       save();
       if (cloud.client) {
@@ -16256,15 +16553,18 @@ function addPaymentToEdit(amount, date, note, method) {
   const ok = document.getElementById('confirmOk');
   const modal = document.getElementById('confirmModal');
 
-  function close() {
+  function close(result) {
     if (modal) modal.classList.remove('show');
     pendingConfirm = null;
+    const resolve = confirmResolve;
+    confirmResolve = null;
+    if (resolve) resolve(!!result);
   }
 
-  if (cancel) cancel.onclick = close;
+  if (cancel) cancel.onclick = () => close(false);
   if (ok) ok.onclick = async () => {
     const action = pendingConfirm;
-    if (!action) return close();
+    if (!action) return close(true);
     ok.disabled = true;
     try {
       await action();
@@ -16273,18 +16573,97 @@ function addPaymentToEdit(amount, date, note, method) {
       toast(error?.message || 'Action failed. Please try again.');
     } finally {
       ok.disabled = false;
-      close();
+      close(true);
     }
   };
 
   if (modal) {
     modal.addEventListener('click', e => {
-      if (e.target === modal) close();
+      if (e.target === modal) close(false);
     });
   }
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && modal?.classList.contains('show')) close();
+    if (e.key === 'Escape' && modal?.classList.contains('show')) close(false);
   });
+})();
+
+/* Prompt modal wiring */
+(function wirePromptModal() {
+  const modal = document.getElementById('promptModal');
+  const input = document.getElementById('promptModalInput');
+  if (!modal) return;
+  function close(value) {
+    modal.classList.remove('show');
+    const resolve = promptResolve;
+    promptResolve = null;
+    if (resolve) resolve(value);
+  }
+  document.getElementById('promptModalCancel').onclick = () => close(null);
+  document.getElementById('promptModalOk').onclick = () => close(input.value);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); close(input.value); }
+  });
+  modal.addEventListener('click', e => { if (e.target === modal) close(null); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && modal.classList.contains('show')) close(null);
+  });
+})();
+
+/* Clipboard fallback modal */
+(function wireCopyModal() {
+  const modal = document.getElementById('copyModal');
+  const field = document.getElementById('copyModalText');
+  const copyBtn = document.getElementById('copyModalCopy');
+  if (!modal) return;
+  const close = () => modal.classList.remove('show');
+  document.getElementById('copyModalClose').onclick = close;
+  copyBtn.onclick = () => {
+    field.select();
+    try { document.execCommand('copy'); toast('Copied.'); } catch { toast('Press Ctrl/Cmd + C to copy.'); }
+  };
+  modal.addEventListener('click', e => { if (e.target === modal) close(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && modal.classList.contains('show')) close();
+  });
+})();
+
+/* More sheet (mobile) — Receipts, Recurring, Profile, Plan plus account and theme */
+(function wireMoreSheet() {
+  const sheet = document.getElementById('moreSheet');
+  const backdrop = document.getElementById('moreSheetBackdrop');
+  const trigger = document.getElementById('moreNavBtn');
+  if (!sheet || !backdrop || !trigger) return;
+
+  function setOpen(open) {
+    sheet.hidden = !open;
+    backdrop.hidden = !open;
+    sheet.classList.toggle('show', open);
+    backdrop.classList.toggle('show', open);
+    trigger.setAttribute('aria-expanded', String(open));
+    document.body.style.overflow = open ? 'hidden' : '';
+  }
+  window.closeMoreSheet = () => setOpen(false);
+
+  trigger.onclick = () => setOpen(sheet.hidden);
+  backdrop.onclick = () => setOpen(false);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !sheet.hidden) setOpen(false);
+  });
+
+  sheet.querySelectorAll('.more-grid button').forEach(btn => {
+    btn.onclick = () => { setOpen(false); switchTo(btn.dataset.view); };
+  });
+  document.getElementById('moreThemeToggle').onclick = () => {
+    applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  };
+  document.getElementById('moreReferralBtn').onclick = () => {
+    document.getElementById('copyAccountReferral')?.click();
+  };
+  document.getElementById('moreAuthBtn').onclick = () => {
+    setOpen(false);
+    if (cloud.user) document.getElementById('appLogoutBtn')?.click();
+    else goToSignup();
+  };
 })();
 
 /* invoices.client_id is NOT NULL in Supabase — never null it out.
@@ -16582,9 +16961,7 @@ document.addEventListener('click', async (e) => {
   const copyBtn = e.target.closest('[data-copy-invite]');
   if (copyBtn) {
     const link = copyBtn.getAttribute('data-copy-invite');
-    navigator.clipboard.writeText(link).then(() => toast('Invite link copied')).catch(() => {
-      window.prompt('Copy invite link:', link);
-    });
+    copyText(link, 'Invite link copied', 'Copy invite link');
     return;
   }
 
@@ -16595,7 +16972,11 @@ document.addEventListener('click', async (e) => {
     toast('Missing invite id — refresh and try again');
     return;
   }
-  if (!confirm('Revoke this invite? The link will stop working.')) return;
+  if (!await confirmDialog({
+    title: 'Revoke this invite?',
+    message: 'The invite link will stop working immediately.',
+    confirmLabel: 'Revoke invite'
+  })) return;
   revokeBtn.disabled = true;
   try {
     if (!cloud.client || !cloud.user) throw new Error('Sign in first');
@@ -16634,7 +17015,11 @@ document.addEventListener('click', async (e) => {
   const userId = removeBtn.getAttribute('data-remove-member');
   const email = removeBtn.getAttribute('data-remove-email') || 'this member';
   if (!userId) return;
-  if (!confirm(`Remove ${email} from this business? They will lose access to shared invoices and clients.`)) return;
+  if (!await confirmDialog({
+    title: `Remove ${email}?`,
+    message: 'They will lose access to shared invoices and clients in this business.',
+    confirmLabel: 'Remove member'
+  })) return;
   removeBtn.disabled = true;
   try {
     if (!cloud.client || !cloud.user) throw new Error('Sign in first');
