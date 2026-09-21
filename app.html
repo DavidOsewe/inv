@@ -2565,7 +2565,7 @@ input:focus:not(:focus-visible) {
       </div>
       <div id="booksPanelPayables" hidden>
         <h3 class="books-panel-title">Who you owe</h3>
-        <p class="books-panel-lead">Supplier bills still open. Mark paid when money leaves the bank.</p>
+        <p class="books-panel-lead">Supplier bills flow here as accounts payable. Accrue expense now; mark paid when cash leaves the bank — AP (2000) clears.</p>
         <div id="booksPayablesList"></div>
       </div>
       <div id="booksPanelReceivables" hidden>
@@ -5489,7 +5489,10 @@ document.addEventListener('click', (e) => {
   const payBill = e.target.closest('[data-pay-bill]');
   if (payBill) {
     e.preventDefault();
-    paySupplierBill(payBill.getAttribute('data-pay-bill'));
+    const id = payBill.getAttribute('data-pay-bill');
+    const fromSel = document.querySelector('[data-pay-from="' + id + '"]');
+    const accountId = fromSel ? fromSel.value : '';
+    paySupplierBill(id, { accountId });
     return;
   }
   const bankMatch = e.target.closest('[data-bank-match]');
@@ -9325,115 +9328,186 @@ function accrueSupplierBill(bill) {
 }
 
 /** Pay supplier bill: Dr AP / Cr Cash */
-function paySupplierBill(billId) {
+function paySupplierBill(billId, opts) {
   ensureBooksDb();
-  const bill = db.bills.find(b => b.id === billId);
+  opts = opts || {};
+  const bill = (db.bills || []).find(b => b.id === billId);
   if (!bill || bill.status === 'paid') return;
   const amt = toRep(bill.amount, bill.currency);
+  if (!(amt > 0)) { toast('Invalid bill amount'); return; }
+  // Prefer selected bank / cash equivalent, else default cash
+  let bankId = opts.accountId || bill.payFromAccountId || '';
+  if (!bankId) {
+    const banks = (typeof getCoa === 'function' ? getCoa() : []).filter(a =>
+      a && (a.id === '1000' || (typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a)))
+    );
+    bankId = (banks[0] && banks[0].id) || '1000';
+  }
+  const payDate = opts.date || (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
   const key = 'billpay:' + bill.id;
+  if ((db.journals || []).some(j => j.sourceKey === 'j:' + key && !j.reversed)) {
+    toast('Payment already posted for this bill');
+    bill.status = 'paid';
+    bill.paidAt = bill.paidAt || payDate;
+    save();
+    renderBooksPayables();
+    return;
+  }
   postJournal({
-    date: today,
-    memo: 'Pay bill · ' + (bill.supplier || 'Supplier'),
+    date: payDate,
+    memo: 'Pay bill · ' + (bill.supplier || 'Supplier') + (bill.note ? ' · ' + bill.note : ''),
     source: 'bill_payment',
     sourceKey: 'j:' + key,
     lines: [
       { accountId: '2000', debit: amt, credit: 0 },
-      { accountId: '1000', debit: 0, credit: amt }
+      { accountId: bankId, debit: 0, credit: amt }
     ]
   });
+  db.cashEntries = db.cashEntries || [];
   db.cashEntries.push({
     id: crypto.randomUUID(),
     type: 'out',
     category: bill.category || 'other_out',
     amount: Number(bill.amount) || 0,
     currency: bill.currency,
-    date: today,
+    date: payDate,
     note: 'Paid bill · ' + (bill.supplier || '') + (bill.note ? ' · ' + bill.note : ''),
     source: 'bill_payment',
     sourceKey: key,
-    billId: bill.id
+    billId: bill.id,
+    accountId: bankId
   });
   bill.status = 'paid';
-  bill.paidAt = today;
+  bill.paidAt = payDate;
+  bill.payFromAccountId = bankId;
   save();
+  try { queueBooksCloudSync(); } catch (_) {}
   toast('Bill paid — AP cleared');
-  booksView();
-  track('bill_paid', { bill_id: bill.id });
+  try {
+    setBooksPage('ap', 'payables');
+    renderBooksPayables();
+  } catch (_) { booksView(); }
+  try { track('bill_paid', { bill_id: bill.id }); } catch (_) {}
 }
 
 function openBillModal() {
+  ensureBooksDb();
   const m = document.getElementById('billModal');
-  if (!m) return;
+  if (!m) {
+    toast('Bill form missing — hard-refresh');
+    return;
+  }
   const cat = document.getElementById('billCategory');
   if (cat) {
     cat.innerHTML = (BOOKS_CATEGORIES.out || []).map(c =>
       `<option value="${c.id}">${c.label}</option>`
     ).join('');
   }
-  document.getElementById('billSupplier').value = '';
-  document.getElementById('billAmount').value = '';
-  document.getElementById('billTax').value = '';
-  document.getElementById('billCurrency').value = db.profile.reporting || 'NGN';
-  document.getElementById('billDate').value = today;
-  document.getElementById('billDue').value = today;
-  document.getElementById('billNote').value = '';
-  m.classList.add('show');
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+  set('billSupplier', '');
+  set('billAmount', '');
+  set('billTax', '');
+  set('billCurrency', (db.profile && db.profile.reporting) || 'NGN');
+  set('billDate', typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
+  set('billDue', typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
+  set('billNote', '');
+  if (typeof showModal === 'function') showModal('billModal');
+  else { m.classList.add('show'); m.style.display = 'grid'; }
 }
 function closeBillModal() {
-  document.getElementById('billModal')?.classList.remove('show');
+  if (typeof hideModal === 'function') hideModal('billModal');
+  else {
+    const m = document.getElementById('billModal');
+    if (m) { m.classList.remove('show'); m.style.display = ''; }
+  }
 }
 
 function renderBooksPayables() {
   const el = document.getElementById('booksPayablesList');
   if (!el) return;
   ensureBooksDb();
-  const open = db.bills.filter(b => b.status !== 'paid');
-  const paid = db.bills.filter(b => b.status === 'paid').slice(-10);
-  if (!db.bills.length) {
-    el.innerHTML = `<div class="empty" style="padding:20px">
-      <h3>No supplier bills yet</h3>
-      <p>When a supplier invoices you, accrue it here. Your P&amp;L shows the expense immediately; cash only moves when you pay.</p>
-      <button class="button primary" type="button" id="booksEmptyBill">Add supplier bill</button>
-    </div>`;
+  const bills = db.bills || [];
+  const open = bills.filter(b => b.status !== 'paid');
+  const paid = bills.filter(b => b.status === 'paid').slice(-15).reverse();
+  const rep = (db.profile && db.profile.reporting) || 'NGN';
+  const openTotal = open.reduce((n, b) => n + (typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0), 0);
+  // GL AP balance for cross-check
+  let glAp = 0;
+  try {
+    const bal = typeof accountBalances === 'function' ? accountBalances() : (typeof accountBalance === 'function' ? null : null);
+    if (typeof accountBalance === 'function') glAp = accountBalance('2000');
+    else if (bal && bal['2000'] != null) glAp = bal['2000'];
+  } catch (_) {}
+
+  if (!bills.length) {
+    el.innerHTML = '<div class="empty" style="padding:20px">' +
+      '<h3>No supplier bills yet</h3>' +
+      '<p>Accrue a supplier invoice here. Expense hits P&amp;L now; Accounts payable (2000) holds the liability until you pay.</p>' +
+      '<button class="button primary" type="button" id="booksEmptyBill">Add supplier bill</button></div>';
     document.getElementById('booksEmptyBill')?.addEventListener('click', openBillModal);
     return;
   }
-  let html = '';
+
+  // Bank options for pay-from
+  let bankOpts = '';
+  try {
+    const banks = (getCoa() || []).filter(a => a && (a.id === '1000' || (typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a))));
+    const list = banks.length ? banks : (getCoa() || []).filter(a => a.type === 'asset');
+    bankOpts = list.map(a => '<option value="' + a.id + '">' + a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>').join('');
+  } catch (_) {
+    bankOpts = '<option value="1000">1000 · Cash</option>';
+  }
+
+  let html = '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;align-items:center">' +
+    '<div style="padding:12px 16px;border:1px solid var(--line);border-radius:12px;min-width:140px">' +
+    '<div style="font-size:11px;color:var(--muted);text-transform:uppercase">Open AP</div>' +
+    '<div style="font-size:18px;font-weight:700">' + (typeof money === 'function' ? money(openTotal, rep) : openTotal) + '</div>' +
+    '<div style="font-size:11px;color:var(--muted)">' + open.length + ' bill' + (open.length === 1 ? '' : 's') + '</div></div>';
+  if (Math.abs(glAp) > 0.02) {
+    html += '<div style="padding:12px 16px;border:1px solid var(--line);border-radius:12px;min-width:140px">' +
+      '<div style="font-size:11px;color:var(--muted);text-transform:uppercase">Ledger 2000 AP</div>' +
+      '<div style="font-size:18px;font-weight:700">' + (typeof money === 'function' ? money(Math.abs(glAp), rep) : Math.abs(glAp)) + '</div></div>';
+  }
+  html += '<button type="button" class="button primary" id="booksAddBillBtn">+ Supplier bill</button></div>';
+
   if (open.length) {
     html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Open payables</div>';
     html += open.map(b => {
       const due = b.due || b.date || '';
-      const overdue = due && new Date(due + 'T12:00:00') < new Date();
-      return `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)">
-        <div style="flex:1;min-width:160px">
-          <div style="font-weight:700;font-size:13px">${b.supplier || 'Supplier'}</div>
-          <div style="font-size:12px;color:var(--muted)">${booksCategoryLabel('out', b.category)} · due ${due || '—'}${overdue ? ' · <span style="color:var(--red-text)">overdue</span>' : ''}</div>
-        </div>
-        <b>${money(b.amount, b.currency)}</b>
-        <button type="button" class="button small primary" data-pay-bill="${b.id}">Mark paid</button>
-        <button type="button" class="button small danger" data-del-bill="${b.id}">Delete</button>
-      </div>`;
+      let overdue = false;
+      try { overdue = due && new Date(due + 'T12:00:00') < new Date(); } catch (_) {}
+      const cat = (typeof booksCategoryLabel === 'function') ? booksCategoryLabel('out', b.category) : (b.category || '');
+      return '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)">' +
+        '<div style="flex:1;min-width:160px">' +
+        '<div style="font-weight:700;font-size:13px">' + String(b.supplier || 'Supplier').replace(/</g, '') + '</div>' +
+        '<div style="font-size:12px;color:var(--muted)">' + cat + ' · bill ' + (b.date || '—') +
+        ' · due ' + (due || '—') + (overdue ? ' · <span style="color:var(--red-text)">overdue</span>' : '') +
+        (b.note ? (' · ' + String(b.note).slice(0, 40).replace(/</g, '')) : '') + '</div>' +
+        '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">' +
+        '<select data-pay-from="' + b.id + '" style="font-size:12px;max-width:180px" title="Pay from">' + bankOpts + '</select>' +
+        '</div></div>' +
+        '<b>' + (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) + '</b>' +
+        '<button type="button" class="button small primary" data-pay-bill="' + b.id + '">Mark paid</button>' +
+        '<button type="button" class="button small danger" data-del-bill="' + b.id + '">Delete</button>' +
+        '</div>';
     }).join('');
   } else {
     html += '<p class="section-sub">No open payables — all bills cleared.</p>';
   }
+
   if (paid.length) {
     html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin:16px 0 6px">Recently paid</div>';
     html += paid.map(b =>
-      `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--line);color:var(--muted)">
-        ${b.paidAt || ''} · ${b.supplier || ''} · ${money(b.amount, b.currency)}
-      </div>`
+      '<div style="display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">' +
+      '<span>' + String(b.supplier || 'Supplier').replace(/</g, '') + ' · paid ' + (b.paidAt || '—') + '</span>' +
+      '<span style="color:var(--muted)">' + (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) + '</span></div>'
     ).join('');
   }
   el.innerHTML = html;
+  document.getElementById('booksAddBillBtn')?.addEventListener('click', openBillModal);
 }
 
 
-/**
- * Full ledger integrity check.
- * Double-entry rule: for every journal, Σ debits = Σ credits
- * and across all accounts Σ (debit − credit) = 0.
- */
 function validateAccountBalances() {
   ensureBooksDb();
   const issues = [];
@@ -10026,11 +10100,12 @@ function renderBooksAttention() {
   const openAP = (db.bills || []).filter(b => b.status !== 'paid').length;
   if (openAP > 0) {
     items.push({
-      text: openAP + ' supplier bill' + (openAP === 1 ? '' : 's') + ' to pay',
+      text: openAP + ' open supplier bill' + (openAP === 1 ? '' : 's'),
       action: 'Payables',
       run: () => setBooksPage('ap', 'payables')
     });
   }
+
   try {
     const v = validateAccountBalances();
     if (!v.ok) {
@@ -14675,14 +14750,30 @@ document.getElementById('billSave')?.addEventListener('click', () => {
     note: (document.getElementById('billNote')?.value || '').trim(),
     status: 'open'
   };
+  db.bills = db.bills || [];
   db.bills.push(bill);
-  accrueSupplierBill(bill);
+  try {
+    accrueSupplierBill(bill);
+  } catch (err) {
+    console.warn(err);
+    db.bills = db.bills.filter(b => b.id !== bill.id);
+    toast('Could not post bill to ledger — ' + (err.message || 'error'));
+    return;
+  }
   save();
+  try { queueBooksCloudSync(); } catch (_) {}
   closeBillModal();
-  toast('Bill accrued — expense + AP posted');
-  booksTab = 'payables';
-  booksView();
-  track('bill_accrued', { category: bill.category });
+  toast('Bill accrued · AP open · see Money out');
+  try {
+    booksPage = 'ap';
+    booksTab = 'payables';
+    setBooksPage('ap', 'payables');
+    renderBooksPayables();
+  } catch (_) {
+    booksTab = 'payables';
+    booksView();
+  }
+  try { track('bill_accrued', { category: bill.category }); } catch (_) {}
 });
 
 document.getElementById('btnExportBooks')?.addEventListener('click', exportBooksCsv);
