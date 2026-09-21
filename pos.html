@@ -1,0 +1,1145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#071a38">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>invoicedey POS</title>
+<style>
+:root {
+  --bg: #f4f6fa;
+  --panel: #ffffff;
+  --panel-2: #f0f4fa;
+  --text: #071a38;
+  --muted: #5f7698;
+  --line: #dce4ef;
+  --blue: #2467E3;
+  --blue-soft: #e8f0fe;
+  --red-text: #b42318;
+  --green: #0d7a4f;
+  --shadow: 0 8px 28px rgba(7,26,56,.08);
+  --radius: 14px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b1220;
+    --panel: #121a2b;
+    --panel-2: #1a2438;
+    --text: #e8eef8;
+    --muted: #8fa3c0;
+    --line: #243049;
+    --blue: #4b86f5;
+    --blue-soft: #1a2744;
+    --shadow: 0 8px 28px rgba(0,0,0,.35);
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+}
+button, input { font: inherit; }
+button { cursor: pointer; }
+.btn {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 700;
+  font-size: 14px;
+}
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn.ghost { background: transparent; }
+.btn.danger { color: var(--red-text); }
+.btn.block { width: 100%; }
+.btn.lg { padding: 16px; font-size: 16px; border-radius: 14px; }
+.btn.sm { padding: 8px 10px; font-size: 13px; border-radius: 10px; }
+
+#gate {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.gate-card {
+  width: min(420px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 28px 24px;
+  box-shadow: var(--shadow);
+}
+.gate-card h1 { margin: 0 0 8px; font-size: 24px; letter-spacing: -.03em; }
+.gate-card p { margin: 0 0 18px; color: var(--muted); line-height: 1.5; }
+.brand { font-weight: 900; letter-spacing: -1px; margin-bottom: 18px; }
+.brand em { color: var(--blue); font-style: normal; }
+
+#app { display: none; min-height: 100%; flex-direction: column; }
+#app.show { display: flex; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.topbar .title { font-weight: 800; letter-spacing: -.02em; flex: 1; min-width: 0; }
+.topbar .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.offline, .pending {
+  display: none;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.offline { color: #9a3412; background: #ffedd5; }
+.offline.show { display: inline-flex; }
+.pending { color: #1e40af; background: #dbeafe; }
+.pending.show { display: inline-flex; }
+.pending.syncing { color: #0d7a4f; background: #d1fae5; }
+
+.layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr minmax(300px, 380px);
+  min-height: 0;
+}
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  .cart-panel {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 30;
+    max-height: 55vh;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -10px 40px rgba(0,0,0,.18);
+    transform: translateY(calc(100% - 64px - var(--safe-b)));
+    transition: transform .2s ease;
+  }
+  .cart-panel.open { transform: translateY(0); }
+  .products-pane { padding-bottom: 80px; }
+}
+
+.products-pane { padding: 12px 14px 20px; min-width: 0; }
+.search {
+  width: 100%;
+  height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0 14px;
+  background: var(--panel);
+  color: var(--text);
+  margin-bottom: 12px;
+  font-size: 16px;
+}
+.search:focus { outline: 2px solid var(--blue-soft); border-color: var(--blue); }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+.product-card {
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.product-card:active { transform: scale(.98); }
+.product-card .name { font-weight: 700; font-size: 14px; line-height: 1.25; }
+.product-card .price { font-size: 16px; font-weight: 800; }
+.product-card .stock { font-size: 12px; color: var(--muted); }
+.product-card.out { opacity: .45; }
+.empty {
+  text-align: center;
+  padding: 40px 16px;
+  color: var(--muted);
+}
+.empty h3 { color: var(--text); margin: 0 0 8px; }
+
+.cart-panel {
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.cart-handle {
+  display: none;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 800;
+  align-items: center;
+  justify-content: space-between;
+}
+@media (max-width: 860px) {
+  .cart-handle { display: flex; }
+  .cart-panel { border-left: 0; border-top: 1px solid var(--line); }
+}
+.cart-body { flex: 1; overflow: auto; padding: 12px 14px; }
+.cart-line {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.cart-line .nm { font-weight: 700; }
+.cart-line .sub { color: var(--muted); font-size: 12px; }
+.qty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.qty span { min-width: 22px; text-align: center; font-weight: 700; }
+.cart-footer {
+  border-top: 1px solid var(--line);
+  padding: 12px 14px calc(14px + var(--safe-b));
+  background: var(--panel);
+}
+.totals { display: grid; gap: 6px; margin-bottom: 12px; }
+.totals div { display: flex; justify-content: space-between; }
+.totals .grand { font-size: 20px; font-weight: 900; }
+.pay-row { display: grid; gap: 8px; }
+@media (min-width: 861px) {
+  .pay-row { grid-template-columns: 1fr 1fr 1fr; }
+}
+
+.modalback {
+  position: fixed; inset: 0;
+  background: rgba(7,26,56,.45);
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 50;
+  padding: 16px;
+}
+.modalback.show { display: flex; }
+@media (min-width: 600px) {
+  .modalback { align-items: center; }
+}
+.modal {
+  width: min(420px, 100%);
+  background: var(--panel);
+  border-radius: 18px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+.modal h2 { margin: 0 0 6px; font-size: 20px; }
+.modal .hint { color: var(--muted); margin: 0 0 14px; font-size: 13px; }
+.field { margin-bottom: 12px; }
+.field label { display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
+.field input {
+  width: 100%;
+  height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0 12px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 16px;
+}
+.due {
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: -.03em;
+  margin-bottom: 12px;
+}
+.change-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 8px 0 16px;
+  font-size: 15px;
+}
+.change-row strong { font-size: 22px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--safe-b));
+  transform: translateX(-50%) translateY(20px);
+  background: #071a38;
+  color: #fff;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0;
+  pointer-events: none;
+  transition: .2s ease;
+  z-index: 80;
+  max-width: 90vw;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<div id="gate">
+  <div class="gate-card">
+    <div class="brand">invoice<em>dey</em> POS</div>
+    <h1 id="gateTitle">Sign in to use POS</h1>
+    <p id="gateMsg">Use the same account as invoicedey. Open the main app to sign in, then return here.</p>
+    <button class="btn primary block lg" type="button" id="gateGoApp">Open invoicedey</button>
+    <button class="btn block" type="button" id="gateRetry" style="margin-top:10px">I already signed in — retry</button>
+  </div>
+</div>
+
+<div id="app">
+  <header class="topbar">
+    <div class="title">POS Checkout</div>
+    <span class="offline" id="offlineBadge">Offline</span>
+    <span class="pending" id="pendingBadge" title="Sales waiting to sync">0 pending</span>
+    <span class="meta" id="orgLabel">—</span>
+    <button class="btn sm ghost" type="button" id="btnSync" title="Sync now">Sync</button>
+    <button class="btn sm ghost" type="button" id="btnBackApp" title="Back office">App</button>
+    <button class="btn sm" type="button" id="btnClear">Clear</button>
+  </header>
+
+  <div class="layout">
+    <section class="products-pane">
+      <input class="search" id="search" type="search" placeholder="Search name, SKU or barcode…" autocomplete="off">
+      <div class="grid" id="productGrid"></div>
+    </section>
+
+    <aside class="cart-panel" id="cartPanel">
+      <div class="cart-handle" id="cartHandle">
+        <span id="cartHandleLabel">Cart · 0 items</span>
+        <span id="cartHandleTotal">—</span>
+      </div>
+      <div class="cart-body">
+        <div id="cartLines"></div>
+      </div>
+      <div class="cart-footer">
+        <div class="totals">
+          <div><span style="color:var(--muted)">Subtotal</span><span id="subtotal">—</span></div>
+          <div class="grand"><span>Total</span><span id="total">—</span></div>
+        </div>
+        <div class="pay-row">
+          <button class="btn primary lg" type="button" id="payCash" disabled>Cash</button>
+          <button class="btn lg" type="button" id="payTransfer" disabled>Transfer</button>
+          <button class="btn lg" type="button" id="payOther" disabled>Other</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="modalback" id="cashModal">
+  <div class="modal">
+    <h2>Cash payment</h2>
+    <p class="hint">Total due</p>
+    <div class="due" id="cashDue">—</div>
+    <div class="field">
+      <label for="cashTendered">Amount tendered</label>
+      <input id="cashTendered" type="number" min="0" step="0.01" inputmode="decimal">
+    </div>
+    <div class="change-row">
+      <span style="color:var(--muted)">Change</span>
+      <strong id="cashChange">—</strong>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" type="button" data-close="cashModal">Cancel</button>
+      <button class="btn primary" type="button" id="cashConfirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="noteModal">
+  <div class="modal">
+    <h2 id="noteTitle">Payment</h2>
+    <p class="hint">Total due: <strong id="noteDue">—</strong></p>
+    <input type="hidden" id="noteMethod">
+    <div class="field">
+      <label id="noteLabel" for="noteInput">Note</label>
+      <input id="noteInput" placeholder="Optional reference">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" type="button" data-close="noteModal">Cancel</button>
+      <button class="btn primary" type="button" id="noteConfirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="successModal">
+  <div class="modal">
+    <h2>Sale complete</h2>
+    <div id="successBody" style="line-height:1.6;font-size:14px"></div>
+    <div class="modal-actions" style="margin-top:16px">
+      <button class="btn" type="button" data-close="successModal">Close</button>
+      <button class="btn primary" type="button" id="successNew">New sale</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
+const ANON_DB_KEY = 'invoicedey-anonymous-v1';
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+let activeUserId = null;
+let organizationId = null;
+let db = {
+  profile: { reporting: 'NGN', name: '' },
+  products: [],
+  stockMovements: [],
+  posSales: [],
+  posCart: [],
+  posNextSaleNumber: 1,
+  cashEntries: [],
+  journals: []
+};
+
+function scopedDbKey(userId) {
+  return 'invoicedey-v2-user-' + userId;
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+function money(n, c) {
+  const cur = c || currency();
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, maximumFractionDigits: 2 }).format(Number(n) || 0);
+  } catch {
+    return cur + ' ' + (Number(n) || 0).toFixed(2);
+  }
+}
+
+function currency() {
+  return (db.profile && db.profile.reporting) || 'NGN';
+}
+
+function loadUserLocalDb(userId) {
+  const key = scopedDbKey(userId);
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      db = Object.assign(db, parsed || {});
+    }
+  } catch {}
+  if (!Array.isArray(db.products)) db.products = [];
+  if (!Array.isArray(db.stockMovements)) db.stockMovements = [];
+  if (!Array.isArray(db.posSales)) db.posSales = [];
+  if (!Array.isArray(db.posCart)) db.posCart = [];
+  if (!Array.isArray(db.cashEntries)) db.cashEntries = [];
+  if (!Array.isArray(db.journals)) db.journals = [];
+  if (!db.posNextSaleNumber || db.posNextSaleNumber < 1) db.posNextSaleNumber = 1;
+  if (!db.profile) db.profile = { reporting: 'NGN', name: '' };
+}
+
+function persistDb() {
+  if (!activeUserId) return;
+  try {
+    const key = scopedDbKey(activeUserId);
+    let full = {};
+    try { full = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch { full = {}; }
+    full.products = db.products;
+    full.stockMovements = db.stockMovements;
+    full.posSales = db.posSales;
+    full.posCart = db.posCart;
+    full.posNextSaleNumber = db.posNextSaleNumber;
+    full.cashEntries = db.cashEntries;
+    full.journals = db.journals;
+    if (db.profile) full.profile = Object.assign({}, full.profile || {}, db.profile);
+    localStorage.setItem(key, JSON.stringify(full));
+    // Dedicated product cache for offline boot
+    try {
+      localStorage.setItem(productCacheKey(activeUserId), JSON.stringify({
+        organizationId,
+        products: db.products,
+        savedAt: Date.now()
+      }));
+    } catch {}
+  } catch (e) {
+    console.warn('persist', e);
+  }
+}
+
+function preferredOrgStorageKey(userId) {
+  return 'invoicedey-active-org-' + userId;
+}
+function productCacheKey(userId) {
+  return 'invoicedey-pos-products-' + userId;
+}
+function syncQueueKey(userId) {
+  return 'invoicedey-pos-sync-queue-' + userId;
+}
+function cachedOrgKey(userId) {
+  return 'invoicedey-pos-org-' + userId;
+}
+
+function loadSyncQueue() {
+  if (!activeUserId) return [];
+  try {
+    const q = JSON.parse(localStorage.getItem(syncQueueKey(activeUserId)) || '[]');
+    return Array.isArray(q) ? q : [];
+  } catch { return []; }
+}
+
+function saveSyncQueue(queue) {
+  if (!activeUserId) return;
+  try {
+    localStorage.setItem(syncQueueKey(activeUserId), JSON.stringify(queue || []));
+  } catch (e) { console.warn('queue save', e); }
+  updatePendingBadge();
+}
+
+function enqueueSync(job) {
+  const queue = loadSyncQueue();
+  // Dedupe identical sale pushes by sale id
+  if (job.type === 'sale' && job.sale && job.sale.id) {
+    if (queue.some(j => j.type === 'sale' && j.sale && j.sale.id === job.sale.id)) return;
+  }
+  queue.push(Object.assign({ id: crypto.randomUUID(), createdAt: Date.now(), attempts: 0 }, job));
+  saveSyncQueue(queue);
+}
+
+function updatePendingBadge() {
+  const badge = document.getElementById('pendingBadge');
+  if (!badge) return;
+  const n = loadSyncQueue().length;
+  if (n > 0) {
+    badge.textContent = n + ' pending';
+    badge.classList.add('show');
+    badge.classList.remove('syncing');
+  } else {
+    badge.classList.remove('show', 'syncing');
+  }
+}
+
+function isOnline() {
+  return navigator.onLine !== false;
+}
+
+async function resolveOrg() {
+  const preferred = localStorage.getItem(preferredOrgStorageKey(activeUserId));
+  const cached = localStorage.getItem(cachedOrgKey(activeUserId));
+
+  if (!isOnline()) {
+    organizationId = preferred || cached || null;
+    if (!organizationId) throw new Error('Offline and no saved organisation. Connect once while online.');
+    return organizationId;
+  }
+
+  try {
+    const { data: memberships, error } = await sb
+      .from('organization_members')
+      .select('organization_id, role');
+    if (error) throw error;
+    const rows = memberships || [];
+    if (!rows.length) throw new Error('No organisation found. Open the main app once to finish setup.');
+    const match = preferred && rows.find(r => r.organization_id === preferred);
+    const team = rows.find(r => String(r.role || '').toLowerCase() === 'member');
+    organizationId = (match || team || rows[0]).organization_id;
+    try { localStorage.setItem(cachedOrgKey(activeUserId), organizationId); } catch {}
+    return organizationId;
+  } catch (e) {
+    organizationId = preferred || cached || null;
+    if (organizationId) return organizationId;
+    throw e;
+  }
+}
+
+async function pullProducts() {
+  if (!organizationId) return;
+  if (!isOnline()) return; // use local cache
+  const { data, error } = await sb.from('products')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('name');
+  if (error) throw error;
+  const byLocal = new Map(db.products.map(p => [p.id, p]));
+  const byCloud = new Map(db.products.filter(p => p.cloudId).map(p => [p.cloudId, p]));
+  (data || []).forEach(row => {
+    let p = byCloud.get(row.id) || (row.local_id && byLocal.get(row.local_id));
+    if (!p) {
+      p = { id: row.local_id || row.id, cloudId: row.id };
+      db.products.push(p);
+    }
+    Object.assign(p, {
+      cloudId: row.id,
+      name: row.name,
+      sku: row.sku,
+      barcode: row.barcode,
+      price: Number(row.price) || 0,
+      cost: Number(row.cost) || 0,
+      currency: row.currency || currency(),
+      stock_qty: Number(row.stock_qty) || 0,
+      low_stock_at: Number(row.low_stock_at) || 0,
+      track_stock: row.track_stock !== false,
+      active: row.active !== false,
+      updated_at: row.updated_at
+    });
+  });
+  persistDb();
+}
+
+let syncInFlight = false;
+
+async function flushSyncQueue() {
+  if (syncInFlight || !isOnline() || !organizationId || !activeUserId) return;
+  const queue = loadSyncQueue();
+  if (!queue.length) {
+    updatePendingBadge();
+    return;
+  }
+  syncInFlight = true;
+  const badge = document.getElementById('pendingBadge');
+  if (badge) {
+    badge.textContent = 'Syncing…';
+    badge.classList.add('show', 'syncing');
+  }
+
+  const remaining = [];
+  for (const job of queue) {
+    try {
+      if (job.type === 'sale') {
+        await pushSale(job.sale);
+        // mark local sale synced
+        const local = db.posSales.find(s => s.id === job.sale.id);
+        if (local && job.sale.cloudId) local.cloudId = job.sale.cloudId;
+      } else if (job.type === 'stock') {
+        const p = db.products.find(x => x.id === job.product_id);
+        if (p) await pushProduct(p);
+        if (job.movement) await pushMovement(job.movement, job.product_cloud_id || p?.cloudId);
+      } else if (job.type === 'product_stock') {
+        const p = db.products.find(x => x.id === job.product_id);
+        if (p) await pushProduct(p);
+      }
+    } catch (e) {
+      console.warn('sync job failed', job.type, e);
+      job.attempts = (job.attempts || 0) + 1;
+      job.lastError = String(e.message || e);
+      // Keep retrying; drop only after many failures (avoid infinite poison)
+      if (job.attempts < 20) remaining.push(job);
+    }
+  }
+  saveSyncQueue(remaining);
+  persistDb();
+  syncInFlight = false;
+  updatePendingBadge();
+  if (remaining.length === 0 && queue.length > 0) toast('All sales synced');
+  else if (remaining.length && remaining.length < queue.length) toast('Synced some pending sales');
+}
+
+function cartTotal() {
+  return db.posCart.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
+}
+
+function renderProducts() {
+  const q = (document.getElementById('search').value || '').trim().toLowerCase();
+  let list = db.products.filter(p => p.active !== false);
+  if (q) list = list.filter(p => [p.name, p.sku, p.barcode].some(v => String(v || '').toLowerCase().includes(q)));
+  list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  const grid = document.getElementById('productGrid');
+  if (!list.length) {
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1">
+      <h3>No products</h3>
+      <p>Add products in the main app (Products), then come back here to sell.</p>
+      <button class="btn primary" type="button" id="emptyGoApp">Open Products</button>
+    </div>`;
+    document.getElementById('emptyGoApp')?.addEventListener('click', () => location.href = 'app.html');
+    return;
+  }
+  grid.innerHTML = list.map(p => {
+    const stock = Number(p.stock_qty) || 0;
+    const out = p.track_stock !== false && stock <= 0;
+    return `<button type="button" class="product-card${out ? ' out' : ''}" data-add="${p.id}" ${out ? 'disabled' : ''}>
+      <div class="name">${escapeHtml(p.name)}</div>
+      <div class="price">${money(p.price)}</div>
+      <div class="stock">${out ? 'Out of stock' : 'Stock ' + stock}</div>
+    </button>`;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function renderCart() {
+  const total = cartTotal();
+  const count = db.posCart.reduce((n, l) => n + (l.qty || 0), 0);
+  document.getElementById('subtotal').textContent = money(total);
+  document.getElementById('total').textContent = money(total);
+  document.getElementById('cartHandleLabel').textContent = 'Cart · ' + count + ' item' + (count === 1 ? '' : 's');
+  document.getElementById('cartHandleTotal').textContent = money(total);
+  const disabled = count === 0;
+  ['payCash', 'payTransfer', 'payOther'].forEach(id => {
+    document.getElementById(id).disabled = disabled;
+  });
+  const lines = document.getElementById('cartLines');
+  if (!db.posCart.length) {
+    lines.innerHTML = `<p style="color:var(--muted);margin:8px 0">Tap a product to add it.</p>`;
+    return;
+  }
+  lines.innerHTML = db.posCart.map(l => `
+    <div class="cart-line">
+      <div>
+        <div class="nm">${escapeHtml(l.name)}</div>
+        <div class="sub">${money(l.price)} each</div>
+      </div>
+      <div class="qty">
+        <button class="btn sm" type="button" data-qty="${l.product_id}" data-delta="-1">−</button>
+        <span>${l.qty}</span>
+        <button class="btn sm" type="button" data-qty="${l.product_id}" data-delta="1">+</button>
+      </div>
+      <div style="font-weight:800;min-width:72px;text-align:right">${money(l.qty * l.price)}</div>
+    </div>`).join('');
+}
+
+function addToCart(productId) {
+  const p = db.products.find(x => x.id === productId && x.active !== false);
+  if (!p) return;
+  if (p.track_stock !== false && Number(p.stock_qty) <= 0) {
+    toast('Out of stock');
+    return;
+  }
+  const line = db.posCart.find(l => l.product_id === productId);
+  if (line) {
+    if (p.track_stock !== false && line.qty + 1 > Number(p.stock_qty)) {
+      toast('Not enough stock');
+      return;
+    }
+    line.qty += 1;
+  } else {
+    db.posCart.push({ product_id: p.id, name: p.name, price: Number(p.price) || 0, qty: 1 });
+  }
+  persistDb();
+  renderCart();
+  renderProducts();
+  if (window.matchMedia('(max-width: 860px)').matches) {
+    document.getElementById('cartPanel').classList.add('open');
+  }
+}
+
+function setQty(productId, qty) {
+  const line = db.posCart.find(l => l.product_id === productId);
+  if (!line) return;
+  qty = Math.floor(Number(qty));
+  if (!(qty > 0)) {
+    db.posCart = db.posCart.filter(l => l.product_id !== productId);
+  } else {
+    const p = db.products.find(x => x.id === productId);
+    if (p && p.track_stock !== false && qty > Number(p.stock_qty)) {
+      toast('Not enough stock');
+      qty = Number(p.stock_qty);
+    }
+    line.qty = qty;
+  }
+  persistDb();
+  renderCart();
+  renderProducts();
+}
+
+function openModal(id) {
+  document.getElementById(id).classList.add('show');
+}
+function closeModal(id) {
+  document.getElementById(id).classList.remove('show');
+}
+
+function updateCashChange() {
+  const due = cartTotal();
+  const raw = document.getElementById('cashTendered').value;
+  const tendered = Number(raw);
+  const el = document.getElementById('cashChange');
+  const btn = document.getElementById('cashConfirm');
+  if (raw === '' || Number.isNaN(tendered)) {
+    el.textContent = '—';
+    el.style.color = '';
+    btn.disabled = true;
+    return;
+  }
+  const change = tendered - due;
+  el.textContent = money(change);
+  el.style.color = change < 0 ? 'var(--red-text)' : 'var(--green)';
+  btn.disabled = change < 0;
+}
+
+function openCash() {
+  if (!db.posCart.length) return;
+  const due = cartTotal();
+  document.getElementById('cashDue').textContent = money(due);
+  document.getElementById('cashTendered').value = String(due);
+  openModal('cashModal');
+  updateCashChange();
+  const input = document.getElementById('cashTendered');
+  input.focus();
+  input.select();
+}
+
+function openNote(method) {
+  if (!db.posCart.length) return;
+  document.getElementById('noteMethod').value = method;
+  document.getElementById('noteTitle').textContent = method === 'transfer' ? 'Bank transfer' : 'Other payment';
+  document.getElementById('noteLabel').textContent = method === 'other' ? 'How was it paid?' : 'Note (optional)';
+  document.getElementById('noteDue').textContent = money(cartTotal());
+  document.getElementById('noteInput').value = '';
+  document.getElementById('noteInput').placeholder = method === 'other' ? 'e.g. Moniepoint POS' : 'e.g. GTBank ref';
+  openModal('noteModal');
+  document.getElementById('noteInput').focus();
+}
+
+async function nextSaleNumber() {
+  // Prefer local sequence offline; try cloud only when online
+  if (isOnline() && organizationId) {
+    try {
+      const { data, error } = await sb.rpc('next_pos_sale_number', { p_org_id: organizationId });
+      if (!error && data) return data;
+    } catch (e) { console.warn(e); }
+  }
+  const n = db.posNextSaleNumber || 1;
+  db.posNextSaleNumber = n + 1;
+  return 'POS-' + String(n).padStart(4, '0');
+}
+
+async function pushProduct(p) {
+  if (!organizationId || !p.cloudId) return;
+  if (!isOnline()) throw new Error('offline');
+  const { error } = await sb.from('products').update({
+    stock_qty: p.stock_qty,
+    updated_at: p.updated_at || new Date().toISOString()
+  }).eq('id', p.cloudId);
+  if (error) throw error;
+}
+
+async function pushMovement(mov, productCloudId) {
+  if (!organizationId || !productCloudId) return;
+  if (!isOnline()) throw new Error('offline');
+  const { error } = await sb.from('stock_movements').insert({
+    organization_id: organizationId,
+    product_id: productCloudId,
+    qty_change: mov.qty_change,
+    reason: mov.reason,
+    reference: mov.reference,
+    note: mov.note
+  });
+  if (error) throw error;
+}
+
+async function pushSale(sale) {
+  if (!organizationId) return;
+  if (!isOnline()) throw new Error('offline');
+  // Idempotent: if already has cloudId, skip
+  if (sale.cloudId) return;
+  const { data, error } = await sb.from('pos_sales').insert({
+    organization_id: organizationId,
+    local_id: sale.id,
+    sale_number: sale.sale_number,
+    sold_at: sale.sold_at,
+    total: sale.total,
+    currency: sale.currency,
+    payment_method: sale.payment_method,
+    amount_tendered: sale.amount_tendered,
+    change_given: sale.change_given,
+    payment_note: sale.payment_note,
+    lines: sale.lines
+  }).select('id').single();
+  if (error) {
+    // Unique conflict on local_id / sale_number — treat as already synced
+    if (/duplicate|unique/i.test(String(error.message || ''))) return;
+    throw error;
+  }
+  sale.cloudId = data.id;
+}
+
+function postLocalBooks(sale) {
+  const key = 'pos:' + sale.id;
+  if (!db.cashEntries.some(e => e.sourceKey === key)) {
+    db.cashEntries.push({
+      id: crypto.randomUUID(),
+      type: 'in',
+      category: 'pos',
+      amount: sale.total,
+      currency: sale.currency,
+      date: sale.sold_at.slice(0, 10),
+      note: 'POS sale ' + sale.sale_number,
+      source: 'pos_sale',
+      sourceKey: key
+    });
+  }
+  if (!db.journals.some(j => j.sourceKey === 'j:' + key)) {
+    db.journals.push({
+      id: crypto.randomUUID(),
+      entry_date: sale.sold_at.slice(0, 10),
+      memo: 'POS sale ' + sale.sale_number,
+      source: 'pos_sale',
+      sourceKey: 'j:' + key,
+      currency: sale.currency,
+      lines: [
+        { accountId: '1000', debit: sale.total, credit: 0 },
+        { accountId: '4000', debit: 0, credit: sale.total }
+      ],
+      created_at: new Date().toISOString()
+    });
+  }
+}
+
+async function completeSale({ payment_method, amount_tendered, change_given, payment_note }) {
+  if (!db.posCart.length) return;
+  const lines = db.posCart.map(l => ({
+    product_id: l.product_id,
+    name: l.name,
+    qty: l.qty,
+    price: l.price,
+    total: l.qty * l.price
+  }));
+  const total = lines.reduce((s, l) => s + l.total, 0);
+  const saleNumber = await nextSaleNumber();
+  const saleId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const sale = {
+    id: saleId,
+    sale_number: saleNumber,
+    sold_at: now,
+    total,
+    currency: currency(),
+    payment_method,
+    amount_tendered: amount_tendered != null ? amount_tendered : null,
+    change_given: change_given != null ? change_given : null,
+    payment_note: payment_note || null,
+    lines,
+    cloudId: null,
+    synced: false
+  };
+
+  // Always apply stock + books locally first (works offline)
+  for (const line of lines) {
+    const p = db.products.find(x => x.id === line.product_id);
+    if (!p || p.track_stock === false) continue;
+    p.stock_qty = (Number(p.stock_qty) || 0) - line.qty;
+    p.updated_at = now;
+    const mov = {
+      id: crypto.randomUUID(),
+      product_id: p.id,
+      qty_change: -line.qty,
+      reason: 'sale',
+      reference: saleNumber,
+      note: null,
+      created_at: now
+    };
+    db.stockMovements.push(mov);
+    enqueueSync({
+      type: 'stock',
+      product_id: p.id,
+      product_cloud_id: p.cloudId || null,
+      movement: mov
+    });
+  }
+
+  db.posSales.push(sale);
+  postLocalBooks(sale);
+  enqueueSync({ type: 'sale', sale: Object.assign({}, sale) });
+
+  db.posCart = [];
+  persistDb();
+  closeModal('cashModal');
+  closeModal('noteModal');
+
+  const offlineNote = isOnline() ? '' : `<div style="margin-top:8px;color:#9a3412;font-weight:600">Saved offline — will sync when online</div>`;
+  let body = `<div><b>${saleNumber}</b></div>
+    <div style="margin-top:8px">Total <b>${money(total)}</b></div>
+    <div>Payment: ${payment_method}</div>`;
+  if (payment_method === 'cash') {
+    body += `<div>Cash given: ${money(amount_tendered)}</div>
+      <div style="font-size:18px;margin-top:6px">Change: <b>${money(change_given)}</b></div>`;
+  }
+  if (payment_note) body += `<div style="color:var(--muted)">${escapeHtml(payment_note)}</div>`;
+  body += offlineNote;
+  document.getElementById('successBody').innerHTML = body;
+  openModal('successModal');
+  renderCart();
+  renderProducts();
+  updatePendingBadge();
+  document.getElementById('cartPanel').classList.remove('open');
+
+  // Best-effort immediate sync if online
+  if (isOnline()) {
+    flushSyncQueue().catch(() => {});
+  }
+}
+
+function setOnlineUI() {
+  const offline = !isOnline();
+  document.getElementById('offlineBadge').classList.toggle('show', offline);
+  updatePendingBadge();
+  if (!offline) {
+    flushSyncQueue().catch(() => {});
+    pullProducts().then(() => renderProducts()).catch(() => {});
+  }
+}
+
+async function boot() {
+  setOnlineUI();
+  window.addEventListener('online', setOnlineUI);
+  window.addEventListener('offline', setOnlineUI);
+
+  let session = null;
+  try {
+    const res = await sb.auth.getSession();
+    session = res.data?.session || null;
+  } catch (e) {
+    console.warn('session', e);
+  }
+
+  // Offline: allow boot from cached user id if session missing temporarily
+  if (!session?.user) {
+    // Try last known user from product cache keys
+    document.getElementById('gate').style.display = 'grid';
+    document.getElementById('app').classList.remove('show');
+    if (!isOnline()) {
+      document.getElementById('gateTitle').textContent = 'Offline';
+      document.getElementById('gateMsg').textContent = 'Sign in once while online, then POS can work offline with cached products.';
+    }
+    return;
+  }
+
+  activeUserId = session.user.id;
+  loadUserLocalDb(activeUserId);
+
+  try {
+    await resolveOrg();
+    document.getElementById('orgLabel').textContent = (db.profile && db.profile.name) || session.user.email || 'Signed in';
+    if (isOnline()) {
+      try { await pullProducts(); } catch (e) { console.warn('pull products', e); }
+    }
+  } catch (e) {
+    // Offline with cache is OK
+    if (db.products.length && (organizationId || localStorage.getItem(cachedOrgKey(activeUserId)))) {
+      organizationId = organizationId || localStorage.getItem(cachedOrgKey(activeUserId));
+      document.getElementById('orgLabel').textContent = (db.profile && db.profile.name) || 'Offline mode';
+    } else {
+      document.getElementById('gateTitle').textContent = 'Could not load POS';
+      document.getElementById('gateMsg').textContent = e.message || String(e);
+      document.getElementById('gate').style.display = 'grid';
+      document.getElementById('app').classList.remove('show');
+      return;
+    }
+  }
+
+  document.getElementById('gate').style.display = 'none';
+  document.getElementById('app').classList.add('show');
+  updatePendingBadge();
+  renderProducts();
+  renderCart();
+  if (isOnline()) flushSyncQueue().catch(() => {});
+}
+
+// Events
+document.getElementById('gateGoApp').onclick = () => { location.href = 'app.html'; };
+document.getElementById('gateRetry').onclick = () => boot();
+document.getElementById('btnBackApp').onclick = () => { location.href = 'app.html'; };
+document.getElementById('btnSync').onclick = () => {
+  if (!isOnline()) { toast('You are offline'); return; }
+  flushSyncQueue()
+    .then(() => pullProducts())
+    .then(() => { renderProducts(); toast('Sync complete'); })
+    .catch(e => toast(e.message || 'Sync failed'));
+};
+document.getElementById('btnClear').onclick = () => {
+  db.posCart = [];
+  persistDb();
+  renderCart();
+  renderProducts();
+  document.getElementById('cartPanel').classList.remove('open');
+};
+document.getElementById('search').addEventListener('input', renderProducts);
+document.getElementById('productGrid').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-add]');
+  if (btn) addToCart(btn.getAttribute('data-add'));
+});
+document.getElementById('cartLines').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-qty]');
+  if (!btn) return;
+  const id = btn.getAttribute('data-qty');
+  const delta = Number(btn.getAttribute('data-delta') || 0);
+  const line = db.posCart.find(l => l.product_id === id);
+  if (line) setQty(id, line.qty + delta);
+});
+document.getElementById('cartHandle').onclick = () => {
+  document.getElementById('cartPanel').classList.toggle('open');
+};
+document.getElementById('payCash').onclick = openCash;
+document.getElementById('payTransfer').onclick = () => openNote('transfer');
+document.getElementById('payOther').onclick = () => openNote('other');
+document.getElementById('cashTendered').addEventListener('input', updateCashChange);
+document.getElementById('cashConfirm').onclick = () => {
+  const due = cartTotal();
+  const tendered = Number(document.getElementById('cashTendered').value);
+  if (!(tendered >= due)) { toast('Amount is less than total'); return; }
+  completeSale({
+    payment_method: 'cash',
+    amount_tendered: tendered,
+    change_given: tendered - due,
+    payment_note: null
+  }).catch(e => toast(e.message || 'Sale failed'));
+};
+document.getElementById('noteConfirm').onclick = () => {
+  const method = document.getElementById('noteMethod').value || 'other';
+  const note = (document.getElementById('noteInput').value || '').trim();
+  if (method === 'other' && !note) { toast('Please note how it was paid'); return; }
+  completeSale({
+    payment_method: method,
+    amount_tendered: null,
+    change_given: null,
+    payment_note: note || null
+  }).catch(e => toast(e.message || 'Sale failed'));
+};
+document.getElementById('successNew').onclick = () => {
+  closeModal('successModal');
+  renderCart();
+  renderProducts();
+};
+document.querySelectorAll('[data-close]').forEach(btn => {
+  btn.addEventListener('click', () => closeModal(btn.getAttribute('data-close')));
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    ['cashModal', 'noteModal', 'successModal'].forEach(closeModal);
+  }
+});
+
+boot();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./pos-sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
