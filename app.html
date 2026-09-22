@@ -2271,6 +2271,7 @@ input:focus:not(:focus-visible) {
       <button data-view="recurring"><span>↻</span> Recurring</button>
       <button data-view="books"><span>◎</span> Books</button>
       <button data-view="products"><span>■</span> Products</button>
+      <button data-view="purchases"><span>□</span> Purchases</button>
       <a class="nav-link-pos" href="pos.html" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;color:inherit;text-decoration:none;font-weight:600;font-size:13px"><span>▣</span> POS</a>
       <button data-view="clients"><span>♙</span> Clients</button>
       <button data-view="profile"><span>⚙</span> Profile</button>
@@ -2410,6 +2411,40 @@ input:focus:not(:focus-visible) {
         </select>
       </div>
       <div id="productList"></div>
+    </section>
+
+    <section class="view" id="purchases">
+      <div class="section-head">
+        <div>
+          <h2>Purchases</h2>
+          <div class="client-count" id="purchaseCount">Orders, receiving &amp; suppliers</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="button" type="button" id="btnAddSupplier">+ Supplier</button>
+          <button class="button primary" type="button" id="btnNewPurchase">+ Purchase order</button>
+        </div>
+      </div>
+      <div class="client-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <div class="search-bar" style="margin:0;flex:1;max-width:360px">
+          <input type="search" id="purchaseSearch" placeholder="Search PO number or supplier…">
+        </div>
+        <select id="purchaseStatusFilter" class="button small" style="min-width:130px">
+          <option value="all">All statuses</option>
+          <option value="draft">Draft</option>
+          <option value="ordered">Ordered</option>
+          <option value="partial">Partial</option>
+          <option value="received">Received</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <div id="purchaseList" style="margin-bottom:24px"></div>
+      <div class="section-head" style="margin-top:8px">
+        <div>
+          <h2 style="font-size:16px">Suppliers</h2>
+          <div class="client-count" id="supplierCount">0 suppliers</div>
+        </div>
+      </div>
+      <div id="supplierList"></div>
     </section>
 
     <section class="view" id="pos">
@@ -3314,6 +3349,67 @@ input:focus:not(:focus-visible) {
   <button data-view="plan"><span>◆</span>Plan</button>
 </nav>
 
+
+<div class="modalback" id="supplierModal">
+  <div class="modal" style="max-width:440px">
+    <h2 id="supplierModalTitle">Add supplier</h2>
+    <input type="hidden" id="supplierEditId">
+    <div class="field"><label>Name *</label><input id="supplierName" placeholder="Supplier name"></div>
+    <div class="two">
+      <div class="field"><label>Phone</label><input id="supplierPhone" placeholder="Optional"></div>
+      <div class="field"><label>Email</label><input id="supplierEmail" type="email" placeholder="Optional"></div>
+    </div>
+    <div class="field"><label>Note</label><input id="supplierNote" placeholder="Optional"></div>
+    <div class="buttons" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="button" type="button" id="supplierModalCancel">Cancel</button>
+      <button class="button primary" type="button" id="supplierModalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="purchaseModal">
+  <div class="modal" style="max-width:560px">
+    <h2 id="purchaseModalTitle">New purchase order</h2>
+    <input type="hidden" id="purchaseEditId">
+    <div class="field"><label>Supplier *</label>
+      <select id="purchaseSupplier"></select>
+    </div>
+    <div class="two">
+      <div class="field"><label>Order date</label><input id="purchaseOrderDate" type="date"></div>
+      <div class="field"><label>Expected date</label><input id="purchaseExpectedDate" type="date"></div>
+    </div>
+    <div class="field"><label>Note</label><input id="purchaseNote" placeholder="Optional"></div>
+    <div style="margin:12px 0 8px;font-weight:700;font-size:13px">Line items</div>
+    <div id="purchaseLinesEditor"></div>
+    <button class="button small" type="button" id="purchaseAddLine" style="margin-top:8px">+ Add line</button>
+    <div style="display:flex;justify-content:space-between;margin-top:14px;font-weight:800">
+      <span>Total</span><span id="purchaseModalTotal">—</span>
+    </div>
+    <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="button" type="button" id="purchaseModalCancel">Cancel</button>
+      <button class="button" type="button" id="purchaseSaveDraft">Save draft</button>
+      <button class="button primary" type="button" id="purchaseSaveOrdered">Mark ordered</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="receiveModal">
+  <div class="modal" style="max-width:520px">
+    <h2>Receive goods</h2>
+    <p class="section-sub" id="receiveModalSub">—</p>
+    <input type="hidden" id="receivePurchaseId">
+    <div id="receiveLinesEditor"></div>
+    <div class="field" style="margin-top:12px"><label>Note</label><input id="receiveNote" placeholder="Optional"></div>
+    <div class="field" style="display:flex;align-items:center;gap:8px;margin-top:8px">
+      <input type="checkbox" id="receivePostBooks" checked>
+      <label for="receivePostBooks" style="margin:0">Post to Books (Dr Inventory / Cr Cash)</label>
+    </div>
+    <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="button" type="button" id="receiveModalCancel">Cancel</button>
+      <button class="button primary" type="button" id="receiveModalConfirm">Confirm receive</button>
+    </div>
+  </div>
+</div>
 
 <div class="modalback" id="productModal">
   <div class="modal" style="max-width:480px">
@@ -5131,7 +5227,12 @@ const defaultDB = {
   stockMovements: [],
   posSales: [],
   posCart: [],
-  posNextSaleNumber: 1
+  posNextSaleNumber: 1,
+  suppliers: [],
+  purchases: [],
+  purchaseReceipts: [],
+  supplierPayments: [],
+  purchaseNextNumber: 1
 };
 const LEGACY_DB_KEY = 'invoicedey-v2';
 const ANON_DB_KEY = 'invoicedey-anonymous-v1';
@@ -5152,6 +5253,11 @@ function normalizeDbProfile() {
   if (!Array.isArray(db.posSales)) db.posSales = [];
   if (!Array.isArray(db.posCart)) db.posCart = [];
   if (!db.posNextSaleNumber || db.posNextSaleNumber < 1) db.posNextSaleNumber = 1;
+  if (!Array.isArray(db.suppliers)) db.suppliers = [];
+  if (!Array.isArray(db.purchases)) db.purchases = [];
+  if (!Array.isArray(db.purchaseReceipts)) db.purchaseReceipts = [];
+  if (!Array.isArray(db.supplierPayments)) db.supplierPayments = [];
+  if (!db.purchaseNextNumber || db.purchaseNextNumber < 1) db.purchaseNextNumber = 1;
   if (!db.booksSettings) db.booksSettings = { invoiceFeed: true };
   // Migrate older profiles — never overwrite an explicit reporting currency
   if (db.profile) {
@@ -6370,6 +6476,7 @@ function switchTo(v) {
     recurring: ['Recurring invoices', 'Schedules that create the next invoice when due.'],
     books: ['Books', 'Full accounting — ledger, journals, AR/AP, and financial reports.'],
     products: ['Products', 'Inventory catalog for POS checkout.'],
+    purchases: ['Purchases', 'Suppliers, purchase orders, and goods received.'],
     pos: ['POS Checkout', 'Sell from any Windows or Android device.'],
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
@@ -6395,6 +6502,7 @@ function switchTo(v) {
   if (v === 'dashboard') dashboard();
   if (v === 'books') booksView();
   if (v === 'products') productsView();
+  if (v === 'purchases') purchasesView();
   if (v === 'pos') posView();
   if (v === 'invoices') invoices();
   if (v === 'receipts') receiptsView();
@@ -7435,6 +7543,463 @@ function receiptsView() {
   </table>`;
 }
 
+/* ---------- Purchases + Suppliers ---------- */
+function allocateLocalPurchaseNumber() {
+  ensurePosDb();
+  const n = db.purchaseNextNumber || 1;
+  db.purchaseNextNumber = n + 1;
+  return 'PO-' + String(n).padStart(4, '0');
+}
+
+async function allocatePurchaseNumber() {
+  try {
+    if (cloud?.client && cloud?.organizationId) {
+      const { data, error } = await cloud.client.rpc('next_purchase_number', { p_org_id: cloud.organizationId });
+      if (!error && data) return data;
+    }
+  } catch (e) { console.warn('next_purchase_number', e); }
+  return allocateLocalPurchaseNumber();
+}
+
+function supplierBalance(supplierId) {
+  ensurePosDb();
+  const received = (db.purchaseReceipts || [])
+    .filter(r => {
+      const po = db.purchases.find(p => p.id === r.purchase_id);
+      return po && po.supplier_id === supplierId;
+    })
+    .reduce((s, r) => s + (Number(r.total_value) || 0), 0);
+  const paid = (db.supplierPayments || [])
+    .filter(p => p.supplier_id === supplierId)
+    .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  return received - paid;
+}
+
+function openSupplierModal(s) {
+  document.getElementById('supplierModalTitle').textContent = s ? 'Edit supplier' : 'Add supplier';
+  document.getElementById('supplierEditId').value = s?.id || '';
+  document.getElementById('supplierName').value = s?.name || '';
+  document.getElementById('supplierPhone').value = s?.phone || '';
+  document.getElementById('supplierEmail').value = s?.email || '';
+  document.getElementById('supplierNote').value = s?.note || '';
+  document.getElementById('supplierModal').classList.add('show');
+  document.getElementById('supplierName').focus();
+}
+
+function closeSupplierModal() {
+  document.getElementById('supplierModal')?.classList.remove('show');
+}
+
+async function saveSupplierFromModal() {
+  ensurePosDb();
+  const name = (document.getElementById('supplierName').value || '').trim();
+  if (!name) { toast('Supplier name is required'); return; }
+  const id = document.getElementById('supplierEditId').value || null;
+  const now = new Date().toISOString();
+  const row = {
+    name,
+    phone: (document.getElementById('supplierPhone').value || '').trim() || null,
+    email: (document.getElementById('supplierEmail').value || '').trim() || null,
+    note: (document.getElementById('supplierNote').value || '').trim() || null,
+    active: true,
+    updated_at: now
+  };
+  if (id) {
+    const s = db.suppliers.find(x => x.id === id);
+    if (s) Object.assign(s, row);
+  } else {
+    db.suppliers.push(Object.assign({ id: crypto.randomUUID(), created_at: now, cloudId: null }, row));
+  }
+  try { await pushSupplierToCloud(id ? db.suppliers.find(x => x.id === id) : db.suppliers[db.suppliers.length - 1]); } catch (e) { console.warn(e); }
+  persistDb();
+  closeSupplierModal();
+  toast('Supplier saved');
+  purchasesView();
+}
+
+async function pushSupplierToCloud(s) {
+  if (!cloud?.client || !cloud?.organizationId || !s) return;
+  const payload = {
+    organization_id: cloud.organizationId,
+    local_id: s.id,
+    name: s.name,
+    phone: s.phone,
+    email: s.email,
+    note: s.note,
+    active: s.active !== false,
+    updated_at: s.updated_at || new Date().toISOString()
+  };
+  if (s.cloudId) {
+    await cloud.client.from('suppliers').update(payload).eq('id', s.cloudId);
+  } else {
+    const { data, error } = await cloud.client.from('suppliers').insert(payload).select('id').single();
+    if (error) throw error;
+    s.cloudId = data.id;
+  }
+}
+
+function purchaseLineEditorHtml(lines) {
+  ensurePosDb();
+  const products = db.products.filter(p => p.active !== false);
+  if (!lines.length) lines = [{ product_id: '', qty: 1, unit_cost: 0 }];
+  return lines.map((l, i) => {
+    const opts = products.map(p =>
+      `<option value="${p.id}" ${p.id === l.product_id ? 'selected' : ''}>${p.name}</option>`
+    ).join('');
+    return `<div class="purchase-line-row" data-idx="${i}" style="display:grid;grid-template-columns:1fr 70px 90px 28px;gap:6px;margin-bottom:8px;align-items:end">
+      <div class="field" style="margin:0"><label style="font-size:11px">Product</label>
+        <select data-pl-product>
+          <option value="">Select…</option>${opts}
+        </select>
+      </div>
+      <div class="field" style="margin:0"><label style="font-size:11px">Qty</label>
+        <input type="number" min="0.0001" step="any" data-pl-qty value="${l.qty || 1}">
+      </div>
+      <div class="field" style="margin:0"><label style="font-size:11px">Unit cost</label>
+        <input type="number" min="0" step="0.01" data-pl-cost value="${l.unit_cost || 0}">
+      </div>
+      <button type="button" class="button small" data-pl-remove style="padding:8px">×</button>
+    </div>`;
+  }).join('');
+}
+
+function readPurchaseLinesFromEditor() {
+  const rows = [...document.querySelectorAll('#purchaseLinesEditor .purchase-line-row')];
+  return rows.map(row => {
+    const product_id = row.querySelector('[data-pl-product]')?.value || '';
+    const qty = Number(row.querySelector('[data-pl-qty]')?.value) || 0;
+    const unit_cost = Number(row.querySelector('[data-pl-cost]')?.value) || 0;
+    const p = db.products.find(x => x.id === product_id);
+    return {
+      id: crypto.randomUUID(),
+      product_id: product_id || null,
+      product_name: p?.name || 'Item',
+      qty,
+      unit_cost,
+      line_total: qty * unit_cost,
+      received_qty: 0
+    };
+  }).filter(l => l.qty > 0);
+}
+
+function refreshPurchaseModalTotal() {
+  const lines = readPurchaseLinesFromEditor();
+  const total = lines.reduce((s, l) => s + l.line_total, 0);
+  const el = document.getElementById('purchaseModalTotal');
+  if (el) el.textContent = formatPosMoney(total);
+}
+
+function openPurchaseModal() {
+  ensurePosDb();
+  if (!db.suppliers.length) {
+    toast('Add a supplier first');
+    openSupplierModal(null);
+    return;
+  }
+  if (!db.products.length) {
+    toast('Add products first');
+    return;
+  }
+  document.getElementById('purchaseEditId').value = '';
+  const sel = document.getElementById('purchaseSupplier');
+  sel.innerHTML = db.suppliers.filter(s => s.active !== false)
+    .map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+  document.getElementById('purchaseOrderDate').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('purchaseExpectedDate').value = '';
+  document.getElementById('purchaseNote').value = '';
+  document.getElementById('purchaseLinesEditor').innerHTML = purchaseLineEditorHtml([]);
+  // set default product selects empty
+  document.querySelectorAll('#purchaseLinesEditor [data-pl-product]').forEach(s => { s.value = ''; });
+  refreshPurchaseModalTotal();
+  document.getElementById('purchaseModal').classList.add('show');
+}
+
+function closePurchaseModal() {
+  document.getElementById('purchaseModal')?.classList.remove('show');
+}
+
+async function savePurchase(status) {
+  ensurePosDb();
+  const supplier_id = document.getElementById('purchaseSupplier').value;
+  if (!supplier_id) { toast('Choose a supplier'); return; }
+  const lines = readPurchaseLinesFromEditor().filter(l => l.product_id);
+  if (!lines.length) { toast('Add at least one product line'); return; }
+  const total = lines.reduce((s, l) => s + l.line_total, 0);
+  const purchase_number = await allocatePurchaseNumber();
+  const now = new Date().toISOString();
+  const po = {
+    id: crypto.randomUUID(),
+    supplier_id,
+    purchase_number,
+    status: status === 'ordered' ? 'ordered' : 'draft',
+    order_date: document.getElementById('purchaseOrderDate').value || now.slice(0, 10),
+    expected_date: document.getElementById('purchaseExpectedDate').value || null,
+    note: (document.getElementById('purchaseNote').value || '').trim() || null,
+    currency: posCurrency(),
+    total,
+    lines,
+    cloudId: null,
+    created_at: now,
+    updated_at: now
+  };
+  db.purchases.push(po);
+  try { await pushPurchaseToCloud(po); } catch (e) { console.warn(e); }
+  persistDb();
+  closePurchaseModal();
+  toast(po.status === 'ordered' ? 'Purchase ordered' : 'Draft saved');
+  purchasesView();
+}
+
+async function pushPurchaseToCloud(po) {
+  if (!cloud?.client || !cloud?.organizationId) return;
+  const supplier = db.suppliers.find(s => s.id === po.supplier_id);
+  const { data, error } = await cloud.client.from('purchases').insert({
+    organization_id: cloud.organizationId,
+    local_id: po.id,
+    supplier_id: supplier?.cloudId || null,
+    purchase_number: po.purchase_number,
+    status: po.status,
+    order_date: po.order_date,
+    expected_date: po.expected_date,
+    currency: po.currency,
+    total: po.total,
+    note: po.note
+  }).select('id').single();
+  if (error) throw error;
+  po.cloudId = data.id;
+  const lineRows = (po.lines || []).map(l => {
+    const p = db.products.find(x => x.id === l.product_id);
+    return {
+      purchase_id: po.cloudId,
+      organization_id: cloud.organizationId,
+      product_id: p?.cloudId || null,
+      product_name: l.product_name,
+      qty: l.qty,
+      unit_cost: l.unit_cost,
+      line_total: l.line_total,
+      received_qty: l.received_qty || 0
+    };
+  });
+  if (lineRows.length) {
+    await cloud.client.from('purchase_lines').insert(lineRows);
+  }
+}
+
+function openReceiveModal(purchaseId) {
+  ensurePosDb();
+  const po = db.purchases.find(p => p.id === purchaseId);
+  if (!po || po.status === 'cancelled' || po.status === 'received') {
+    toast('Cannot receive this order');
+    return;
+  }
+  const supplier = db.suppliers.find(s => s.id === po.supplier_id);
+  document.getElementById('receivePurchaseId').value = po.id;
+  document.getElementById('receiveModalSub').textContent =
+    (po.purchase_number || '') + (supplier ? ' · ' + supplier.name : '');
+  document.getElementById('receiveNote').value = '';
+  document.getElementById('receivePostBooks').checked = true;
+  document.getElementById('receiveLinesEditor').innerHTML = (po.lines || []).map((l, i) => {
+    const remaining = Math.max(0, (Number(l.qty) || 0) - (Number(l.received_qty) || 0));
+    return `<div class="receive-line" data-idx="${i}" style="display:grid;grid-template-columns:1fr 80px 80px;gap:8px;margin-bottom:10px;align-items:end;font-size:13px">
+      <div><b>${l.product_name}</b><div class="client-meta">Ordered ${l.qty} · Got ${l.received_qty || 0}</div></div>
+      <div class="field" style="margin:0"><label style="font-size:11px">Remaining</label><input type="text" readonly value="${remaining}"></div>
+      <div class="field" style="margin:0"><label style="font-size:11px">Receiving</label>
+        <input type="number" min="0" step="any" data-recv-qty value="${remaining}" ${remaining <= 0 ? 'disabled' : ''}>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('receiveModal').classList.add('show');
+}
+
+function closeReceiveModal() {
+  document.getElementById('receiveModal')?.classList.remove('show');
+}
+
+async function confirmReceiveGoods() {
+  ensurePosDb();
+  const purchaseId = document.getElementById('receivePurchaseId').value;
+  const po = db.purchases.find(p => p.id === purchaseId);
+  if (!po) return;
+
+  const recvRows = [...document.querySelectorAll('#receiveLinesEditor .receive-line')];
+  const now = new Date().toISOString();
+  let receiptValue = 0;
+  const receiptLines = [];
+
+  recvRows.forEach((row, i) => {
+    const line = po.lines[i];
+    if (!line) return;
+    const remaining = Math.max(0, (Number(line.qty) || 0) - (Number(line.received_qty) || 0));
+    let qty = Number(row.querySelector('[data-recv-qty]')?.value) || 0;
+    if (qty <= 0) return;
+    if (qty > remaining) qty = remaining;
+    line.received_qty = (Number(line.received_qty) || 0) + qty;
+    receiptValue += qty * (Number(line.unit_cost) || 0);
+    receiptLines.push({
+      product_id: line.product_id,
+      product_name: line.product_name,
+      qty,
+      unit_cost: line.unit_cost
+    });
+
+    const p = db.products.find(x => x.id === line.product_id);
+    if (p) {
+      p.stock_qty = (Number(p.stock_qty) || 0) + qty;
+      if ((Number(line.unit_cost) || 0) > 0) p.cost = Number(line.unit_cost);
+      p.updated_at = now;
+      const mov = {
+        id: crypto.randomUUID(),
+        product_id: p.id,
+        qty_change: qty,
+        reason: 'purchase',
+        reference: po.purchase_number,
+        note: null,
+        created_at: now
+      };
+      db.stockMovements.push(mov);
+      try { pushProductToCloud(p); pushStockMovementToCloud(mov); } catch (e) { console.warn(e); }
+    }
+  });
+
+  if (!receiptLines.length) { toast('Enter quantities to receive'); return; }
+
+  const allDone = po.lines.every(l => (Number(l.received_qty) || 0) >= (Number(l.qty) || 0));
+  po.status = allDone ? 'received' : 'partial';
+  po.updated_at = now;
+  if (allDone) po.received_at = now;
+
+  const receipt = {
+    id: crypto.randomUUID(),
+    purchase_id: po.id,
+    received_at: now,
+    note: (document.getElementById('receiveNote').value || '').trim() || null,
+    total_value: receiptValue,
+    lines: receiptLines
+  };
+  db.purchaseReceipts.push(receipt);
+
+  // Books: inventory in / cash out
+  if (document.getElementById('receivePostBooks')?.checked && receiptValue > 0) {
+    try {
+      const key = 'po_recv:' + receipt.id;
+      postJournal({
+        date: now.slice(0, 10),
+        memo: 'Goods received · ' + po.purchase_number,
+        source: 'purchase_receive',
+        sourceKey: 'j:' + key,
+        currency: po.currency || posCurrency(),
+        lines: [
+          { accountId: '1300', debit: receiptValue, credit: 0 },
+          { accountId: '1000', debit: 0, credit: receiptValue }
+        ]
+      });
+      if (!db.cashEntries.some(e => e.sourceKey === key)) {
+        db.cashEntries.push({
+          id: crypto.randomUUID(),
+          type: 'out',
+          category: 'purchase',
+          amount: receiptValue,
+          currency: po.currency || posCurrency(),
+          date: now.slice(0, 10),
+          note: 'Purchase receive ' + po.purchase_number,
+          source: 'purchase_receive',
+          sourceKey: key
+        });
+      }
+    } catch (e) { console.warn('receive books', e); }
+  }
+
+  persistDb();
+  closeReceiveModal();
+  toast(allDone ? 'Fully received' : 'Partial receive saved');
+  purchasesView();
+}
+
+function purchasesView() {
+  ensurePosDb();
+  renderPurchasesList();
+  renderSuppliersList();
+}
+
+function renderPurchasesList() {
+  ensurePosDb();
+  const q = (document.getElementById('purchaseSearch')?.value || '').trim().toLowerCase();
+  const st = document.getElementById('purchaseStatusFilter')?.value || 'all';
+  let list = db.purchases.slice();
+  if (st !== 'all') list = list.filter(p => p.status === st);
+  if (q) {
+    list = list.filter(p => {
+      const sup = db.suppliers.find(s => s.id === p.supplier_id);
+      return [p.purchase_number, sup?.name, p.note].some(v => String(v || '').toLowerCase().includes(q));
+    });
+  }
+  list.sort((a, b) => String(b.order_date || '').localeCompare(String(a.order_date || '')));
+  const el = document.getElementById('purchaseList');
+  const countEl = document.getElementById('purchaseCount');
+  if (countEl) countEl.textContent = db.purchases.length + ' purchase order' + (db.purchases.length === 1 ? '' : 's');
+  if (!el) return;
+  if (!db.purchases.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">□</div>
+      <h3>No purchase orders</h3>
+      <p>Create a PO, mark it ordered, then receive goods to increase stock.</p>
+      <button class="button primary" type="button" id="emptyNewPo">+ Purchase order</button></div>`;
+    document.getElementById('emptyNewPo')?.addEventListener('click', openPurchaseModal);
+    return;
+  }
+  if (!list.length) {
+    el.innerHTML = `<div class="empty"><h3>No matching orders</h3></div>`;
+    return;
+  }
+  el.innerHTML = `<table class="table desktop-table">
+    <thead><tr><th>PO</th><th>Supplier</th><th>Date</th><th>Status</th><th class="right">Total</th><th></th></tr></thead>
+    <tbody>${list.map(p => {
+      const sup = db.suppliers.find(s => s.id === p.supplier_id);
+      const canRecv = p.status === 'ordered' || p.status === 'partial' || p.status === 'draft';
+      return `<tr>
+        <td><b>${p.purchase_number}</b></td>
+        <td>${sup?.name || '—'}</td>
+        <td>${p.order_date || '—'}</td>
+        <td>${p.status}</td>
+        <td class="right">${formatPosMoney(p.total)}</td>
+        <td>${canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : ''}</td>
+      </tr>`;
+    }).join('')}</tbody></table>
+    <div class="mobile-list">${list.map(p => {
+      const sup = db.suppliers.find(s => s.id === p.supplier_id);
+      const canRecv = p.status === 'ordered' || p.status === 'partial' || p.status === 'draft';
+      return `<div class="mobile-card">
+        <div class="mobile-card-title">${p.purchase_number}</div>
+        <div class="mobile-card-sub">${sup?.name || '—'} · ${p.status} · ${formatPosMoney(p.total)}</div>
+        ${canRecv ? `<div class="mobile-card-actions"><button class="button small" type="button" data-receive-po="${p.id}">Receive</button></div>` : ''}
+      </div>`;
+    }).join('')}</div>`;
+}
+
+function renderSuppliersList() {
+  ensurePosDb();
+  const el = document.getElementById('supplierList');
+  const countEl = document.getElementById('supplierCount');
+  if (countEl) countEl.textContent = db.suppliers.length + ' supplier' + (db.suppliers.length === 1 ? '' : 's');
+  if (!el) return;
+  if (!db.suppliers.length) {
+    el.innerHTML = `<div class="empty"><p>No suppliers yet.</p>
+      <button class="button" type="button" id="emptyAddSupplier">+ Add supplier</button></div>`;
+    document.getElementById('emptyAddSupplier')?.addEventListener('click', () => openSupplierModal(null));
+    return;
+  }
+  el.innerHTML = `<table class="table desktop-table">
+    <thead><tr><th>Name</th><th>Phone</th><th class="right">Balance owed</th><th></th></tr></thead>
+    <tbody>${db.suppliers.map(s => {
+      const bal = supplierBalance(s.id);
+      return `<tr>
+        <td><b>${s.name}</b></td>
+        <td>${s.phone || '—'}</td>
+        <td class="right">${bal > 0.001 ? formatPosMoney(bal) : '—'}</td>
+        <td><button class="button small" type="button" data-edit-supplier="${s.id}">Edit</button></td>
+      </tr>`;
+    }).join('')}</tbody></table>`;
+}
+
 /* ---------- POS + Inventory (Phase 1) ---------- */
 function ensurePosDb() {
   if (!Array.isArray(db.products)) db.products = [];
@@ -7442,6 +8007,11 @@ function ensurePosDb() {
   if (!Array.isArray(db.posSales)) db.posSales = [];
   if (!Array.isArray(db.posCart)) db.posCart = [];
   if (!db.posNextSaleNumber || db.posNextSaleNumber < 1) db.posNextSaleNumber = 1;
+  if (!Array.isArray(db.suppliers)) db.suppliers = [];
+  if (!Array.isArray(db.purchases)) db.purchases = [];
+  if (!Array.isArray(db.purchaseReceipts)) db.purchaseReceipts = [];
+  if (!Array.isArray(db.supplierPayments)) db.supplierPayments = [];
+  if (!db.purchaseNextNumber || db.purchaseNextNumber < 1) db.purchaseNextNumber = 1;
 }
 
 function posCurrency() {
@@ -7776,7 +8346,13 @@ function posAddToCart(productId) {
     if (p.track_stock !== false && line.qty + 1 > Number(p.stock_qty)) { toast('Not enough stock'); return; }
     line.qty += 1;
   } else {
-    db.posCart.push({ product_id: p.id, name: p.name, price: Number(p.price) || 0, qty: 1 });
+    db.posCart.push({
+      product_id: p.id,
+      name: p.name,
+      price: Number(p.price) || 0,
+      cost: Number(p.cost) || 0,
+      qty: 1
+    });
   }
   renderPosCart();
   renderPosProductGrid();
@@ -7913,14 +8489,20 @@ function openPosPayNoteModal(method) {
 async function completePosSale({ payment_method, amount_tendered, change_given, payment_note }) {
   ensurePosDb();
   if (!db.posCart.length) return;
-  const lines = db.posCart.map(l => ({
-    product_id: l.product_id,
-    name: l.name,
-    qty: l.qty,
-    price: l.price,
-    total: l.qty * l.price
-  }));
+  const lines = db.posCart.map(l => {
+    const p = db.products.find(x => x.id === l.product_id);
+    const cost = Number(l.cost != null ? l.cost : p?.cost) || 0;
+    return {
+      product_id: l.product_id,
+      name: l.name,
+      qty: l.qty,
+      price: l.price,
+      cost,
+      total: l.qty * l.price
+    };
+  });
   const total = lines.reduce((s, l) => s + l.total, 0);
+  const costTotal = lines.reduce((s, l) => s + ((Number(l.cost) || 0) > 0 ? (Number(l.cost) || 0) * (Number(l.qty) || 0) : 0), 0);
   const currency = posCurrency();
   const saleNumber = await allocateSaleNumber();
   const saleId = crypto.randomUUID();
@@ -7930,6 +8512,7 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
     sale_number: saleNumber,
     sold_at: now,
     total,
+    cost_total: costTotal,
     currency,
     payment_method,
     amount_tendered: amount_tendered != null ? amount_tendered : null,
@@ -7960,9 +8543,10 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
   db.posSales.push(sale);
   try { await pushPosSaleToCloud(sale); } catch (e) { console.warn(e); }
 
-  // Books: cash-in
+  // Books: cash-in + COGS/inventory
   try {
     const key = 'pos:' + saleId;
+    const date = now.slice(0, 10);
     if (!db.cashEntries.some(e => e.sourceKey === key)) {
       db.cashEntries.push({
         id: crypto.randomUUID(),
@@ -7970,14 +8554,14 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
         category: 'pos',
         amount: total,
         currency,
-        date: now.slice(0, 10),
+        date,
         note: 'POS sale ' + saleNumber,
         source: 'pos_sale',
         sourceKey: key
       });
     }
     postJournal({
-      date: now.slice(0, 10),
+      date,
       memo: 'POS sale ' + saleNumber,
       source: 'pos_sale',
       sourceKey: 'j:' + key,
@@ -7987,6 +8571,19 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
         { accountId: '4000', debit: 0, credit: total }
       ]
     });
+    if (costTotal > 0.0001) {
+      postJournal({
+        date,
+        memo: 'COGS · POS sale ' + saleNumber,
+        source: 'pos_cogs',
+        sourceKey: 'j:pos_cogs:' + saleId,
+        currency,
+        lines: [
+          { accountId: '5000', debit: costTotal, credit: 0 },
+          { accountId: '1300', debit: 0, credit: costTotal }
+        ]
+      });
+    }
   } catch (e) { console.warn('pos books', e); }
 
   db.posCart = [];
@@ -8000,6 +8597,9 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
   if (payment_method === 'cash') {
     body += `<div>Cash given: ${formatPosMoney(amount_tendered)}</div>
       <div style="font-size:18px;margin-top:6px">Change: <b>${formatPosMoney(change_given)}</b></div>`;
+  }
+  if (costTotal > 0.0001) {
+    body += `<div class="client-meta" style="margin-top:8px">Cost ${formatPosMoney(costTotal)} · Gross profit <b>${formatPosMoney(total - costTotal)}</b></div>`;
   }
   if (payment_note) body += `<div class="client-meta">${payment_note}</div>`;
   document.getElementById('posSuccessBody').innerHTML = body;
@@ -15754,6 +16354,48 @@ async function openClientModal(client) {
 $('#addClient').onclick = () => openClientModal(null);
 
 // POS + Products bindings
+document.getElementById('btnAddSupplier')?.addEventListener('click', () => openSupplierModal(null));
+document.getElementById('supplierModalCancel')?.addEventListener('click', closeSupplierModal);
+document.getElementById('supplierModalSave')?.addEventListener('click', () => { saveSupplierFromModal().catch(e => toast(e.message || 'Save failed')); });
+document.getElementById('btnNewPurchase')?.addEventListener('click', openPurchaseModal);
+document.getElementById('purchaseModalCancel')?.addEventListener('click', closePurchaseModal);
+document.getElementById('purchaseSaveDraft')?.addEventListener('click', () => { savePurchase('draft').catch(e => toast(e.message || 'Save failed')); });
+document.getElementById('purchaseSaveOrdered')?.addEventListener('click', () => { savePurchase('ordered').catch(e => toast(e.message || 'Save failed')); });
+document.getElementById('purchaseAddLine')?.addEventListener('click', () => {
+  const wrap = document.getElementById('purchaseLinesEditor');
+  if (!wrap) return;
+  const cur = readPurchaseLinesFromEditor();
+  cur.push({ product_id: '', qty: 1, unit_cost: 0 });
+  wrap.innerHTML = purchaseLineEditorHtml(cur);
+  cur.forEach((l, i) => {
+    const sel = wrap.querySelectorAll('[data-pl-product]')[i];
+    if (sel && l.product_id) sel.value = l.product_id;
+  });
+  refreshPurchaseModalTotal();
+});
+document.getElementById('purchaseLinesEditor')?.addEventListener('input', refreshPurchaseModalTotal);
+document.getElementById('purchaseLinesEditor')?.addEventListener('change', (e) => {
+  if (e.target.matches('[data-pl-product]')) {
+    const p = db.products.find(x => x.id === e.target.value);
+    const row = e.target.closest('.purchase-line-row');
+    if (p && row) {
+      const costInput = row.querySelector('[data-pl-cost]');
+      if (costInput && !(Number(costInput.value) > 0)) costInput.value = p.cost || 0;
+    }
+  }
+  refreshPurchaseModalTotal();
+});
+document.getElementById('purchaseLinesEditor')?.addEventListener('click', (e) => {
+  if (e.target.closest('[data-pl-remove]')) {
+    e.target.closest('.purchase-line-row')?.remove();
+    refreshPurchaseModalTotal();
+  }
+});
+document.getElementById('receiveModalCancel')?.addEventListener('click', closeReceiveModal);
+document.getElementById('receiveModalConfirm')?.addEventListener('click', () => { confirmReceiveGoods().catch(e => toast(e.message || 'Receive failed')); });
+document.getElementById('purchaseSearch')?.addEventListener('input', () => renderPurchasesList());
+document.getElementById('purchaseStatusFilter')?.addEventListener('change', () => renderPurchasesList());
+
 document.getElementById('addProduct')?.addEventListener('click', () => openProductModal(null));
 document.getElementById('productModalCancel')?.addEventListener('click', closeProductModal);
 document.getElementById('productModalSave')?.addEventListener('click', () => { saveProductFromModal().catch(e => toast(e.message || 'Save failed')); });
@@ -15813,6 +16455,17 @@ document.addEventListener('click', (e) => {
   const adj = e.target.closest('[data-adjust-stock]');
   if (adj) {
     openStockAdjustModal(adj.getAttribute('data-adjust-stock'));
+    return;
+  }
+  const recv = e.target.closest('[data-receive-po]');
+  if (recv) {
+    openReceiveModal(recv.getAttribute('data-receive-po'));
+    return;
+  }
+  const editSup = e.target.closest('[data-edit-supplier]');
+  if (editSup) {
+    const s = db.suppliers.find(x => x.id === editSup.getAttribute('data-edit-supplier'));
+    if (s) openSupplierModal(s);
     return;
   }
   const add = e.target.closest('[data-pos-add]');

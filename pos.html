@@ -736,7 +736,13 @@ function addToCart(productId) {
     }
     line.qty += 1;
   } else {
-    db.posCart.push({ product_id: p.id, name: p.name, price: Number(p.price) || 0, qty: 1 });
+    db.posCart.push({
+    product_id: p.id,
+    name: p.name,
+    price: Number(p.price) || 0,
+    cost: Number(p.cost) || 0,
+    qty: 1
+  });
   }
   persistDb();
   renderCart();
@@ -877,8 +883,17 @@ async function pushSale(sale) {
   sale.cloudId = data.id;
 }
 
+function saleCostTotal(lines) {
+  return (lines || []).reduce((s, l) => {
+    const cost = Number(l.cost) || 0;
+    const qty = Number(l.qty) || 0;
+    return s + (cost > 0 ? cost * qty : 0);
+  }, 0);
+}
+
 function postLocalBooks(sale) {
   const key = 'pos:' + sale.id;
+  const date = sale.sold_at.slice(0, 10);
   if (!db.cashEntries.some(e => e.sourceKey === key)) {
     db.cashEntries.push({
       id: crypto.randomUUID(),
@@ -886,16 +901,17 @@ function postLocalBooks(sale) {
       category: 'pos',
       amount: sale.total,
       currency: sale.currency,
-      date: sale.sold_at.slice(0, 10),
+      date,
       note: 'POS sale ' + sale.sale_number,
       source: 'pos_sale',
       sourceKey: key
     });
   }
+  // Revenue: cash in / sales
   if (!db.journals.some(j => j.sourceKey === 'j:' + key)) {
     db.journals.push({
       id: crypto.randomUUID(),
-      entry_date: sale.sold_at.slice(0, 10),
+      entry_date: date,
       memo: 'POS sale ' + sale.sale_number,
       source: 'pos_sale',
       sourceKey: 'j:' + key,
@@ -907,18 +923,42 @@ function postLocalBooks(sale) {
       created_at: new Date().toISOString()
     });
   }
+  // COGS: expense / reduce inventory asset (only when cost known)
+  const costTotal = Number(sale.cost_total) || saleCostTotal(sale.lines);
+  const cogsKey = 'j:pos_cogs:' + sale.id;
+  if (costTotal > 0.0001 && !db.journals.some(j => j.sourceKey === cogsKey)) {
+    db.journals.push({
+      id: crypto.randomUUID(),
+      entry_date: date,
+      memo: 'COGS · POS sale ' + sale.sale_number,
+      source: 'pos_cogs',
+      sourceKey: cogsKey,
+      currency: sale.currency,
+      lines: [
+        { accountId: '5000', debit: costTotal, credit: 0 },
+        { accountId: '1300', debit: 0, credit: costTotal }
+      ],
+      created_at: new Date().toISOString()
+    });
+  }
 }
 
 async function completeSale({ payment_method, amount_tendered, change_given, payment_note }) {
   if (!db.posCart.length) return;
-  const lines = db.posCart.map(l => ({
-    product_id: l.product_id,
-    name: l.name,
-    qty: l.qty,
-    price: l.price,
-    total: l.qty * l.price
-  }));
+  const lines = db.posCart.map(l => {
+    const p = db.products.find(x => x.id === l.product_id);
+    const cost = Number(l.cost != null ? l.cost : p?.cost) || 0;
+    return {
+      product_id: l.product_id,
+      name: l.name,
+      qty: l.qty,
+      price: l.price,
+      cost,
+      total: l.qty * l.price
+    };
+  });
   const total = lines.reduce((s, l) => s + l.total, 0);
+  const costTotal = saleCostTotal(lines);
   const saleNumber = await nextSaleNumber();
   const saleId = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -927,6 +967,7 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
     sale_number: saleNumber,
     sold_at: now,
     total,
+    cost_total: costTotal,
     currency: currency(),
     payment_method,
     amount_tendered: amount_tendered != null ? amount_tendered : null,
@@ -971,12 +1012,16 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
   closeModal('noteModal');
 
   const offlineNote = isOnline() ? '' : `<div style="margin-top:8px;color:#9a3412;font-weight:600">Saved offline — will sync when online</div>`;
+  const profit = total - costTotal;
   let body = `<div><b>${saleNumber}</b></div>
     <div style="margin-top:8px">Total <b>${money(total)}</b></div>
     <div>Payment: ${payment_method}</div>`;
   if (payment_method === 'cash') {
     body += `<div>Cash given: ${money(amount_tendered)}</div>
       <div style="font-size:18px;margin-top:6px">Change: <b>${money(change_given)}</b></div>`;
+  }
+  if (costTotal > 0.0001) {
+    body += `<div style="margin-top:8px;color:var(--muted)">Cost ${money(costTotal)} · Gross profit <b style="color:var(--green)">${money(profit)}</b></div>`;
   }
   if (payment_note) body += `<div style="color:var(--muted)">${escapeHtml(payment_note)}</div>`;
   body += offlineNote;
