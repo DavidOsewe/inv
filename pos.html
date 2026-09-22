@@ -907,10 +907,11 @@ function postLocalBooks(sale) {
       sourceKey: key
     });
   }
-  // Revenue: cash in / sales
+  // Revenue: cash in / sales (use `date` — same field as app.html Books)
   if (!db.journals.some(j => j.sourceKey === 'j:' + key)) {
     db.journals.push({
       id: crypto.randomUUID(),
+      date: date,
       entry_date: date,
       memo: 'POS sale ' + sale.sale_number,
       source: 'pos_sale',
@@ -920,15 +921,17 @@ function postLocalBooks(sale) {
         { accountId: '1000', debit: sale.total, credit: 0 },
         { accountId: '4000', debit: 0, credit: sale.total }
       ],
+      createdAt: new Date().toISOString(),
       created_at: new Date().toISOString()
     });
   }
-  // COGS: expense / reduce inventory asset (only when cost known)
+  // COGS: only when product cost is set
   const costTotal = Number(sale.cost_total) || saleCostTotal(sale.lines);
   const cogsKey = 'j:pos_cogs:' + sale.id;
   if (costTotal > 0.0001 && !db.journals.some(j => j.sourceKey === cogsKey)) {
     db.journals.push({
       id: crypto.randomUUID(),
+      date: date,
       entry_date: date,
       memo: 'COGS · POS sale ' + sale.sale_number,
       source: 'pos_cogs',
@@ -938,6 +941,7 @@ function postLocalBooks(sale) {
         { accountId: '5000', debit: costTotal, credit: 0 },
         { accountId: '1300', debit: 0, credit: costTotal }
       ],
+      createdAt: new Date().toISOString(),
       created_at: new Date().toISOString()
     });
   }

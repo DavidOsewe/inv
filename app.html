@@ -2658,6 +2658,9 @@ input:focus:not(:focus-visible) {
             <input type="file" id="journalCsvFile" accept=".csv,text/csv,.txt" hidden>
             <span class="mini" style="color:var(--muted)">Columns: Date, Memo, Account, Debit, Credit · you will preview & validate before anything posts</span>
           </div>
+          <div class="search-bar" style="margin:0 0 12px;max-width:420px">
+            <input type="search" id="journalSearch" placeholder="Search journals by description or account…">
+          </div>
           <div id="booksJournal"></div>
         </div>
       </div>
@@ -3462,6 +3465,7 @@ input:focus:not(:focus-visible) {
       <div class="field"><label>Starting / current stock</label><input id="productStock" type="number" step="any" placeholder="0"></div>
       <div class="field"><label>Low stock alert at</label><input id="productLowStock" type="number" min="0" step="any" placeholder="0"></div>
     </div>
+    <div class="field"><label>Expiry date</label><input id="productExpiry" type="date" placeholder="Optional"></div>
     <div class="field" style="display:flex;align-items:center;gap:8px">
       <input type="checkbox" id="productTrackStock" checked>
       <label for="productTrackStock" style="margin:0">Track stock</label>
@@ -3473,6 +3477,17 @@ input:focus:not(:focus-visible) {
     <div class="buttons" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
       <button class="button" type="button" id="productModalCancel">Cancel</button>
       <button class="button primary" type="button" id="productModalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="stockHistoryModal">
+  <div class="modal" style="max-width:520px">
+    <h2>Stock movements</h2>
+    <p class="section-sub" id="stockHistoryProductName">—</p>
+    <div id="stockHistoryBody" style="max-height:360px;overflow:auto"></div>
+    <div class="buttons" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="button" type="button" id="stockHistoryClose">Close</button>
     </div>
   </div>
 </div>
@@ -3933,11 +3948,11 @@ function showModal(id) {
   const m = document.getElementById(id);
   if (!m) return null;
   m.classList.add('show');
-  // Prefer CSS .modalback.show; only set display if class alone is not enough
   try {
     m.style.display = 'grid';
     m.style.zIndex = m.style.zIndex || '80';
   } catch (_) {}
+  try { initSearchableSelects(m); } catch (_) {}
   return m;
 }
 function hideModal(id) {
@@ -4067,21 +4082,18 @@ function enhanceSearchableSelect(sel) {
 
 function initSearchableSelects(root) {
   const scope = root || document;
-  const selectors = [
-    'select#brCoa', 'select#brAccount', 'select#bankTxAccount',
-    'select#booksLedgerAccount', 'select#xferFrom', 'select#xferTo',
-    'select#obAccount', 'select#jeAccount',
-    'select.je-account', 'select.rj-account', 'select.recon-account',
-    'select[data-searchable="1"]', 'select.searchable'
-  ];
-  selectors.forEach(q => {
-    try { scope.querySelectorAll(q).forEach(enhanceSearchableSelect); } catch (_) {}
-  });
-  // Any select with more than 12 options becomes searchable (account lists)
+  // All dropdowns are searchable for faster find on long lists (COA, products, suppliers, etc.)
   try {
     scope.querySelectorAll('select').forEach(sel => {
-      if (sel.closest('.searchable-select-wrap')) return;
-      if (sel.options && sel.options.length > 12) enhanceSearchableSelect(sel);
+      if (!sel || sel.disabled) return;
+      if (sel.closest('.searchable-select-wrap')) {
+        // Refresh label if options changed
+        try { enhanceSearchableSelect(sel); } catch (_) {}
+        return;
+      }
+      // Skip tiny native toggles that are better as plain selects (≤2 options)
+      if (sel.options && sel.options.length <= 2) return;
+      enhanceSearchableSelect(sel);
     });
   } catch (_) {}
 }
@@ -8412,6 +8424,7 @@ function openProductModal(product) {
   document.getElementById('productCost').value = product != null && product.cost != null ? product.cost : '';
   document.getElementById('productStock').value = product != null ? product.stock_qty : '0';
   document.getElementById('productLowStock').value = product != null && product.low_stock_at != null ? product.low_stock_at : '0';
+  document.getElementById('productExpiry').value = product?.expiry_date || '';
   document.getElementById('productTrackStock').checked = product ? product.track_stock !== false : true;
   document.getElementById('productActive').checked = product ? product.active !== false : true;
   document.getElementById('productModal').classList.add('show');
@@ -8437,6 +8450,7 @@ async function saveProductFromModal() {
   const barcode = (document.getElementById('productBarcode').value || '').trim() || null;
   const track_stock = !!document.getElementById('productTrackStock').checked;
   const active = !!document.getElementById('productActive').checked;
+  const expiry_date = (document.getElementById('productExpiry')?.value || '').trim() || null;
   const currency = posCurrency();
   const now = new Date().toISOString();
 
@@ -8444,7 +8458,7 @@ async function saveProductFromModal() {
     const p = db.products.find(x => x.id === id);
     if (!p) { toast('Product not found'); return; }
     const prevStock = Number(p.stock_qty) || 0;
-    Object.assign(p, { name, sku, barcode, price, cost: Number.isNaN(cost) ? 0 : cost, stock_qty: Number.isNaN(stock) ? prevStock : stock, low_stock_at: low, track_stock, active, currency, updated_at: now });
+    Object.assign(p, { name, sku, barcode, price, cost: Number.isNaN(cost) ? 0 : cost, stock_qty: Number.isNaN(stock) ? prevStock : stock, low_stock_at: low, expiry_date, track_stock, active, currency, updated_at: now });
     if (!Number.isNaN(stock) && stock !== prevStock) {
       db.stockMovements.push({
         id: crypto.randomUUID(),
@@ -8465,6 +8479,7 @@ async function saveProductFromModal() {
       cost: Number.isNaN(cost) ? 0 : cost,
       stock_qty: Number.isNaN(stock) ? 0 : stock,
       low_stock_at: low,
+      expiry_date,
       track_stock, active, currency,
       created_at: now,
       updated_at: now,
@@ -8557,6 +8572,7 @@ async function pushProductToCloud(product) {
     active: product.active !== false,
     updated_at: product.updated_at || new Date().toISOString()
   };
+  if (product.expiry_date) row.expiry_date = product.expiry_date;
   if (product.cloudId) {
     const { error } = await cloud.client.from('products').update(row).eq('id', product.cloudId);
     if (error) throw error;
@@ -8608,6 +8624,7 @@ async function pullProductsFromCloud() {
       currency: row.currency || posCurrency(),
       stock_qty: Number(row.stock_qty) || 0,
       low_stock_at: Number(row.low_stock_at) || 0,
+      expiry_date: row.expiry_date || p.expiry_date || null,
       track_stock: row.track_stock !== false,
       active: row.active !== false,
       updated_at: row.updated_at
@@ -8654,40 +8671,87 @@ function renderProductsList() {
     el.innerHTML = `<div class="empty"><div class="empty-icon">⌕</div><h3>No matching products</h3><p>Try a different search or filter.</p></div>`;
     return;
   }
+  const todayIso = new Date().toISOString().slice(0, 10);
   const rows = list.map(p => {
     const stock = Number(p.stock_qty) || 0;
     const low = Number(p.low_stock_at) || 0;
+    const cost = Number(p.cost) || 0;
     let stockBadge = String(stock);
     if (p.track_stock !== false) {
-      if (stock <= 0) stockBadge = `<span style="color:var(--red-text)">${stock} · out</span>`;
-      else if (low > 0 && stock <= low) stockBadge = `<span style="color:orange">${stock} · low</span>`;
+      if (stock <= 0) stockBadge = `<span style="color:var(--red-text)"><b>${stock}</b> · out</span>`;
+      else if (low > 0 && stock <= low) stockBadge = `<span style="color:orange"><b>${stock}</b> · low</span>`;
+      else stockBadge = `<b>${stock}</b>`;
     } else stockBadge = '—';
+    let expiryBadge = '—';
+    if (p.expiry_date) {
+      const expired = p.expiry_date < todayIso;
+      const soon = !expired && p.expiry_date <= new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      expiryBadge = expired
+        ? `<span style="color:var(--red-text)">${p.expiry_date} · expired</span>`
+        : soon
+          ? `<span style="color:orange">${p.expiry_date}</span>`
+          : p.expiry_date;
+    }
     const inactive = p.active === false ? ' <span class="client-meta">(inactive)</span>' : '';
+    const moves = (db.stockMovements || []).filter(m => m.product_id === p.id).length;
     return `<tr>
       <td><b>${p.name}</b>${inactive}${p.sku ? `<div class="client-meta">${p.sku}</div>` : ''}</td>
-      <td>${formatPosMoney(p.price)}</td>
-      <td>${stockBadge}</td>
+      <td>${formatPosMoney(p.price)}<div class="client-meta">Cost ${formatPosMoney(cost)}</div></td>
+      <td>${stockBadge}<div class="client-meta">${moves} movement${moves === 1 ? '' : 's'}</div></td>
+      <td>${expiryBadge}</td>
       <td><div class="client-actions">
         <button class="button small" type="button" data-edit-product="${p.id}">Edit</button>
-        <button class="button small" type="button" data-adjust-stock="${p.id}">Stock</button>
+        <button class="button small" type="button" data-adjust-stock="${p.id}">Adjust</button>
+        <button class="button small" type="button" data-stock-history="${p.id}">History</button>
       </div></td>
     </tr>`;
   });
   el.innerHTML = `<table class="table desktop-table">
-    <thead><tr><th>Product</th><th>Price</th><th>Stock</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Product</th><th>Price / cost</th><th>Stock</th><th>Expiry</th><th>Actions</th></tr></thead>
     <tbody>${rows.join('')}</tbody>
   </table>
   <div class="mobile-list" role="list">${list.map(p => {
     const stock = Number(p.stock_qty) || 0;
     return `<div class="mobile-card">
       <div class="mobile-card-title">${p.name}</div>
-      <div class="mobile-card-sub">${formatPosMoney(p.price)} · Stock ${stock}</div>
+      <div class="mobile-card-sub">${formatPosMoney(p.price)} · Stock <b>${stock}</b>${p.expiry_date ? ' · Exp ' + p.expiry_date : ''}</div>
       <div class="mobile-card-actions">
         <button class="button small" type="button" data-edit-product="${p.id}">Edit</button>
-        <button class="button small" type="button" data-adjust-stock="${p.id}">Stock</button>
+        <button class="button small" type="button" data-adjust-stock="${p.id}">Adjust</button>
+        <button class="button small" type="button" data-stock-history="${p.id}">History</button>
       </div>
     </div>`;
   }).join('')}</div>`;
+}
+
+function openStockHistory(productId) {
+  ensurePosDb();
+  const p = db.products.find(x => x.id === productId);
+  if (!p) return;
+  document.getElementById('stockHistoryProductName').textContent =
+    p.name + ' · on hand ' + (Number(p.stock_qty) || 0);
+  const moves = (db.stockMovements || [])
+    .filter(m => m.product_id === productId)
+    .slice()
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  const body = document.getElementById('stockHistoryBody');
+  if (!moves.length) {
+    body.innerHTML = '<p class="section-sub">No movements yet.</p>';
+  } else {
+    body.innerHTML = moves.map(m => {
+      const qty = Number(m.qty_change) || 0;
+      const sign = qty > 0 ? '+' : '';
+      const color = qty < 0 ? 'var(--red-text)' : 'var(--green, green)';
+      return `<div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">
+        <div>
+          <b>${m.reason || 'move'}</b>
+          <div class="client-meta">${String(m.created_at || '').replace('T', ' ').slice(0, 16)}${m.reference ? ' · ' + m.reference : ''}${m.note ? ' · ' + m.note : ''}</div>
+        </div>
+        <span style="font-weight:800;color:${color};font-variant-numeric:tabular-nums">${sign}${qty}</span>
+      </div>`;
+    }).join('');
+  }
+  document.getElementById('stockHistoryModal').classList.add('show');
 }
 
 function posCartTotal() {
@@ -8945,7 +9009,10 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
           { accountId: '1300', debit: 0, credit: costTotal }
         ]
       });
+    } else {
+      console.info('POS sale COGS skipped — set product Cost to post inventory journals');
     }
+    try { queueBooksCloudSync(); } catch (_) {}
   } catch (e) { console.warn('pos books', e); }
 
   db.posCart = [];
@@ -10882,9 +10949,22 @@ function renderBooksCashflow() {
 function renderBooksJournal() {
   const el = document.getElementById('booksJournal');
   if (!el) return;
-  const list = journalsInPeriod().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const q = (document.getElementById('journalSearch')?.value || '').trim().toLowerCase();
+  let list = journalsInPeriod().sort((a, b) => String(b.date || b.entry_date || '').localeCompare(String(a.date || a.entry_date || '')));
+  // Normalize legacy pos.html journals that used entry_date
+  list.forEach(j => { if (!j.date && j.entry_date) j.date = j.entry_date; });
+  if (q) {
+    list = list.filter(j => {
+      const memo = String(j.memo || '').toLowerCase();
+      const source = String(j.source || '').toLowerCase();
+      const accounts = (j.lines || []).map(l => String(coaName(l.accountId) || l.accountId || '').toLowerCase()).join(' ');
+      return memo.includes(q) || source.includes(q) || accounts.includes(q) || String(j.date || '').includes(q);
+    });
+  }
   if (!list.length) {
-    el.innerHTML = '<p class="section-sub">No journal entries in this period. Send an invoice or record an expense to post entries.</p>';
+    el.innerHTML = q
+      ? '<p class="section-sub">No journals match that search.</p>'
+      : '<p class="section-sub">No journal entries in this period. Send an invoice or record an expense to post entries.</p>';
     return;
   }
   el.innerHTML = list.map(j => {
@@ -11036,7 +11116,14 @@ function accrueSupplierBill(bill) {
   const totalRep = toRep(totalAmt, bill.currency);
   const taxRep = toRep(taxAmt, bill.currency);
   const netRep = toRep(net, bill.currency);
-  const expenseAccount = EXPENSE_ACCOUNT_BY_CATEGORY[bill.category] || '5700';
+  // category may be a COA account id (preferred) or a legacy category key
+  let expenseAccount = bill.category || '5700';
+  if (EXPENSE_ACCOUNT_BY_CATEGORY[expenseAccount]) {
+    expenseAccount = EXPENSE_ACCOUNT_BY_CATEGORY[expenseAccount];
+  }
+  if (typeof getCoa === 'function' && !getCoa().some(a => a.id === expenseAccount)) {
+    expenseAccount = EXPENSE_ACCOUNT_BY_CATEGORY[bill.category] || '5700';
+  }
   const lines = [];
   if (expenseAccount === '3100') {
     lines.push({ accountId: '3100', debit: netRep, credit: 0 });
@@ -11126,9 +11213,25 @@ function openBillModal() {
   }
   const cat = document.getElementById('billCategory');
   if (cat) {
-    cat.innerHTML = (BOOKS_CATEGORIES.out || []).map(c =>
+    // Full ledger index — prefer expense accounts, then all others for flexibility
+    const coa = typeof getCoa === 'function' ? getCoa() : [];
+    const expenses = coa.filter(a => a.type === 'expense' || a.statement === 'pl' && /expense|cogs|cost/i.test(a.type || a.name || ''));
+    const rest = coa.filter(a => !expenses.includes(a));
+    const opts = [];
+    if (expenses.length) {
+      opts.push('<option disabled value="">— Expense accounts —</option>');
+      expenses.forEach(a => opts.push(`<option value="${a.id}">${a.id} · ${a.name}</option>`));
+    }
+    if (rest.length) {
+      opts.push('<option disabled value="">— Other ledgers —</option>');
+      rest.forEach(a => opts.push(`<option value="${a.id}">${a.id} · ${a.name}</option>`));
+    }
+    cat.innerHTML = opts.join('') || (BOOKS_CATEGORIES.out || []).map(c =>
       `<option value="${c.id}">${c.label}</option>`
     ).join('');
+    // Default to first expense or 5700
+    if ([...cat.options].some(o => o.value === '5700')) cat.value = '5700';
+    else if (expenses[0]) cat.value = expenses[0].id;
   }
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
   set('billSupplier', '');
@@ -11139,7 +11242,7 @@ function openBillModal() {
   set('billDue', typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
   set('billNote', '');
   if (typeof showModal === 'function') showModal('billModal');
-  else { m.classList.add('show'); m.style.display = 'grid'; }
+  else { m.classList.add('show'); m.style.display = 'grid'; try { initSearchableSelects(m); } catch (_) {} }
 }
 function closeBillModal() {
   if (typeof hideModal === 'function') hideModal('billModal');
@@ -16763,6 +16866,8 @@ document.getElementById('purchaseStatusFilter')?.addEventListener('change', () =
 document.getElementById('addProduct')?.addEventListener('click', () => openProductModal(null));
 document.getElementById('productModalCancel')?.addEventListener('click', closeProductModal);
 document.getElementById('productModalSave')?.addEventListener('click', () => { saveProductFromModal().catch(e => toast(e.message || 'Save failed')); });
+document.getElementById('stockHistoryClose')?.addEventListener('click', () => document.getElementById('stockHistoryModal')?.classList.remove('show'));
+document.getElementById('journalSearch')?.addEventListener('input', () => { try { renderBooksJournal(); } catch (_) {} });
 document.getElementById('stockAdjustCancel')?.addEventListener('click', closeStockAdjustModal);
 document.getElementById('stockAdjustSave')?.addEventListener('click', () => { saveStockAdjust().catch(e => toast(e.message || 'Save failed')); });
 document.getElementById('productSearch')?.addEventListener('input', () => renderProductsList());
@@ -16845,6 +16950,11 @@ document.addEventListener('click', (e) => {
   const paySup = e.target.closest('[data-pay-supplier]');
   if (paySup) {
     openSupplierPayModal(paySup.getAttribute('data-pay-supplier'));
+    return;
+  }
+  const hist = e.target.closest('[data-stock-history]');
+  if (hist) {
+    openStockHistory(hist.getAttribute('data-stock-history'));
     return;
   }
   const add = e.target.closest('[data-pos-add]');
