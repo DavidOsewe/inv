@@ -8999,7 +8999,6 @@ function renderProductsList() {
     return;
   }
   const todayIso = new Date().toISOString().slice(0, 10);
-  const locFilter = document.getElementById('productLocationFilter')?.value || 'all';
   const rows = list.map(p => {
     const stock = locFilter === 'all' ? totalProductStock(p.id) : locationStockQty(p.id, locFilter);
     const total = totalProductStock(p.id);
