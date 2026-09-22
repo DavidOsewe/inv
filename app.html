@@ -2272,6 +2272,7 @@ input:focus:not(:focus-visible) {
       <button data-view="books"><span>◎</span> Books</button>
       <button data-view="products"><span>■</span> Products</button>
       <button data-view="purchases"><span>□</span> Purchases</button>
+      <button data-view="transfers"><span>⇄</span> Transfers</button>
       <a class="nav-link-pos" href="pos.html" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;color:inherit;text-decoration:none;font-weight:600;font-size:13px"><span>▣</span> POS</a>
       <button data-view="clients"><span>♙</span> Clients</button>
       <button data-view="profile"><span>⚙</span> Profile</button>
@@ -2439,6 +2440,71 @@ input:focus:not(:focus-visible) {
         </div>
         <div class="buttons" style="margin-top:14px;display:flex;justify-content:flex-end">
           <button class="button" type="button" id="locationsModalClose">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <section class="view" id="transfers">
+      <div class="section-head">
+        <div>
+          <h2>Stock transfers</h2>
+          <div class="client-count" id="transferCount">Move stock between warehouses and outlets</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="button primary" type="button" id="btnNewTransfer">+ Transfer</button>
+        </div>
+      </div>
+      <div class="client-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <div class="search-bar" style="margin:0;flex:1;max-width:360px">
+          <input type="search" id="transferSearch" placeholder="Search transfer number…">
+        </div>
+        <select id="transferStatusFilter" class="button small" style="min-width:130px">
+          <option value="all">All statuses</option>
+          <option value="draft">Draft</option>
+          <option value="in_transit">In transit</option>
+          <option value="received">Received</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <div id="transferList"></div>
+    </section>
+
+    <div class="modalback" id="stockTransferModal">
+      <div class="modal" style="max-width:560px">
+        <h2>New stock transfer</h2>
+        <p class="section-sub">Move products from one location to another.</p>
+        <div class="two">
+          <div class="field"><label>From *</label><select id="transferFrom"></select></div>
+          <div class="field"><label>To *</label><select id="transferTo"></select></div>
+        </div>
+        <div class="field"><label>Note</label><input id="transferNote" placeholder="Optional"></div>
+        <div style="margin:12px 0 8px;font-weight:700;font-size:13px">Lines</div>
+        <div id="transferLinesEditor"></div>
+        <button class="button small" type="button" id="transferAddLine" style="margin-top:8px">+ Add line</button>
+        <div class="field" style="margin-top:12px">
+          <label>When saving</label>
+          <select id="transferShipMode">
+            <option value="quick">Quick transfer (arrive immediately)</option>
+            <option value="transit">Ship only (in transit — receive later)</option>
+          </select>
+        </div>
+        <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button class="button" type="button" id="stockTransferModalCancel">Cancel</button>
+          <button class="button primary" type="button" id="stockTransferModalSave">Save transfer</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modalback" id="transferReceiveModal">
+      <div class="modal" style="max-width:520px">
+        <h2>Receive transfer</h2>
+        <p class="section-sub" id="transferReceiveSub">—</p>
+        <input type="hidden" id="transferReceiveId">
+        <div id="transferReceiveLines"></div>
+        <div class="field" style="margin-top:12px"><label>Note</label><input id="transferReceiveNote" placeholder="Optional"></div>
+        <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
+          <button class="button" type="button" id="transferReceiveCancel">Cancel</button>
+          <button class="button primary" type="button" id="transferReceiveConfirm">Confirm receive</button>
         </div>
       </div>
     </div>
@@ -5315,7 +5381,9 @@ const defaultDB = {
   purchaseNextNumber: 1,
   locations: [],
   locationStock: [],
-  activeLocationId: null
+  activeLocationId: null,
+  stockTransfers: [],
+  transferNextNumber: 1
 };
 const LEGACY_DB_KEY = 'invoicedey-v2';
 const ANON_DB_KEY = 'invoicedey-anonymous-v1';
@@ -5343,6 +5411,8 @@ function normalizeDbProfile() {
   if (!db.purchaseNextNumber || db.purchaseNextNumber < 1) db.purchaseNextNumber = 1;
   if (!Array.isArray(db.locations)) db.locations = [];
   if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  if (!Array.isArray(db.stockTransfers)) db.stockTransfers = [];
+  if (!db.transferNextNumber || db.transferNextNumber < 1) db.transferNextNumber = 1;
   if (!db.booksSettings) db.booksSettings = { invoiceFeed: true };
   // Migrate older profiles — never overwrite an explicit reporting currency
   if (db.profile) {
@@ -6562,6 +6632,7 @@ function switchTo(v) {
     books: ['Books', 'Full accounting — ledger, journals, AR/AP, and financial reports.'],
     products: ['Products', 'Inventory catalog for POS checkout.'],
     purchases: ['Purchases', 'Suppliers, purchase orders, and goods received.'],
+    transfers: ['Transfers', 'Move stock between warehouses and outlets.'],
     pos: ['POS Checkout', 'Sell from any Windows or Android device.'],
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
@@ -6588,6 +6659,7 @@ function switchTo(v) {
   if (v === 'books') booksView();
   if (v === 'products') productsView();
   if (v === 'purchases') purchasesView();
+  if (v === 'transfers') transfersView();
   if (v === 'pos') posView();
   if (v === 'invoices') invoices();
   if (v === 'receipts') receiptsView();
@@ -8090,6 +8162,382 @@ function markPurchaseOrdered(purchaseId) {
   purchasesView();
 }
 
+
+/* ---------- Stock transfers (Phase B) ---------- */
+async function allocateTransferNumber() {
+  ensurePosDb();
+  try {
+    if (cloud?.client && cloud?.organizationId) {
+      const { data, error } = await cloud.client.rpc('next_transfer_number', { p_org_id: cloud.organizationId });
+      if (!error && data) return data;
+    }
+  } catch (e) { console.warn(e); }
+  const n = db.transferNextNumber || 1;
+  db.transferNextNumber = n + 1;
+  return 'TR-' + String(n).padStart(4, '0');
+}
+
+function transferLineEditorHtml(lines) {
+  ensurePosDb();
+  const products = db.products.filter(p => p.active !== false);
+  if (!lines.length) lines = [{ product_id: '', qty: 1 }];
+  return lines.map((l, i) => {
+    const opts = products.map(p =>
+      `<option value="${p.id}" ${p.id === l.product_id ? 'selected' : ''}>${p.name}</option>`
+    ).join('');
+    return `<div class="transfer-line-row" data-idx="${i}" style="display:grid;grid-template-columns:1fr 90px 28px;gap:6px;margin-bottom:8px;align-items:end">
+      <div class="field" style="margin:0"><label style="font-size:11px">Product</label>
+        <select data-tr-product><option value="">Select…</option>${opts}</select>
+      </div>
+      <div class="field" style="margin:0"><label style="font-size:11px">Qty</label>
+        <input type="number" min="0.0001" step="any" data-tr-qty value="${l.qty || 1}">
+      </div>
+      <button type="button" class="button small" data-tr-remove style="padding:8px">×</button>
+    </div>`;
+  }).join('');
+}
+
+function readTransferLinesFromEditor() {
+  return [...document.querySelectorAll('#transferLinesEditor .transfer-line-row')].map(row => {
+    const product_id = row.querySelector('[data-tr-product]')?.value || '';
+    const qty = Number(row.querySelector('[data-tr-qty]')?.value) || 0;
+    const p = db.products.find(x => x.id === product_id);
+    return {
+      id: crypto.randomUUID(),
+      product_id: product_id || null,
+      product_name: p?.name || 'Item',
+      qty_sent: qty,
+      qty_received: 0
+    };
+  }).filter(l => l.product_id && l.qty_sent > 0);
+}
+
+function openStockTransferModal() {
+  ensurePosDb();
+  if (db.locations.filter(l => l.active !== false).length < 2) {
+    toast('Add at least two locations first (Products → Locations)');
+    openLocationsModal();
+    return;
+  }
+  if (!db.products.length) {
+    toast('Add products first');
+    return;
+  }
+  const locs = db.locations.filter(l => l.active !== false);
+  const opts = locs.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
+  document.getElementById('transferFrom').innerHTML = opts;
+  document.getElementById('transferTo').innerHTML = opts;
+  const active = getActiveLocation();
+  if (active) document.getElementById('transferFrom').value = active.id;
+  const other = locs.find(l => l.id !== document.getElementById('transferFrom').value);
+  if (other) document.getElementById('transferTo').value = other.id;
+  document.getElementById('transferNote').value = '';
+  document.getElementById('transferShipMode').value = 'quick';
+  document.getElementById('transferLinesEditor').innerHTML = transferLineEditorHtml([]);
+  document.getElementById('stockTransferModal').classList.add('show');
+  try { initSearchableSelects(document.getElementById('stockTransferModal')); } catch (_) {}
+}
+
+function closeStockTransferModal() {
+  document.getElementById('stockTransferModal')?.classList.remove('show');
+}
+
+async function saveStockTransfer() {
+  ensurePosDb();
+  const fromId = document.getElementById('transferFrom').value;
+  const toId = document.getElementById('transferTo').value;
+  if (!fromId || !toId) { toast('Choose from and to locations'); return; }
+  if (fromId === toId) { toast('From and to must be different'); return; }
+  const lines = readTransferLinesFromEditor();
+  if (!lines.length) { toast('Add at least one product line'); return; }
+
+  // Validate stock at source
+  for (const line of lines) {
+    const onHand = locationStockQty(line.product_id, fromId);
+    if (onHand < line.qty_sent) {
+      toast(`${line.product_name}: only ${onHand} available at source`);
+      return;
+    }
+  }
+
+  const mode = document.getElementById('transferShipMode').value || 'quick';
+  const transfer_number = await allocateTransferNumber();
+  const now = new Date().toISOString();
+  const tr = {
+    id: crypto.randomUUID(),
+    transfer_number,
+    from_location_id: fromId,
+    to_location_id: toId,
+    status: mode === 'quick' ? 'received' : 'in_transit',
+    note: (document.getElementById('transferNote').value || '').trim() || null,
+    lines,
+    shipped_at: now,
+    received_at: mode === 'quick' ? now : null,
+    cloudId: null,
+    created_at: now,
+    updated_at: now
+  };
+
+  // Ship: deduct from source
+  for (const line of lines) {
+    const { mov } = adjustLocationStock(line.product_id, fromId, -line.qty_sent, {
+      reason: 'transfer_out',
+      reference: transfer_number
+    });
+    mov.transfer_id = tr.id;
+    try {
+      const p = db.products.find(x => x.id === line.product_id);
+      if (p) await pushProductToCloud(p);
+      await pushLocationStockToCloud(line.product_id, fromId);
+      await pushStockMovementToCloud(mov);
+    } catch (e) { console.warn(e); }
+  }
+
+  if (mode === 'quick') {
+    for (const line of lines) {
+      line.qty_received = line.qty_sent;
+      const { mov } = adjustLocationStock(line.product_id, toId, line.qty_sent, {
+        reason: 'transfer_in',
+        reference: transfer_number
+      });
+      mov.transfer_id = tr.id;
+      try {
+        const p = db.products.find(x => x.id === line.product_id);
+        if (p) await pushProductToCloud(p);
+        await pushLocationStockToCloud(line.product_id, toId);
+        await pushStockMovementToCloud(mov);
+      } catch (e) { console.warn(e); }
+    }
+  }
+
+  db.stockTransfers.push(tr);
+  try { await pushStockTransferToCloud(tr); } catch (e) { console.warn(e); }
+  persistDb();
+  closeStockTransferModal();
+  toast(mode === 'quick' ? 'Transfer completed' : 'Shipped — in transit');
+  transfersView();
+}
+
+async function pushStockTransferToCloud(tr) {
+  if (!cloud?.client || !cloud?.organizationId) return;
+  const from = db.locations.find(l => l.id === tr.from_location_id);
+  const to = db.locations.find(l => l.id === tr.to_location_id);
+  if (!from?.cloudId || !to?.cloudId) return;
+  const { data, error } = await cloud.client.from('stock_transfers').insert({
+    organization_id: cloud.organizationId,
+    local_id: tr.id,
+    transfer_number: tr.transfer_number,
+    from_location_id: from.cloudId,
+    to_location_id: to.cloudId,
+    status: tr.status,
+    note: tr.note,
+    shipped_at: tr.shipped_at,
+    received_at: tr.received_at
+  }).select('id').single();
+  if (error) throw error;
+  tr.cloudId = data.id;
+  const lineRows = (tr.lines || []).map(l => {
+    const p = db.products.find(x => x.id === l.product_id);
+    return {
+      transfer_id: tr.cloudId,
+      organization_id: cloud.organizationId,
+      product_id: p?.cloudId || null,
+      product_name: l.product_name,
+      qty_sent: l.qty_sent,
+      qty_received: l.qty_received || 0
+    };
+  });
+  if (lineRows.length) await cloud.client.from('stock_transfer_lines').insert(lineRows);
+}
+
+function openTransferReceiveModal(transferId) {
+  ensurePosDb();
+  const tr = db.stockTransfers.find(t => t.id === transferId);
+  if (!tr || tr.status !== 'in_transit') {
+    toast('Only in-transit transfers can be received');
+    return;
+  }
+  const from = db.locations.find(l => l.id === tr.from_location_id);
+  const to = db.locations.find(l => l.id === tr.to_location_id);
+  document.getElementById('transferReceiveId').value = tr.id;
+  document.getElementById('transferReceiveSub').textContent =
+    tr.transfer_number + ' · ' + (from?.name || '?') + ' → ' + (to?.name || '?');
+  document.getElementById('transferReceiveNote').value = '';
+  document.getElementById('transferReceiveLines').innerHTML = (tr.lines || []).map((l, i) => {
+    const remaining = Math.max(0, (Number(l.qty_sent) || 0) - (Number(l.qty_received) || 0));
+    return `<div class="tr-recv-line" data-idx="${i}" style="display:grid;grid-template-columns:1fr 80px 80px;gap:8px;margin-bottom:10px;align-items:end;font-size:13px">
+      <div><b>${l.product_name}</b><div class="client-meta">Sent ${l.qty_sent} · Got ${l.qty_received || 0}</div></div>
+      <div class="field" style="margin:0"><label style="font-size:11px">Remaining</label><input type="text" readonly value="${remaining}"></div>
+      <div class="field" style="margin:0"><label style="font-size:11px">Receiving</label>
+        <input type="number" min="0" step="any" data-tr-recv-qty value="${remaining}" ${remaining <= 0 ? 'disabled' : ''}>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('transferReceiveModal').classList.add('show');
+}
+
+function closeTransferReceiveModal() {
+  document.getElementById('transferReceiveModal')?.classList.remove('show');
+}
+
+async function confirmTransferReceive() {
+  ensurePosDb();
+  const id = document.getElementById('transferReceiveId').value;
+  const tr = db.stockTransfers.find(t => t.id === id);
+  if (!tr) return;
+  const rows = [...document.querySelectorAll('#transferReceiveLines .tr-recv-line')];
+  const now = new Date().toISOString();
+  let any = false;
+  rows.forEach((row, i) => {
+    const line = tr.lines[i];
+    if (!line) return;
+    const remaining = Math.max(0, (Number(line.qty_sent) || 0) - (Number(line.qty_received) || 0));
+    let qty = Number(row.querySelector('[data-tr-recv-qty]')?.value) || 0;
+    if (qty <= 0) return;
+    if (qty > remaining) qty = remaining;
+    line.qty_received = (Number(line.qty_received) || 0) + qty;
+    any = true;
+    const { mov } = adjustLocationStock(line.product_id, tr.to_location_id, qty, {
+      reason: 'transfer_in',
+      reference: tr.transfer_number,
+      note: (document.getElementById('transferReceiveNote').value || '').trim() || null
+    });
+    mov.transfer_id = tr.id;
+    try {
+      const p = db.products.find(x => x.id === line.product_id);
+      if (p) pushProductToCloud(p);
+      pushLocationStockToCloud(line.product_id, tr.to_location_id);
+      pushStockMovementToCloud(mov);
+    } catch (e) { console.warn(e); }
+  });
+  if (!any) { toast('Enter quantities to receive'); return; }
+  const allDone = tr.lines.every(l => (Number(l.qty_received) || 0) >= (Number(l.qty_sent) || 0));
+  tr.status = allDone ? 'received' : 'in_transit';
+  if (allDone) tr.received_at = now;
+  tr.updated_at = now;
+  if (tr.cloudId && cloud?.client) {
+    try {
+      await cloud.client.from('stock_transfers').update({
+        status: tr.status,
+        received_at: tr.received_at,
+        updated_at: now
+      }).eq('id', tr.cloudId);
+    } catch (e) { console.warn(e); }
+  }
+  persistDb();
+  closeTransferReceiveModal();
+  toast(allDone ? 'Transfer received' : 'Partial receive saved');
+  transfersView();
+}
+
+function cancelStockTransfer(transferId) {
+  ensurePosDb();
+  const tr = db.stockTransfers.find(t => t.id === transferId);
+  if (!tr) return;
+  if (tr.status === 'received') {
+    toast('Cannot cancel a received transfer');
+    return;
+  }
+  if (tr.status === 'in_transit') {
+    // reverse ship: add back to source for unreceived qty
+    confirmAction('Cancel transfer', `Cancel ${tr.transfer_number}? Unreceived stock returns to source.`, async () => {
+      for (const line of tr.lines || []) {
+        const unrecv = (Number(line.qty_sent) || 0) - (Number(line.qty_received) || 0);
+        if (unrecv > 0) {
+          const { mov } = adjustLocationStock(line.product_id, tr.from_location_id, unrecv, {
+            reason: 'transfer_out',
+            reference: tr.transfer_number,
+            note: 'Cancel transfer — return to source'
+          });
+          // qty_change is positive return
+          mov.qty_change = unrecv;
+          try {
+            pushLocationStockToCloud(line.product_id, tr.from_location_id);
+            pushStockMovementToCloud(mov);
+          } catch (e) { console.warn(e); }
+        }
+      }
+      tr.status = 'cancelled';
+      tr.updated_at = new Date().toISOString();
+      if (tr.cloudId && cloud?.client) {
+        try { await cloud.client.from('stock_transfers').update({ status: 'cancelled' }).eq('id', tr.cloudId); } catch (e) {}
+      }
+      persistDb();
+      toast('Transfer cancelled');
+      transfersView();
+    });
+    return;
+  }
+  tr.status = 'cancelled';
+  tr.updated_at = new Date().toISOString();
+  persistDb();
+  toast('Transfer cancelled');
+  transfersView();
+}
+
+function transfersView() {
+  ensurePosDb();
+  renderTransfersList();
+}
+
+function renderTransfersList() {
+  ensurePosDb();
+  const q = (document.getElementById('transferSearch')?.value || '').trim().toLowerCase();
+  const st = document.getElementById('transferStatusFilter')?.value || 'all';
+  let list = (db.stockTransfers || []).slice();
+  if (st !== 'all') list = list.filter(t => t.status === st);
+  if (q) list = list.filter(t => String(t.transfer_number || '').toLowerCase().includes(q));
+  list.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  const el = document.getElementById('transferList');
+  const countEl = document.getElementById('transferCount');
+  if (countEl) countEl.textContent = db.stockTransfers.length + ' transfer' + (db.stockTransfers.length === 1 ? '' : 's');
+  if (!el) return;
+  if (!db.stockTransfers.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">⇄</div>
+      <h3>No transfers yet</h3>
+      <p>Move stock from warehouse to outlet, or between stores.</p>
+      <button class="button primary" type="button" id="emptyNewTransfer">+ Transfer</button></div>`;
+    document.getElementById('emptyNewTransfer')?.addEventListener('click', openStockTransferModal);
+    return;
+  }
+  if (!list.length) {
+    el.innerHTML = `<div class="empty"><h3>No matching transfers</h3></div>`;
+    return;
+  }
+  el.innerHTML = `<table class="table desktop-table">
+    <thead><tr><th>Transfer</th><th>Route</th><th>Status</th><th>Date</th><th></th></tr></thead>
+    <tbody>${list.map(t => {
+      const from = db.locations.find(l => l.id === t.from_location_id);
+      const to = db.locations.find(l => l.id === t.to_location_id);
+      const canRecv = t.status === 'in_transit';
+      const canCancel = t.status === 'draft' || t.status === 'in_transit';
+      return `<tr>
+        <td><b>${t.transfer_number}</b></td>
+        <td>${from?.name || '?'} → ${to?.name || '?'}</td>
+        <td>${t.status}</td>
+        <td>${String(t.shipped_at || t.created_at || '').slice(0, 10)}</td>
+        <td><div class="client-actions">
+          ${canRecv ? `<button class="button small" type="button" data-recv-transfer="${t.id}">Receive</button>` : ''}
+          ${canCancel ? `<button class="button small" type="button" data-cancel-transfer="${t.id}">Cancel</button>` : ''}
+        </div></td>
+      </tr>`;
+    }).join('')}</tbody></table>
+    <div class="mobile-list">${list.map(t => {
+      const from = db.locations.find(l => l.id === t.from_location_id);
+      const to = db.locations.find(l => l.id === t.to_location_id);
+      const canRecv = t.status === 'in_transit';
+      return `<div class="mobile-card">
+        <div class="mobile-card-title">${t.transfer_number}</div>
+        <div class="mobile-card-sub">${from?.name || '?'} → ${to?.name || '?'} · ${t.status}</div>
+        <div class="mobile-card-actions">
+          ${canRecv ? `<button class="button small" type="button" data-recv-transfer="${t.id}">Receive</button>` : ''}
+          ${t.status === 'in_transit' || t.status === 'draft' ? `<button class="button small" type="button" data-cancel-transfer="${t.id}">Cancel</button>` : ''}
+        </div>
+      </div>`;
+    }).join('')}</div>`;
+}
+
+
 function purchasesView() {
   ensurePosDb();
   try {
@@ -8440,6 +8888,8 @@ function ensurePosDb() {
   if (!db.purchaseNextNumber || db.purchaseNextNumber < 1) db.purchaseNextNumber = 1;
   if (!Array.isArray(db.locations)) db.locations = [];
   if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  if (!Array.isArray(db.stockTransfers)) db.stockTransfers = [];
+  if (!db.transferNextNumber || db.transferNextNumber < 1) db.transferNextNumber = 1;
   ensureDefaultLocation();
 }
 
@@ -17215,6 +17665,32 @@ document.getElementById('productSearch')?.addEventListener('input', () => render
 document.getElementById('productFilter')?.addEventListener('change', () => renderProductsList());
 document.getElementById('productLocationFilter')?.addEventListener('change', () => renderProductsList());
 document.getElementById('btnManageLocations')?.addEventListener('click', openLocationsModal);
+
+document.getElementById('btnNewTransfer')?.addEventListener('click', openStockTransferModal);
+document.getElementById('stockTransferModalCancel')?.addEventListener('click', closeStockTransferModal);
+document.getElementById('stockTransferModalSave')?.addEventListener('click', () => {
+  saveStockTransfer().catch(e => toast(e.message || 'Transfer failed'));
+});
+document.getElementById('transferAddLine')?.addEventListener('click', () => {
+  const wrap = document.getElementById('transferLinesEditor');
+  if (!wrap) return;
+  const cur = readTransferLinesFromEditor();
+  cur.push({ product_id: '', qty_sent: 1 });
+  wrap.innerHTML = transferLineEditorHtml(cur.map(l => ({ product_id: l.product_id, qty: l.qty_sent || 1 })));
+  try { initSearchableSelects(wrap); } catch (_) {}
+});
+document.getElementById('transferLinesEditor')?.addEventListener('click', (e) => {
+  if (e.target.closest('[data-tr-remove]')) {
+    e.target.closest('.transfer-line-row')?.remove();
+  }
+});
+document.getElementById('transferReceiveCancel')?.addEventListener('click', closeTransferReceiveModal);
+document.getElementById('transferReceiveConfirm')?.addEventListener('click', () => {
+  confirmTransferReceive().catch(e => toast(e.message || 'Receive failed'));
+});
+document.getElementById('transferSearch')?.addEventListener('input', () => renderTransfersList());
+document.getElementById('transferStatusFilter')?.addEventListener('change', () => renderTransfersList());
+
 document.getElementById('locationsModalClose')?.addEventListener('click', () => {
   document.getElementById('locationsModal')?.classList.remove('show');
   fillProductLocationFilter();
@@ -17320,6 +17796,17 @@ document.addEventListener('click', (e) => {
   const paySup = e.target.closest('[data-pay-supplier]');
   if (paySup) {
     openSupplierPayModal(paySup.getAttribute('data-pay-supplier'));
+    return;
+  }
+
+  const recvTr = e.target.closest('[data-recv-transfer]');
+  if (recvTr) {
+    openTransferReceiveModal(recvTr.getAttribute('data-recv-transfer'));
+    return;
+  }
+  const cancelTr = e.target.closest('[data-cancel-transfer]');
+  if (cancelTr) {
+    cancelStockTransfer(cancelTr.getAttribute('data-cancel-transfer'));
     return;
   }
   const hist = e.target.closest('[data-stock-history]');
