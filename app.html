@@ -2394,6 +2394,7 @@ input:focus:not(:focus-visible) {
           <div class="client-count" id="productCount">Inventory for POS checkout</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="button" type="button" id="btnManageLocations">Locations</button>
           <a class="button" href="pos.html" id="btnOpenPosFromProducts">Open POS</a>
           <button class="button primary" type="button" id="addProduct">+ Add product</button>
         </div>
@@ -2402,6 +2403,9 @@ input:focus:not(:focus-visible) {
         <div class="search-bar" style="margin:0;flex:1;max-width:420px">
           <input type="search" id="productSearch" placeholder="Search name, SKU or barcode…">
         </div>
+        <select id="productLocationFilter" class="button small" style="min-width:160px" title="View stock at location">
+          <option value="all">All locations (total)</option>
+        </select>
         <select id="productFilter" class="button small" style="min-width:140px">
           <option value="all">All</option>
           <option value="active">Active</option>
@@ -2412,6 +2416,32 @@ input:focus:not(:focus-visible) {
       </div>
       <div id="productList"></div>
     </section>
+
+    <div class="modalback" id="locationsModal">
+      <div class="modal" style="max-width:520px">
+        <h2>Locations</h2>
+        <p class="section-sub">Stores, warehouses and outlets. POS sells from the active location.</p>
+        <div id="locationsList"></div>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+          <div class="field"><label>New location name</label><input id="locationNewName" placeholder="e.g. Ikeja outlet"></div>
+          <div class="two">
+            <div class="field"><label>Code</label><input id="locationNewCode" placeholder="IKE"></div>
+            <div class="field"><label>Type</label>
+              <select id="locationNewType">
+                <option value="store">Store</option>
+                <option value="warehouse">Warehouse</option>
+                <option value="outlet">Outlet</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+          </div>
+          <button class="button primary" type="button" id="locationAddBtn">+ Add location</button>
+        </div>
+        <div class="buttons" style="margin-top:14px;display:flex;justify-content:flex-end">
+          <button class="button" type="button" id="locationsModalClose">Done</button>
+        </div>
+      </div>
+    </div>
 
     <section class="view" id="purchases">
       <div class="section-head">
@@ -3428,6 +3458,9 @@ input:focus:not(:focus-visible) {
     <p class="section-sub" id="receiveModalSub">—</p>
     <input type="hidden" id="receivePurchaseId">
     <div id="receiveLinesEditor"></div>
+    <div class="field" style="margin-top:12px"><label>Receive into location</label>
+      <select id="receiveLocation"></select>
+    </div>
     <div class="field" style="margin-top:12px"><label>Note</label><input id="receiveNote" placeholder="Optional"></div>
     <div class="field" style="display:flex;align-items:center;gap:8px;margin-top:8px">
       <input type="checkbox" id="receivePostBooks" checked>
@@ -5224,6 +5257,7 @@ async function startCloudSync(client, user) {
     try { await pullBooksFromCloud(); } catch (e) { console.warn('books pull', e.message || e); }
     try { processDueRecurringJournals(); } catch (e) {}
     try { await pullProductsFromCloud(); } catch (e) { console.warn('products pull', e.message || e); }
+    try { await pullLocationsFromCloud(); } catch (e) { console.warn('locations pull', e.message || e); }
     try { await pullPurchasesBundleFromCloud(); } catch (e) { console.warn('purchases pull', e.message || e); }
     try { await pushBooksToCloud(); } catch (e) { console.warn('books push', e.message || e); }
     dashboard();
@@ -5278,7 +5312,10 @@ const defaultDB = {
   purchases: [],
   purchaseReceipts: [],
   supplierPayments: [],
-  purchaseNextNumber: 1
+  purchaseNextNumber: 1,
+  locations: [],
+  locationStock: [],
+  activeLocationId: null
 };
 const LEGACY_DB_KEY = 'invoicedey-v2';
 const ANON_DB_KEY = 'invoicedey-anonymous-v1';
@@ -5304,6 +5341,8 @@ function normalizeDbProfile() {
   if (!Array.isArray(db.purchaseReceipts)) db.purchaseReceipts = [];
   if (!Array.isArray(db.supplierPayments)) db.supplierPayments = [];
   if (!db.purchaseNextNumber || db.purchaseNextNumber < 1) db.purchaseNextNumber = 1;
+  if (!Array.isArray(db.locations)) db.locations = [];
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
   if (!db.booksSettings) db.booksSettings = { invoiceFeed: true };
   // Migrate older profiles — never overwrite an explicit reporting currency
   if (db.profile) {
@@ -7844,6 +7883,14 @@ function openReceiveModal(purchaseId) {
     (po.purchase_number || '') + (supplier ? ' · ' + supplier.name : '');
   document.getElementById('receiveNote').value = '';
   document.getElementById('receivePostBooks').checked = true;
+  const locSel = document.getElementById('receiveLocation');
+  if (locSel) {
+    locSel.innerHTML = db.locations.filter(l => l.active !== false).map(l =>
+      `<option value="${l.id}">${l.name}</option>`
+    ).join('');
+    const preferred = po.location_id || getActiveLocation()?.id;
+    if (preferred && [...locSel.options].some(o => o.value === preferred)) locSel.value = preferred;
+  }
   document.getElementById('receiveLinesEditor').innerHTML = (po.lines || []).map((l, i) => {
     const remaining = Math.max(0, (Number(l.qty) || 0) - (Number(l.received_qty) || 0));
     return `<div class="receive-line" data-idx="${i}" style="display:grid;grid-template-columns:1fr 80px 80px;gap:8px;margin-bottom:10px;align-items:end;font-size:13px">
@@ -7890,20 +7937,25 @@ async function confirmReceiveGoods() {
 
     const p = db.products.find(x => x.id === line.product_id);
     if (p) {
-      p.stock_qty = (Number(p.stock_qty) || 0) + qty;
       if ((Number(line.unit_cost) || 0) > 0) p.cost = Number(line.unit_cost);
-      p.updated_at = now;
-      const mov = {
-        id: crypto.randomUUID(),
-        product_id: p.id,
-        qty_change: qty,
-        reason: 'purchase',
-        reference: po.purchase_number,
-        note: null,
-        created_at: now
-      };
-      db.stockMovements.push(mov);
-      try { pushProductToCloud(p); pushStockMovementToCloud(mov); } catch (e) { console.warn(e); }
+      const recvLocId = document.getElementById('receiveLocation')?.value
+        || po.location_id
+        || getActiveLocation()?.id;
+      if (recvLocId) {
+        const { mov } = adjustLocationStock(p.id, recvLocId, qty, {
+          reason: 'purchase',
+          reference: po.purchase_number
+        });
+        try {
+          pushProductToCloud(p);
+          pushLocationStockToCloud(p.id, recvLocId);
+          pushStockMovementToCloud(mov);
+        } catch (e) { console.warn(e); }
+      } else {
+        p.stock_qty = (Number(p.stock_qty) || 0) + qty;
+        p.updated_at = now;
+        try { pushProductToCloud(p); } catch (e) { console.warn(e); }
+      }
     }
   });
 
@@ -8386,6 +8438,106 @@ function ensurePosDb() {
   if (!Array.isArray(db.purchaseReceipts)) db.purchaseReceipts = [];
   if (!Array.isArray(db.supplierPayments)) db.supplierPayments = [];
   if (!db.purchaseNextNumber || db.purchaseNextNumber < 1) db.purchaseNextNumber = 1;
+  if (!Array.isArray(db.locations)) db.locations = [];
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  ensureDefaultLocation();
+}
+
+/** Ensure at least one location and migrate product.stock_qty into it once. */
+function ensureDefaultLocation() {
+  if (!Array.isArray(db.locations)) db.locations = [];
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  let loc = db.locations.find(l => l.is_default && l.active !== false)
+    || db.locations.find(l => l.active !== false);
+  if (!loc) {
+    loc = {
+      id: crypto.randomUUID(),
+      name: 'Main store',
+      code: 'MAIN',
+      location_type: 'store',
+      is_default: true,
+      active: true,
+      address: null,
+      cloudId: null,
+      created_at: new Date().toISOString()
+    };
+    db.locations.push(loc);
+  }
+  if (!db.activeLocationId || !db.locations.some(l => l.id === db.activeLocationId)) {
+    db.activeLocationId = loc.id;
+  }
+  // One-time style migrate: if product has stock and no location rows, seed Main
+  (db.products || []).forEach(p => {
+    const hasRow = db.locationStock.some(s => s.product_id === p.id);
+    if (!hasRow && (Number(p.stock_qty) || 0) !== 0) {
+      db.locationStock.push({
+        product_id: p.id,
+        location_id: loc.id,
+        qty: Number(p.stock_qty) || 0
+      });
+    } else if (!hasRow) {
+      db.locationStock.push({ product_id: p.id, location_id: loc.id, qty: 0 });
+    }
+  });
+}
+
+function getActiveLocation() {
+  ensurePosDb();
+  return db.locations.find(l => l.id === db.activeLocationId)
+    || db.locations.find(l => l.is_default)
+    || db.locations[0]
+    || null;
+}
+
+function setActiveLocation(locationId) {
+  ensurePosDb();
+  if (!db.locations.some(l => l.id === locationId)) return;
+  db.activeLocationId = locationId;
+  try { localStorage.setItem('invoicedey-active-location-' + (activeUserId || 'anon'), locationId); } catch {}
+  persistDb();
+}
+
+function locationStockQty(productId, locationId) {
+  ensurePosDb();
+  const lid = locationId || db.activeLocationId;
+  const row = db.locationStock.find(s => s.product_id === productId && s.location_id === lid);
+  return row ? Number(row.qty) || 0 : 0;
+}
+
+function totalProductStock(productId) {
+  ensurePosDb();
+  return db.locationStock
+    .filter(s => s.product_id === productId)
+    .reduce((n, s) => n + (Number(s.qty) || 0), 0);
+}
+
+/** Adjust stock at a location and keep products.stock_qty as total cache. */
+function adjustLocationStock(productId, locationId, qtyChange, meta) {
+  ensurePosDb();
+  meta = meta || {};
+  let row = db.locationStock.find(s => s.product_id === productId && s.location_id === locationId);
+  if (!row) {
+    row = { product_id: productId, location_id: locationId, qty: 0 };
+    db.locationStock.push(row);
+  }
+  row.qty = (Number(row.qty) || 0) + (Number(qtyChange) || 0);
+  const p = db.products.find(x => x.id === productId);
+  if (p) {
+    p.stock_qty = totalProductStock(productId);
+    p.updated_at = new Date().toISOString();
+  }
+  const mov = {
+    id: crypto.randomUUID(),
+    product_id: productId,
+    location_id: locationId,
+    qty_change: Number(qtyChange) || 0,
+    reason: meta.reason || 'adjustment',
+    reference: meta.reference || null,
+    note: meta.note || null,
+    created_at: new Date().toISOString()
+  };
+  db.stockMovements.push(mov);
+  return { row, mov, product: p };
 }
 
 function posCurrency() {
@@ -8510,9 +8662,12 @@ function openStockAdjustModal(productId) {
   ensurePosDb();
   const p = db.products.find(x => x.id === productId);
   if (!p) return;
+  const loc = getActiveLocation();
+  const atLoc = loc ? locationStockQty(p.id, loc.id) : Number(p.stock_qty) || 0;
   document.getElementById('stockAdjustProductId').value = p.id;
-  document.getElementById('stockAdjustProductName').textContent = p.name;
-  document.getElementById('stockAdjustCurrent').value = String(p.stock_qty ?? 0);
+  document.getElementById('stockAdjustProductName').textContent =
+    p.name + (loc ? ' · ' + loc.name : '');
+  document.getElementById('stockAdjustCurrent').value = String(atLoc);
   document.getElementById('stockAdjustType').value = 'set';
   document.getElementById('stockAdjustQty').value = '';
   document.getElementById('stockAdjustNote').value = '';
@@ -8532,23 +8687,19 @@ async function saveStockAdjust() {
   const type = document.getElementById('stockAdjustType').value;
   const qty = Number(document.getElementById('stockAdjustQty').value);
   if (Number.isNaN(qty)) { toast('Enter a valid quantity'); return; }
-  const prev = Number(p.stock_qty) || 0;
-  let next = type === 'add' ? prev + qty : qty;
+  const loc = getActiveLocation();
+  if (!loc) { toast('No location set'); return; }
+  const prev = locationStockQty(id, loc.id);
+  const next = type === 'add' ? prev + qty : qty;
   const change = next - prev;
   if (change === 0) { closeStockAdjustModal(); return; }
-  const now = new Date().toISOString();
-  p.stock_qty = next;
-  p.updated_at = now;
-  db.stockMovements.push({
-    id: crypto.randomUUID(),
-    product_id: id,
-    qty_change: change,
-    reason: 'adjustment',
-    reference: null,
-    note: (document.getElementById('stockAdjustNote').value || '').trim() || null,
-    created_at: now
-  });
-  try { await pushProductToCloud(p); await pushStockMovementToCloud(db.stockMovements[db.stockMovements.length - 1]); } catch (e) { console.warn(e); }
+  const note = (document.getElementById('stockAdjustNote').value || '').trim() || null;
+  const { mov } = adjustLocationStock(id, loc.id, change, { reason: 'adjustment', note });
+  try {
+    await pushProductToCloud(p);
+    await pushLocationStockToCloud(id, loc.id);
+    await pushStockMovementToCloud(mov);
+  } catch (e) { console.warn(e); }
   persistDb();
   closeStockAdjustModal();
   toast('Stock updated');
@@ -8635,19 +8786,195 @@ async function pullProductsFromCloud() {
 
 function productsView() {
   ensurePosDb();
-  try { pullProductsFromCloud().then(() => renderProductsList()).catch(() => renderProductsList()); }
-  catch { renderProductsList(); }
+  fillProductLocationFilter();
+  try {
+    pullProductsFromCloud()
+      .then(() => pullLocationsFromCloud())
+      .then(() => { fillProductLocationFilter(); renderProductsList(); })
+      .catch(() => renderProductsList());
+  } catch { renderProductsList(); }
+}
+
+function fillProductLocationFilter() {
+  ensurePosDb();
+  const sel = document.getElementById('productLocationFilter');
+  if (!sel) return;
+  const cur = sel.value || 'all';
+  sel.innerHTML = '<option value="all">All locations (total)</option>' +
+    db.locations.filter(l => l.active !== false).map(l =>
+      `<option value="${l.id}">${l.name}${l.is_default ? ' (default)' : ''}</option>`
+    ).join('');
+  if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+}
+
+function openLocationsModal() {
+  ensurePosDb();
+  renderLocationsList();
+  document.getElementById('locationsModal')?.classList.add('show');
+}
+
+function renderLocationsList() {
+  ensurePosDb();
+  const el = document.getElementById('locationsList');
+  if (!el) return;
+  el.innerHTML = db.locations.map(l => {
+    const active = db.activeLocationId === l.id;
+    return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px">
+      <div>
+        <b>${l.name}</b> <span class="client-meta">${l.location_type || 'store'}${l.code ? ' · ' + l.code : ''}</span>
+        ${l.is_default ? ' <span class="badge">Default</span>' : ''}
+        ${active ? ' <span class="badge">POS active</span>' : ''}
+      </div>
+      <div class="client-actions">
+        ${!active ? `<button class="button small" type="button" data-set-active-loc="${l.id}">Use for POS</button>` : ''}
+        ${!l.is_default ? `<button class="button small" type="button" data-set-default-loc="${l.id}">Default</button>` : ''}
+      </div>
+    </div>`;
+  }).join('') || '<p class="section-sub">No locations yet.</p>';
+}
+
+async function addLocationFromModal() {
+  ensurePosDb();
+  const name = (document.getElementById('locationNewName')?.value || '').trim();
+  if (!name) { toast('Enter a location name'); return; }
+  const code = (document.getElementById('locationNewCode')?.value || '').trim() || null;
+  const location_type = document.getElementById('locationNewType')?.value || 'store';
+  const loc = {
+    id: crypto.randomUUID(),
+    name,
+    code,
+    location_type,
+    is_default: db.locations.length === 0,
+    active: true,
+    address: null,
+    cloudId: null,
+    created_at: new Date().toISOString()
+  };
+  db.locations.push(loc);
+  // Seed zero stock rows for existing products
+  db.products.forEach(p => {
+    if (!db.locationStock.some(s => s.product_id === p.id && s.location_id === loc.id)) {
+      db.locationStock.push({ product_id: p.id, location_id: loc.id, qty: 0 });
+    }
+  });
+  try { await pushLocationToCloud(loc); } catch (e) { console.warn(e); }
+  document.getElementById('locationNewName').value = '';
+  document.getElementById('locationNewCode').value = '';
+  persistDb();
+  renderLocationsList();
+  fillProductLocationFilter();
+  toast('Location added');
+}
+
+async function pushLocationToCloud(loc) {
+  if (!cloud?.client || !cloud?.organizationId || !loc) return;
+  const payload = {
+    organization_id: cloud.organizationId,
+    local_id: loc.id,
+    name: loc.name,
+    code: loc.code,
+    location_type: loc.location_type || 'store',
+    address: loc.address,
+    is_default: !!loc.is_default,
+    active: loc.active !== false
+  };
+  if (loc.cloudId) {
+    await cloud.client.from('locations').update(payload).eq('id', loc.cloudId);
+  } else {
+    const { data, error } = await cloud.client.from('locations').insert(payload).select('id').single();
+    if (error) throw error;
+    loc.cloudId = data.id;
+  }
+}
+
+async function pullLocationsFromCloud() {
+  if (!cloud?.client || !cloud?.organizationId) return;
+  try {
+    await cloud.client.rpc('ensure_default_location_and_migrate', { p_org_id: cloud.organizationId });
+  } catch (e) { console.warn('ensure default location', e); }
+  const { data, error } = await cloud.client.from('locations')
+    .select('*')
+    .eq('organization_id', cloud.organizationId)
+    .order('name');
+  if (error) throw error;
+  ensurePosDb();
+  const byLocal = new Map(db.locations.map(l => [l.id, l]));
+  const byCloud = new Map(db.locations.filter(l => l.cloudId).map(l => [l.cloudId, l]));
+  (data || []).forEach(row => {
+    let l = byCloud.get(row.id) || (row.local_id && byLocal.get(row.local_id));
+    if (!l) {
+      l = { id: row.local_id || row.id, cloudId: row.id };
+      db.locations.push(l);
+    }
+    Object.assign(l, {
+      cloudId: row.id,
+      name: row.name,
+      code: row.code,
+      location_type: row.location_type,
+      address: row.address,
+      is_default: !!row.is_default,
+      active: row.active !== false
+    });
+  });
+  // Pull location stock
+  try {
+    const { data: stockRows } = await cloud.client.from('product_location_stock')
+      .select('*')
+      .eq('organization_id', cloud.organizationId);
+    const productByCloud = new Map(db.products.filter(p => p.cloudId).map(p => [p.cloudId, p]));
+    const locationByCloud = new Map(db.locations.filter(l => l.cloudId).map(l => [l.cloudId, l]));
+    (stockRows || []).forEach(row => {
+      const p = productByCloud.get(row.product_id);
+      const loc = locationByCloud.get(row.location_id);
+      if (!p || !loc) return;
+      let s = db.locationStock.find(x => x.product_id === p.id && x.location_id === loc.id);
+      if (!s) {
+        s = { product_id: p.id, location_id: loc.id, qty: 0 };
+        db.locationStock.push(s);
+      }
+      s.qty = Number(row.qty) || 0;
+    });
+    db.products.forEach(p => { p.stock_qty = totalProductStock(p.id); });
+  } catch (e) { console.warn('location stock pull', e); }
+  const def = db.locations.find(l => l.is_default) || db.locations[0];
+  if (def && !db.activeLocationId) db.activeLocationId = def.id;
+  persistDb();
+}
+
+async function pushLocationStockToCloud(productId, locationId) {
+  if (!cloud?.client || !cloud?.organizationId) return;
+  const p = db.products.find(x => x.id === productId);
+  const loc = db.locations.find(x => x.id === locationId);
+  if (!p?.cloudId || !loc?.cloudId) return;
+  const qty = locationStockQty(productId, locationId);
+  const { data: existing } = await cloud.client.from('product_location_stock')
+    .select('id')
+    .eq('product_id', p.cloudId)
+    .eq('location_id', loc.cloudId)
+    .maybeSingle();
+  if (existing?.id) {
+    await cloud.client.from('product_location_stock').update({ qty, updated_at: new Date().toISOString() }).eq('id', existing.id);
+  } else {
+    await cloud.client.from('product_location_stock').insert({
+      organization_id: cloud.organizationId,
+      product_id: p.cloudId,
+      location_id: loc.cloudId,
+      qty
+    });
+  }
 }
 
 function renderProductsList() {
   ensurePosDb();
   const query = (document.getElementById('productSearch')?.value || '').trim().toLowerCase();
   const filter = document.getElementById('productFilter')?.value || 'all';
+  const locFilter = document.getElementById('productLocationFilter')?.value || 'all';
+  const stockAt = (p) => locFilter === 'all' ? totalProductStock(p.id) : locationStockQty(p.id, locFilter);
   let list = db.products.slice();
   if (filter === 'active') list = list.filter(p => p.active !== false);
   if (filter === 'inactive') list = list.filter(p => p.active === false);
-  if (filter === 'low') list = list.filter(p => p.track_stock !== false && Number(p.stock_qty) > 0 && Number(p.stock_qty) <= Number(p.low_stock_at || 0));
-  if (filter === 'out') list = list.filter(p => p.track_stock !== false && Number(p.stock_qty) <= 0);
+  if (filter === 'low') list = list.filter(p => p.track_stock !== false && stockAt(p) > 0 && stockAt(p) <= Number(p.low_stock_at || 0));
+  if (filter === 'out') list = list.filter(p => p.track_stock !== false && stockAt(p) <= 0);
   if (query) {
     list = list.filter(p => [p.name, p.sku, p.barcode].some(v => String(v || '').toLowerCase().includes(query)));
   }
@@ -8672,8 +8999,10 @@ function renderProductsList() {
     return;
   }
   const todayIso = new Date().toISOString().slice(0, 10);
+  const locFilter = document.getElementById('productLocationFilter')?.value || 'all';
   const rows = list.map(p => {
-    const stock = Number(p.stock_qty) || 0;
+    const stock = locFilter === 'all' ? totalProductStock(p.id) : locationStockQty(p.id, locFilter);
+    const total = totalProductStock(p.id);
     const low = Number(p.low_stock_at) || 0;
     const cost = Number(p.cost) || 0;
     let stockBadge = String(stock);
@@ -8681,6 +9010,9 @@ function renderProductsList() {
       if (stock <= 0) stockBadge = `<span style="color:var(--red-text)"><b>${stock}</b> · out</span>`;
       else if (low > 0 && stock <= low) stockBadge = `<span style="color:orange"><b>${stock}</b> · low</span>`;
       else stockBadge = `<b>${stock}</b>`;
+      if (locFilter !== 'all' && total !== stock) {
+        stockBadge += `<div class="client-meta">All sites ${total}</div>`;
+      }
     } else stockBadge = '—';
     let expiryBadge = '—';
     if (p.expiry_date) {
@@ -8763,13 +9095,15 @@ function posAddToCart(productId) {
   ensurePosDb();
   const p = db.products.find(x => x.id === productId && x.active !== false);
   if (!p) return;
-  if (p.track_stock !== false && Number(p.stock_qty) <= 0) {
-    toast('Out of stock');
+  const loc = getActiveLocation();
+  const onHand = loc ? locationStockQty(p.id, loc.id) : Number(p.stock_qty) || 0;
+  if (p.track_stock !== false && onHand <= 0) {
+    toast('Out of stock at ' + (loc?.name || 'this location'));
     return;
   }
   const line = db.posCart.find(l => l.product_id === productId);
   if (line) {
-    if (p.track_stock !== false && line.qty + 1 > Number(p.stock_qty)) { toast('Not enough stock'); return; }
+    if (p.track_stock !== false && line.qty + 1 > onHand) { toast('Not enough stock here'); return; }
     line.qty += 1;
   } else {
     db.posCart.push({
@@ -8793,9 +9127,11 @@ function posSetQty(productId, qty) {
     db.posCart = db.posCart.filter(l => l.product_id !== productId);
   } else {
     const p = db.products.find(x => x.id === productId);
-    if (p && p.track_stock !== false && qty > Number(p.stock_qty)) {
-      toast('Not enough stock');
-      qty = Number(p.stock_qty);
+    const loc = getActiveLocation();
+    const onHand = loc ? locationStockQty(productId, loc.id) : Number(p?.stock_qty) || 0;
+    if (p && p.track_stock !== false && qty > onHand) {
+      toast('Not enough stock here');
+      qty = onHand;
     }
     line.qty = qty;
   }
@@ -8805,6 +9141,7 @@ function posSetQty(productId, qty) {
 
 function renderPosProductGrid() {
   ensurePosDb();
+  const loc = getActiveLocation();
   const q = (document.getElementById('posSearch')?.value || '').trim().toLowerCase();
   let list = db.products.filter(p => p.active !== false);
   if (q) list = list.filter(p => [p.name, p.sku, p.barcode].some(v => String(v || '').toLowerCase().includes(q)));
@@ -8816,14 +9153,15 @@ function renderPosProductGrid() {
       <button class="button primary" type="button" onclick="switchTo('products')">Go to Products</button></div>`;
     return;
   }
-  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px">` +
+  el.innerHTML = (loc ? `<p class="section-sub" style="margin:0 0 8px">Selling from <b>${loc.name}</b></p>` : '') +
+    `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px">` +
     list.map(p => {
-      const stock = Number(p.stock_qty) || 0;
+      const stock = loc ? locationStockQty(p.id, loc.id) : Number(p.stock_qty) || 0;
       const out = p.track_stock !== false && stock <= 0;
       return `<button type="button" class="button" data-pos-add="${p.id}" style="text-align:left;height:auto;padding:12px;opacity:${out ? 0.5 : 1}" ${out ? 'disabled' : ''}>
         <div style="font-weight:600;font-size:13px">${p.name}</div>
         <div style="font-size:15px;margin-top:4px">${formatPosMoney(p.price)}</div>
-        <div class="client-meta">${out ? 'Out of stock' : 'Stock ' + stock}</div>
+        <div class="client-meta">${out ? 'Out of stock here' : 'Here ' + stock}</div>
       </button>`;
     }).join('') + `</div>`;
 }
@@ -8948,22 +9286,26 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
     cloudId: null
   };
 
+  const saleLoc = getActiveLocation();
+  sale.location_id = saleLoc?.id || null;
   for (const line of lines) {
     const p = db.products.find(x => x.id === line.product_id);
     if (!p || p.track_stock === false) continue;
-    p.stock_qty = (Number(p.stock_qty) || 0) - line.qty;
-    p.updated_at = now;
-    const mov = {
-      id: crypto.randomUUID(),
-      product_id: p.id,
-      qty_change: -line.qty,
-      reason: 'sale',
-      reference: saleNumber,
-      note: null,
-      created_at: now
-    };
-    db.stockMovements.push(mov);
-    try { await pushProductToCloud(p); await pushStockMovementToCloud(mov); } catch (e) { console.warn(e); }
+    if (saleLoc) {
+      const { mov } = adjustLocationStock(p.id, saleLoc.id, -line.qty, {
+        reason: 'sale',
+        reference: saleNumber
+      });
+      try {
+        await pushProductToCloud(p);
+        await pushLocationStockToCloud(p.id, saleLoc.id);
+        await pushStockMovementToCloud(mov);
+      } catch (e) { console.warn(e); }
+    } else {
+      p.stock_qty = (Number(p.stock_qty) || 0) - line.qty;
+      p.updated_at = now;
+      try { await pushProductToCloud(p); } catch (e) { console.warn(e); }
+    }
   }
 
   db.posSales.push(sale);
@@ -16872,6 +17214,35 @@ document.getElementById('stockAdjustCancel')?.addEventListener('click', closeSto
 document.getElementById('stockAdjustSave')?.addEventListener('click', () => { saveStockAdjust().catch(e => toast(e.message || 'Save failed')); });
 document.getElementById('productSearch')?.addEventListener('input', () => renderProductsList());
 document.getElementById('productFilter')?.addEventListener('change', () => renderProductsList());
+document.getElementById('productLocationFilter')?.addEventListener('change', () => renderProductsList());
+document.getElementById('btnManageLocations')?.addEventListener('click', openLocationsModal);
+document.getElementById('locationsModalClose')?.addEventListener('click', () => {
+  document.getElementById('locationsModal')?.classList.remove('show');
+  fillProductLocationFilter();
+  renderProductsList();
+});
+document.getElementById('locationAddBtn')?.addEventListener('click', () => {
+  addLocationFromModal().catch(e => toast(e.message || 'Could not add location'));
+});
+document.getElementById('locationsList')?.addEventListener('click', (e) => {
+  const act = e.target.closest('[data-set-active-loc]');
+  if (act) {
+    setActiveLocation(act.getAttribute('data-set-active-loc'));
+    renderLocationsList();
+    toast('POS location set');
+    return;
+  }
+  const def = e.target.closest('[data-set-default-loc]');
+  if (def) {
+    const id = def.getAttribute('data-set-default-loc');
+    db.locations.forEach(l => { l.is_default = l.id === id; });
+    persistDb();
+    const loc = db.locations.find(l => l.id === id);
+    if (loc) pushLocationToCloud(loc).catch(() => {});
+    renderLocationsList();
+    toast('Default location updated');
+  }
+});
 document.getElementById('btnOpenPosFromProducts')?.addEventListener('click', () => { location.href = 'pos.html'; });
 document.getElementById('btnPosToProducts')?.addEventListener('click', () => switchTo('products'));
 document.getElementById('btnPosClearCart')?.addEventListener('click', () => {
