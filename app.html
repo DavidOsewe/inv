@@ -2467,7 +2467,24 @@ input:focus:not(:focus-visible) {
         </select>
       </div>
       <div id="transferList"></div>
+      <div class="insight" style="margin-top:24px">
+        <h3 style="font-size:15px;margin:0 0 8px">Inventory activity</h3>
+        <p class="section-sub" style="margin:0 0 10px">Recent transfers, receives, and stock adjustments (local audit trail).</p>
+        <div id="inventoryAuditList"></div>
+      </div>
     </section>
+
+    <div class="modalback" id="transferDetailModal">
+      <div class="modal" style="max-width:560px">
+        <h2 id="transferDetailTitle">Transfer</h2>
+        <p class="section-sub" id="transferDetailSub">—</p>
+        <div id="transferDetailBody" style="max-height:360px;overflow:auto"></div>
+        <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button class="button" type="button" id="transferDetailClose">Close</button>
+          <button class="button primary" type="button" id="transferDetailReceive" hidden>Receive</button>
+        </div>
+      </div>
+    </div>
 
     <div class="modalback" id="stockTransferModal">
       <div class="modal" style="max-width:560px">
@@ -8085,6 +8102,12 @@ async function confirmReceiveGoods() {
 
   try { await pushPurchaseReceiptToCloud(po, receipt); } catch (e) { console.warn(e); }
   try { await updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
+  try {
+    const locName = db.locations.find(l => l.id === (document.getElementById('receiveLocation')?.value || ''))?.name || '';
+    appendInventoryAudit('purchase.received', 'inventory', po.id,
+      'Goods received ' + (po.purchase_number || '') + (locName ? ' @ ' + locName : '') + ' · ' + formatPosMoney(receiptValue),
+      { purchase_id: po.id, total_value: receiptValue });
+  } catch (e) {}
 
   persistDb();
   closeReceiveModal();
@@ -8312,6 +8335,17 @@ async function saveStockTransfer() {
 
   db.stockTransfers.push(tr);
   try { await pushStockTransferToCloud(tr); } catch (e) { console.warn(e); }
+  try {
+    const fromN = db.locations.find(l => l.id === fromId)?.name || 'from';
+    const toN = db.locations.find(l => l.id === toId)?.name || 'to';
+    appendInventoryAudit(
+      mode === 'quick' ? 'transfer.completed' : 'transfer.shipped',
+      'stock_transfer',
+      tr.id,
+      (mode === 'quick' ? 'Transfer completed' : 'Transfer shipped') + ' ' + transfer_number + ' · ' + fromN + ' → ' + toN,
+      { mode, lines: lines.length }
+    );
+  } catch (e) {}
   persistDb();
   closeStockTransferModal();
   toast(mode === 'quick' ? 'Transfer completed' : 'Shipped — in transit');
@@ -8424,6 +8458,15 @@ async function confirmTransferReceive() {
       }).eq('id', tr.cloudId);
     } catch (e) { console.warn(e); }
   }
+  try {
+    appendInventoryAudit(
+      allDone ? 'transfer.received' : 'transfer.partial_receive',
+      'stock_transfer',
+      tr.id,
+      (allDone ? 'Transfer received' : 'Partial receive') + ' ' + tr.transfer_number,
+      {}
+    );
+  } catch (e) {}
   persistDb();
   closeTransferReceiveModal();
   toast(allDone ? 'Transfer received' : 'Partial receive saved');
@@ -8462,6 +8505,7 @@ function cancelStockTransfer(transferId) {
       if (tr.cloudId && cloud?.client) {
         try { await cloud.client.from('stock_transfers').update({ status: 'cancelled' }).eq('id', tr.cloudId); } catch (e) {}
       }
+      try { appendInventoryAudit('transfer.cancelled', 'stock_transfer', tr.id, 'Transfer cancelled ' + tr.transfer_number, {}); } catch (e) {}
       persistDb();
       toast('Transfer cancelled');
       transfersView();
@@ -8478,6 +8522,82 @@ function cancelStockTransfer(transferId) {
 function transfersView() {
   ensurePosDb();
   renderTransfersList();
+  renderInventoryAuditList();
+}
+
+function transferStatusBadge(status) {
+  const s = String(status || '');
+  const colors = {
+    received: 'background:#d1fae5;color:#065f46',
+    in_transit: 'background:#ffedd5;color:#9a3412',
+    draft: 'background:#e8f0fe;color:#1e40af',
+    cancelled: 'background:#f3f4f6;color:#6b7280'
+  };
+  const style = colors[s] || 'background:#f3f4f6;color:#374151';
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;${style}">${s.replace('_', ' ')}</span>`;
+}
+
+function transferLinesSummary(t) {
+  const lines = t.lines || [];
+  const n = lines.length;
+  const sent = lines.reduce((a, l) => a + (Number(l.qty_sent) || 0), 0);
+  const recv = lines.reduce((a, l) => a + (Number(l.qty_received) || 0), 0);
+  return n + ' line' + (n === 1 ? '' : 's') + ' · sent ' + sent + (recv ? ' · recv ' + recv : '');
+}
+
+function openTransferDetailModal(transferId) {
+  ensurePosDb();
+  const t = db.stockTransfers.find(x => x.id === transferId);
+  if (!t) return;
+  const from = db.locations.find(l => l.id === t.from_location_id);
+  const to = db.locations.find(l => l.id === t.to_location_id);
+  document.getElementById('transferDetailTitle').textContent = t.transfer_number || 'Transfer';
+  document.getElementById('transferDetailSub').innerHTML =
+    transferStatusBadge(t.status) +
+    ' · ' + (from?.name || '?') + ' → ' + (to?.name || '?') +
+    (t.note ? '<br><span class="client-meta">' + t.note + '</span>' : '');
+  const lines = (t.lines || []).map(l => {
+    const sent = Number(l.qty_sent) || 0;
+    const recv = Number(l.qty_received) || 0;
+    const pending = Math.max(0, sent - recv);
+    return `<div style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px">
+      <div><b>${l.product_name || 'Item'}</b>
+        <div class="client-meta">${pending > 0 && t.status === 'in_transit' ? pending + ' still in transit' : ''}</div>
+      </div>
+      <div style="text-align:right;font-variant-numeric:tabular-nums">
+        <div>Sent <b>${sent}</b></div>
+        <div class="client-meta">Received ${recv}</div>
+      </div>
+    </div>`;
+  }).join('') || '<p class="section-sub">No lines</p>';
+  const timeline = [];
+  if (t.created_at) timeline.push('Created ' + String(t.created_at).replace('T', ' ').slice(0, 16));
+  if (t.shipped_at) timeline.push('Shipped ' + String(t.shipped_at).replace('T', ' ').slice(0, 16));
+  if (t.received_at) timeline.push('Received ' + String(t.received_at).replace('T', ' ').slice(0, 16));
+  if (t.status === 'cancelled') timeline.push('Cancelled');
+  const audits = (db.auditEvents || []).filter(e =>
+    e.entityType === 'stock_transfer' && e.entityId === t.id
+  ).slice(-20).reverse();
+  const auditHtml = audits.length
+    ? '<h3 style="font-size:13px;margin:16px 0 8px">Audit</h3>' + audits.map(e =>
+        `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--line)">
+          <div style="color:var(--muted)">${String(e.at || '').replace('T', ' ').slice(0, 16)} · ${e.actorEmail || 'local'}</div>
+          <b>${e.summary || e.action}</b>
+        </div>`
+      ).join('')
+    : '';
+  document.getElementById('transferDetailBody').innerHTML =
+    '<div style="margin-bottom:12px;font-size:12px;color:var(--muted)">' + timeline.join(' · ') + '</div>' +
+    '<h3 style="font-size:13px;margin:0 0 8px">Lines</h3>' + lines + auditHtml;
+  const recvBtn = document.getElementById('transferDetailReceive');
+  if (recvBtn) {
+    recvBtn.hidden = t.status !== 'in_transit';
+    recvBtn.onclick = () => {
+      document.getElementById('transferDetailModal')?.classList.remove('show');
+      openTransferReceiveModal(t.id);
+    };
+  }
+  document.getElementById('transferDetailModal').classList.add('show');
 }
 
 function renderTransfersList() {
@@ -8486,11 +8606,22 @@ function renderTransfersList() {
   const st = document.getElementById('transferStatusFilter')?.value || 'all';
   let list = (db.stockTransfers || []).slice();
   if (st !== 'all') list = list.filter(t => t.status === st);
-  if (q) list = list.filter(t => String(t.transfer_number || '').toLowerCase().includes(q));
+  if (q) {
+    list = list.filter(t => {
+      const from = db.locations.find(l => l.id === t.from_location_id);
+      const to = db.locations.find(l => l.id === t.to_location_id);
+      const blob = [t.transfer_number, from?.name, to?.name, t.note, t.status].join(' ').toLowerCase();
+      return blob.includes(q);
+    });
+  }
   list.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
   const el = document.getElementById('transferList');
   const countEl = document.getElementById('transferCount');
-  if (countEl) countEl.textContent = db.stockTransfers.length + ' transfer' + (db.stockTransfers.length === 1 ? '' : 's');
+  const inTransit = (db.stockTransfers || []).filter(t => t.status === 'in_transit').length;
+  if (countEl) {
+    countEl.textContent = db.stockTransfers.length + ' transfer' + (db.stockTransfers.length === 1 ? '' : 's') +
+      (inTransit ? ' · ' + inTransit + ' in transit' : '');
+  }
   if (!el) return;
   if (!db.stockTransfers.length) {
     el.innerHTML = `<div class="empty"><div class="empty-icon">⇄</div>
@@ -8505,18 +8636,20 @@ function renderTransfersList() {
     return;
   }
   el.innerHTML = `<table class="table desktop-table">
-    <thead><tr><th>Transfer</th><th>Route</th><th>Status</th><th>Date</th><th></th></tr></thead>
+    <thead><tr><th>Transfer</th><th>Route</th><th>Lines</th><th>Status</th><th>Shipped</th><th></th></tr></thead>
     <tbody>${list.map(t => {
       const from = db.locations.find(l => l.id === t.from_location_id);
       const to = db.locations.find(l => l.id === t.to_location_id);
       const canRecv = t.status === 'in_transit';
       const canCancel = t.status === 'draft' || t.status === 'in_transit';
       return `<tr>
-        <td><b>${t.transfer_number}</b></td>
+        <td><b>${t.transfer_number}</b>${t.note ? `<div class="client-meta">${t.note}</div>` : ''}</td>
         <td>${from?.name || '?'} → ${to?.name || '?'}</td>
-        <td>${t.status}</td>
+        <td class="client-meta">${transferLinesSummary(t)}</td>
+        <td>${transferStatusBadge(t.status)}</td>
         <td>${String(t.shipped_at || t.created_at || '').slice(0, 10)}</td>
         <td><div class="client-actions">
+          <button class="button small" type="button" data-view-transfer="${t.id}">View</button>
           ${canRecv ? `<button class="button small" type="button" data-recv-transfer="${t.id}">Receive</button>` : ''}
           ${canCancel ? `<button class="button small" type="button" data-cancel-transfer="${t.id}">Cancel</button>` : ''}
         </div></td>
@@ -8527,9 +8660,10 @@ function renderTransfersList() {
       const to = db.locations.find(l => l.id === t.to_location_id);
       const canRecv = t.status === 'in_transit';
       return `<div class="mobile-card">
-        <div class="mobile-card-title">${t.transfer_number}</div>
-        <div class="mobile-card-sub">${from?.name || '?'} → ${to?.name || '?'} · ${t.status}</div>
+        <div class="mobile-card-title">${t.transfer_number} ${transferStatusBadge(t.status)}</div>
+        <div class="mobile-card-sub">${from?.name || '?'} → ${to?.name || '?'} · ${transferLinesSummary(t)}</div>
         <div class="mobile-card-actions">
+          <button class="button small" type="button" data-view-transfer="${t.id}">View</button>
           ${canRecv ? `<button class="button small" type="button" data-recv-transfer="${t.id}">Receive</button>` : ''}
           ${t.status === 'in_transit' || t.status === 'draft' ? `<button class="button small" type="button" data-cancel-transfer="${t.id}">Cancel</button>` : ''}
         </div>
@@ -8537,6 +8671,37 @@ function renderTransfersList() {
     }).join('')}</div>`;
 }
 
+function appendInventoryAudit(action, entityType, entityId, summary, meta) {
+  try {
+    if (typeof appendBooksAudit === 'function') {
+      return appendBooksAudit(action, entityType || 'inventory', entityId, summary, null, null, meta || {});
+    }
+  } catch (e) { console.warn(e); }
+  return null;
+}
+
+function renderInventoryAuditList() {
+  const el = document.getElementById('inventoryAuditList');
+  if (!el) return;
+  const events = (db.auditEvents || [])
+    .filter(e => ['stock_transfer', 'inventory', 'product', 'stock_movement'].includes(e.entityType) ||
+      /transfer|stock|inventory|purchase_receive|adjustment/i.test(String(e.action || '') + String(e.summary || '')))
+    .slice(-40)
+    .reverse();
+  if (!events.length) {
+    el.innerHTML = '<p class="section-sub">No inventory activity logged yet. Transfers and stock changes will appear here.</p>';
+    return;
+  }
+  el.innerHTML = events.map(e =>
+    `<div style="padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <b>${e.summary || e.action}</b>
+        <span class="client-meta">${String(e.at || '').replace('T', ' ').slice(0, 16)}</span>
+      </div>
+      <div class="client-meta">${e.actorEmail || 'local'} · ${e.entityType || ''}${e.entityId ? ' · ' + String(e.entityId).slice(0, 8) : ''}</div>
+    </div>`
+  ).join('');
+}
 
 function purchasesView() {
   ensurePosDb();
@@ -8947,6 +9112,87 @@ function setActiveLocation(locationId) {
   persistDb();
 }
 
+/** Preferred POS location for current user (team + multi-outlet). */
+function memberLocationStorageKey() {
+  return 'invoicedey-member-location-' + (activeUserId || cloud?.user?.id || 'anon');
+}
+
+function getMyDefaultLocationId() {
+  try {
+    const fromLs = localStorage.getItem(memberLocationStorageKey());
+    if (fromLs && db.locations.some(l => l.id === fromLs)) return fromLs;
+  } catch {}
+  return db.memberDefaultLocationId || null;
+}
+
+async function loadMyMemberLocationFromCloud() {
+  if (!cloud?.client || !cloud?.organizationId || !cloud?.user?.id) return null;
+  try {
+    const { data, error } = await cloud.client
+      .from('organization_members')
+      .select('default_location_id, role')
+      .eq('organization_id', cloud.organizationId)
+      .eq('user_id', cloud.user.id)
+      .maybeSingle();
+    if (error) throw error;
+    db.myOrgRole = String(data?.role || '').toLowerCase() || null;
+    const cloudLocId = data?.default_location_id;
+    if (cloudLocId) {
+      // Map cloud location uuid → local id
+      const loc = db.locations.find(l => l.cloudId === cloudLocId || l.id === cloudLocId);
+      if (loc) {
+        db.memberDefaultLocationId = loc.id;
+        try { localStorage.setItem(memberLocationStorageKey(), loc.id); } catch {}
+        return loc.id;
+      }
+    }
+  } catch (e) { console.warn('member location', e); }
+  return getMyDefaultLocationId();
+}
+
+async function applyMemberLocationScope() {
+  ensurePosDb();
+  await loadMyMemberLocationFromCloud();
+  const def = getMyDefaultLocationId();
+  if (def && db.locations.some(l => l.id === def)) {
+    setActiveLocation(def);
+  }
+  // Non-owners with a default location: keep POS scoped (still can view other locations in Products for now)
+  return def;
+}
+
+async function setMemberDefaultLocation(userId, locationLocalId) {
+  ensurePosDb();
+  const loc = db.locations.find(l => l.id === locationLocalId);
+  if (!cloud?.client || !cloud?.organizationId || !userId) {
+    if (userId === (activeUserId || cloud?.user?.id)) {
+      db.memberDefaultLocationId = locationLocalId || null;
+      try {
+        if (locationLocalId) localStorage.setItem(memberLocationStorageKey(), locationLocalId);
+        else localStorage.removeItem(memberLocationStorageKey());
+      } catch {}
+    }
+    return;
+  }
+  const payload = { default_location_id: loc?.cloudId || null };
+  const { error } = await cloud.client
+    .from('organization_members')
+    .update(payload)
+    .eq('organization_id', cloud.organizationId)
+    .eq('user_id', userId);
+  if (error) throw error;
+  if (userId === (activeUserId || cloud?.user?.id)) {
+    db.memberDefaultLocationId = locationLocalId || null;
+    try {
+      if (locationLocalId) localStorage.setItem(memberLocationStorageKey(), locationLocalId);
+      else localStorage.removeItem(memberLocationStorageKey());
+    } catch {}
+    if (locationLocalId) setActiveLocation(locationLocalId);
+  }
+}
+
+
+
 function locationStockQty(productId, locationId) {
   ensurePosDb();
   const lid = locationId || db.activeLocationId;
@@ -9150,6 +9396,11 @@ async function saveStockAdjust() {
     await pushLocationStockToCloud(id, loc.id);
     await pushStockMovementToCloud(mov);
   } catch (e) { console.warn(e); }
+  try {
+    appendInventoryAudit('stock.adjusted', 'inventory', id,
+      'Stock adjust ' + (p.name || '') + ' @ ' + (loc.name || '') + ' · ' + (change > 0 ? '+' : '') + change,
+      { location_id: loc.id, change });
+  } catch (e) {}
   persistDb();
   closeStockAdjustModal();
   toast('Stock updated');
@@ -9267,20 +9518,29 @@ function renderLocationsList() {
   ensurePosDb();
   const el = document.getElementById('locationsList');
   if (!el) return;
-  el.innerHTML = db.locations.map(l => {
+  const myDef = getMyDefaultLocationId();
+  const role = String(db.myOrgRole || '').toLowerCase();
+  const locked = role === 'member' && myDef;
+  const note = locked
+    ? `<p class="section-sub">Your POS is scoped to your assigned location. Ask an owner to change it under Plan → Team.</p>`
+    : (myDef ? `<p class="section-sub">Your assigned location is selected for POS by default.</p>` : '');
+  el.innerHTML = note + (db.locations.map(l => {
     const active = db.activeLocationId === l.id;
+    const isMine = myDef && l.id === myDef;
+    const canSwitch = !locked || l.id === myDef;
     return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px">
       <div>
         <b>${l.name}</b> <span class="client-meta">${l.location_type || 'store'}${l.code ? ' · ' + l.code : ''}</span>
         ${l.is_default ? ' <span class="badge">Default</span>' : ''}
         ${active ? ' <span class="badge">POS active</span>' : ''}
+        ${isMine ? ' <span class="badge">Assigned to you</span>' : ''}
       </div>
       <div class="client-actions">
-        ${!active ? `<button class="button small" type="button" data-set-active-loc="${l.id}">Use for POS</button>` : ''}
-        ${!l.is_default ? `<button class="button small" type="button" data-set-default-loc="${l.id}">Default</button>` : ''}
+        ${canSwitch && !active ? `<button class="button small" type="button" data-set-active-loc="${l.id}">Use for POS</button>` : ''}
+        ${role !== 'member' && !l.is_default ? `<button class="button small" type="button" data-set-default-loc="${l.id}">Default</button>` : ''}
       </div>
     </div>`;
-  }).join('') || '<p class="section-sub">No locations yet.</p>';
+  }).join('') || '<p class="section-sub">No locations yet.</p>');
 }
 
 async function addLocationFromModal() {
@@ -17667,6 +17927,7 @@ document.getElementById('productLocationFilter')?.addEventListener('change', () 
 document.getElementById('btnManageLocations')?.addEventListener('click', openLocationsModal);
 
 document.getElementById('btnNewTransfer')?.addEventListener('click', openStockTransferModal);
+document.getElementById('transferDetailClose')?.addEventListener('click', () => document.getElementById('transferDetailModal')?.classList.remove('show'));
 document.getElementById('stockTransferModalCancel')?.addEventListener('click', closeStockTransferModal);
 document.getElementById('stockTransferModalSave')?.addEventListener('click', () => {
   saveStockTransfer().catch(e => toast(e.message || 'Transfer failed'));
@@ -17799,6 +18060,11 @@ document.addEventListener('click', (e) => {
     return;
   }
 
+  const viewTr = e.target.closest('[data-view-transfer]');
+  if (viewTr) {
+    openTransferDetailModal(viewTr.getAttribute('data-view-transfer'));
+    return;
+  }
   const recvTr = e.target.closest('[data-recv-transfer]');
   if (recvTr) {
     openTransferReceiveModal(recvTr.getAttribute('data-recv-transfer'));
@@ -19314,6 +19580,18 @@ async function loadTeamPanel() {
       if (!members.length) {
         membersEl.innerHTML = '<div class="team-empty">No members yet.</div>';
       } else {
+        ensurePosDb();
+        // Load default_location_id for members (optional column)
+        let locByUser = {};
+        try {
+          const { data: memRows } = await cloud.client
+            .from('organization_members')
+            .select('user_id, default_location_id')
+            .eq('organization_id', organizationId);
+          (memRows || []).forEach(r => { locByUser[r.user_id] = r.default_location_id; });
+        } catch (e) { console.warn('member locations', e); }
+        const locOpts = db.locations.filter(l => l.active !== false)
+          .map(l => ({ id: l.id, cloudId: l.cloudId, name: l.name }));
         const rows = members.map(m => {
           const email = m.email || 'Member';
           const role = String(m.role || 'member').toLowerCase();
@@ -19324,18 +19602,44 @@ async function loadTeamPanel() {
           const removeBtn = canRemove
             ? `<button class="button small" type="button" data-remove-member="${m.user_id}" data-remove-email="${String(email).replace(/"/g, '&quot;')}">Remove</button>`
             : '';
+          const cloudLoc = locByUser[m.user_id];
+          const localLoc = locOpts.find(l => l.cloudId === cloudLoc || l.id === cloudLoc);
+          let locSelect = '';
+          if (isOwner && locOpts.length) {
+            const options = '<option value="">Any location</option>' + locOpts.map(l =>
+              `<option value="${l.id}" ${localLoc && localLoc.id === l.id ? 'selected' : ''}>${l.name}</option>`
+            ).join('');
+            locSelect = `<select class="button small" data-member-location="${m.user_id}" title="Default POS location" style="max-width:140px">${options}</select>`;
+          } else if (localLoc) {
+            locSelect = `<span class="team-row-sub" title="Default location">${localLoc.name}</span>`;
+          }
           return `<div class="team-row">
             <div class="team-row-main">
               <b title="${email}">${email}</b>
               ${sub ? `<span class="team-row-sub">${sub}</span>` : ''}
             </div>
             <div class="team-row-actions">
+              ${locSelect}
               <span class="${roleClass}">${role}</span>
               ${removeBtn}
             </div>
           </div>`;
         }).join('');
-        membersEl.innerHTML = `<div class="team-block"><div class="team-block-title">Members · ${members.length}</div>${rows}</div>`;
+        membersEl.innerHTML = `<div class="team-block"><div class="team-block-title">Members · ${members.length}</div>
+          <p class="team-help" style="margin:0 0 8px">Default location scopes POS for cashiers (outlet staff).</p>
+          ${rows}</div>`;
+        membersEl.querySelectorAll('[data-member-location]').forEach(sel => {
+          sel.addEventListener('change', async () => {
+            const uid = sel.getAttribute('data-member-location');
+            const lid = sel.value || null;
+            try {
+              await setMemberDefaultLocation(uid, lid);
+              toast(lid ? 'Default location saved' : 'Location cleared');
+            } catch (err) {
+              toast(err.message || 'Could not save location — run pos_member_location.sql?');
+            }
+          });
+        });
       }
     }
 
