@@ -3367,6 +3367,32 @@ input:focus:not(:focus-visible) {
   </div>
 </div>
 
+<div class="modalback" id="supplierPayModal">
+  <div class="modal" style="max-width:420px">
+    <h2>Supplier payment</h2>
+    <p class="section-sub" id="supplierPaySub">—</p>
+    <input type="hidden" id="supplierPayId">
+    <div class="field"><label>Amount owed</label><input id="supplierPayOwed" type="text" readonly></div>
+    <div class="field"><label>Amount paid *</label><input id="supplierPayAmount" type="number" min="0.01" step="0.01" placeholder="0"></div>
+    <div class="two">
+      <div class="field"><label>Date</label><input id="supplierPayDate" type="date"></div>
+      <div class="field"><label>Method</label>
+        <select id="supplierPayMethod">
+          <option value="transfer">Transfer</option>
+          <option value="cash">Cash</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+    </div>
+    <div class="field"><label>Note</label><input id="supplierPayNote" placeholder="Optional reference"></div>
+    <p class="section-sub">Reduces supplier balance. Cash movement is recorded in Money out. If receive already posted Inventory/Cash, leave GL alone to avoid double-counting cash.</p>
+    <div class="buttons" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="button" type="button" id="supplierPayCancel">Cancel</button>
+      <button class="button primary" type="button" id="supplierPaySave">Record payment</button>
+    </div>
+  </div>
+</div>
+
 <div class="modalback" id="purchaseModal">
   <div class="modal" style="max-width:560px">
     <h2 id="purchaseModalTitle">New purchase order</h2>
@@ -3402,7 +3428,14 @@ input:focus:not(:focus-visible) {
     <div class="field" style="margin-top:12px"><label>Note</label><input id="receiveNote" placeholder="Optional"></div>
     <div class="field" style="display:flex;align-items:center;gap:8px;margin-top:8px">
       <input type="checkbox" id="receivePostBooks" checked>
-      <label for="receivePostBooks" style="margin:0">Post to Books (Dr Inventory / Cr Cash)</label>
+      <label for="receivePostBooks" style="margin:0">Post to Books</label>
+    </div>
+    <div class="field" style="margin-top:4px">
+      <label>If posting Books, credit</label>
+      <select id="receivePayMode">
+        <option value="ap">Accounts payable (pay later)</option>
+        <option value="cash">Cash (paid now)</option>
+      </select>
     </div>
     <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
       <button class="button" type="button" id="receiveModalCancel">Cancel</button>
@@ -5179,6 +5212,7 @@ async function startCloudSync(client, user) {
     try { await pullBooksFromCloud(); } catch (e) { console.warn('books pull', e.message || e); }
     try { processDueRecurringJournals(); } catch (e) {}
     try { await pullProductsFromCloud(); } catch (e) { console.warn('products pull', e.message || e); }
+    try { await pullPurchasesBundleFromCloud(); } catch (e) { console.warn('purchases pull', e.message || e); }
     try { await pushBooksToCloud(); } catch (e) { console.warn('books push', e.message || e); }
     dashboard();
   } catch (error) {
@@ -7874,26 +7908,29 @@ async function confirmReceiveGoods() {
     received_at: now,
     note: (document.getElementById('receiveNote').value || '').trim() || null,
     total_value: receiptValue,
-    lines: receiptLines
+    lines: receiptLines,
+    cloudId: null
   };
   db.purchaseReceipts.push(receipt);
 
-  // Books: inventory in / cash out
+  // Books: Dr Inventory 1300 / Cr AP 2000 (default) or Cr Cash 1000
   if (document.getElementById('receivePostBooks')?.checked && receiptValue > 0) {
     try {
       const key = 'po_recv:' + receipt.id;
+      const mode = document.getElementById('receivePayMode')?.value || 'ap';
+      const creditAccount = mode === 'cash' ? '1000' : '2000';
       postJournal({
         date: now.slice(0, 10),
-        memo: 'Goods received · ' + po.purchase_number,
+        memo: 'Goods received · ' + po.purchase_number + (mode === 'cash' ? ' (paid)' : ' (on account)'),
         source: 'purchase_receive',
         sourceKey: 'j:' + key,
         currency: po.currency || posCurrency(),
         lines: [
           { accountId: '1300', debit: receiptValue, credit: 0 },
-          { accountId: '1000', debit: 0, credit: receiptValue }
+          { accountId: creditAccount, debit: 0, credit: receiptValue }
         ]
       });
-      if (!db.cashEntries.some(e => e.sourceKey === key)) {
+      if (mode === 'cash' && !db.cashEntries.some(e => e.sourceKey === key)) {
         db.cashEntries.push({
           id: crypto.randomUUID(),
           type: 'out',
@@ -7906,8 +7943,12 @@ async function confirmReceiveGoods() {
           sourceKey: key
         });
       }
+      receipt.books_mode = mode;
     } catch (e) { console.warn('receive books', e); }
   }
+
+  try { await pushPurchaseReceiptToCloud(po, receipt); } catch (e) { console.warn(e); }
+  try { await updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
 
   persistDb();
   closeReceiveModal();
@@ -7915,10 +7956,86 @@ async function confirmReceiveGoods() {
   purchasesView();
 }
 
+async function pushPurchaseReceiptToCloud(po, receipt) {
+  if (!cloud?.client || !cloud?.organizationId || !po.cloudId) return;
+  const { data, error } = await cloud.client.from('purchase_receipts').insert({
+    organization_id: cloud.organizationId,
+    purchase_id: po.cloudId,
+    local_id: receipt.id,
+    received_at: receipt.received_at,
+    note: receipt.note,
+    total_value: receipt.total_value,
+    lines: receipt.lines
+  }).select('id').single();
+  if (error) throw error;
+  receipt.cloudId = data.id;
+
+  // Sync received_qty on cloud lines (best-effort by product name match)
+  try {
+    const { data: cloudLines } = await cloud.client.from('purchase_lines')
+      .select('id, product_name, received_qty, qty')
+      .eq('purchase_id', po.cloudId);
+    for (const localLine of (po.lines || [])) {
+      const match = (cloudLines || []).find(c => c.product_name === localLine.product_name);
+      if (match) {
+        await cloud.client.from('purchase_lines')
+          .update({ received_qty: localLine.received_qty })
+          .eq('id', match.id);
+      }
+    }
+  } catch (e) { console.warn('sync line received_qty', e); }
+}
+
+async function updatePurchaseCloudStatus(po) {
+  if (!cloud?.client || !po.cloudId) return;
+  await cloud.client.from('purchases').update({
+    status: po.status,
+    received_at: po.received_at || null,
+    updated_at: po.updated_at || new Date().toISOString()
+  }).eq('id', po.cloudId);
+}
+
+function cancelPurchaseOrder(purchaseId) {
+  ensurePosDb();
+  const po = db.purchases.find(p => p.id === purchaseId);
+  if (!po) return;
+  const anyReceived = (po.lines || []).some(l => (Number(l.received_qty) || 0) > 0);
+  if (anyReceived || po.status === 'partial' || po.status === 'received') {
+    toast('Cannot cancel — goods already received');
+    return;
+  }
+  confirmAction('Cancel purchase order', `Cancel ${po.purchase_number}? This cannot be undone.`, async () => {
+    po.status = 'cancelled';
+    po.updated_at = new Date().toISOString();
+    try { await updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
+    persistDb();
+    toast('Purchase cancelled');
+    purchasesView();
+  });
+}
+
+function markPurchaseOrdered(purchaseId) {
+  ensurePosDb();
+  const po = db.purchases.find(p => p.id === purchaseId);
+  if (!po || po.status !== 'draft') return;
+  po.status = 'ordered';
+  po.updated_at = new Date().toISOString();
+  try { updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
+  persistDb();
+  toast('Marked as ordered');
+  purchasesView();
+}
+
 function purchasesView() {
   ensurePosDb();
-  renderPurchasesList();
-  renderSuppliersList();
+  try {
+    pullPurchasesBundleFromCloud()
+      .then(() => { renderPurchasesList(); renderSuppliersList(); })
+      .catch(() => { renderPurchasesList(); renderSuppliersList(); });
+  } catch {
+    renderPurchasesList();
+    renderSuppliersList();
+  }
 }
 
 function renderPurchasesList() {
@@ -7955,24 +8072,255 @@ function renderPurchasesList() {
     <tbody>${list.map(p => {
       const sup = db.suppliers.find(s => s.id === p.supplier_id);
       const canRecv = p.status === 'ordered' || p.status === 'partial' || p.status === 'draft';
+      const canCancel = p.status === 'draft' || p.status === 'ordered';
+      const canOrder = p.status === 'draft';
+      const actions = [
+        canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : '',
+        canOrder ? `<button class="button small" type="button" data-order-po="${p.id}">Order</button>` : '',
+        canCancel ? `<button class="button small" type="button" data-cancel-po="${p.id}">Cancel</button>` : ''
+      ].filter(Boolean).join(' ');
       return `<tr>
         <td><b>${p.purchase_number}</b></td>
         <td>${sup?.name || '—'}</td>
         <td>${p.order_date || '—'}</td>
         <td>${p.status}</td>
         <td class="right">${formatPosMoney(p.total)}</td>
-        <td>${canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : ''}</td>
+        <td><div class="client-actions">${actions}</div></td>
       </tr>`;
     }).join('')}</tbody></table>
     <div class="mobile-list">${list.map(p => {
       const sup = db.suppliers.find(s => s.id === p.supplier_id);
       const canRecv = p.status === 'ordered' || p.status === 'partial' || p.status === 'draft';
+      const canCancel = p.status === 'draft' || p.status === 'ordered';
+      const canOrder = p.status === 'draft';
       return `<div class="mobile-card">
         <div class="mobile-card-title">${p.purchase_number}</div>
         <div class="mobile-card-sub">${sup?.name || '—'} · ${p.status} · ${formatPosMoney(p.total)}</div>
-        ${canRecv ? `<div class="mobile-card-actions"><button class="button small" type="button" data-receive-po="${p.id}">Receive</button></div>` : ''}
+        <div class="mobile-card-actions">
+          ${canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : ''}
+          ${canOrder ? `<button class="button small" type="button" data-order-po="${p.id}">Order</button>` : ''}
+          ${canCancel ? `<button class="button small" type="button" data-cancel-po="${p.id}">Cancel</button>` : ''}
+        </div>
       </div>`;
     }).join('')}</div>`;
+}
+
+function openSupplierPayModal(supplierId) {
+  ensurePosDb();
+  const s = db.suppliers.find(x => x.id === supplierId);
+  if (!s) return;
+  const bal = supplierBalance(supplierId);
+  document.getElementById('supplierPayId').value = s.id;
+  document.getElementById('supplierPaySub').textContent = s.name;
+  document.getElementById('supplierPayOwed').value = bal > 0 ? formatPosMoney(bal) : '— (nothing owed)';
+  document.getElementById('supplierPayAmount').value = bal > 0 ? String(Math.round(bal * 100) / 100) : '';
+  document.getElementById('supplierPayDate').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('supplierPayMethod').value = 'transfer';
+  document.getElementById('supplierPayNote').value = '';
+  document.getElementById('supplierPayModal').classList.add('show');
+  document.getElementById('supplierPayAmount').focus();
+}
+
+function closeSupplierPayModal() {
+  document.getElementById('supplierPayModal')?.classList.remove('show');
+}
+
+async function saveSupplierPayment() {
+  ensurePosDb();
+  const supplierId = document.getElementById('supplierPayId').value;
+  const s = db.suppliers.find(x => x.id === supplierId);
+  if (!s) return;
+  const amount = Number(document.getElementById('supplierPayAmount').value);
+  if (!(amount > 0)) { toast('Enter a payment amount'); return; }
+  const now = new Date().toISOString();
+  const pay = {
+    id: crypto.randomUUID(),
+    supplier_id: supplierId,
+    amount,
+    currency: posCurrency(),
+    payment_date: document.getElementById('supplierPayDate').value || now.slice(0, 10),
+    method: document.getElementById('supplierPayMethod').value || 'transfer',
+    note: (document.getElementById('supplierPayNote').value || '').trim() || null,
+    created_at: now,
+    cloudId: null
+  };
+  db.supplierPayments.push(pay);
+
+  // Dr Accounts payable 2000 / Cr Cash 1000 — settles liability from credit receives
+  try {
+    const key = 'sup_pay:' + pay.id;
+    if (!db.cashEntries.some(e => e.sourceKey === key)) {
+      db.cashEntries.push({
+        id: crypto.randomUUID(),
+        type: 'out',
+        category: 'supplier',
+        amount,
+        currency: pay.currency,
+        date: pay.payment_date,
+        note: 'Supplier payment · ' + s.name + (pay.note ? ' · ' + pay.note : ''),
+        source: 'supplier_payment',
+        sourceKey: key
+      });
+    }
+    postJournal({
+      date: pay.payment_date,
+      memo: 'Supplier payment · ' + s.name,
+      source: 'supplier_payment',
+      sourceKey: 'j:' + key,
+      currency: pay.currency,
+      lines: [
+        { accountId: '2000', debit: amount, credit: 0 },
+        { accountId: '1000', debit: 0, credit: amount }
+      ]
+    });
+  } catch (e) { console.warn('supplier pay books', e); }
+
+  try { await pushSupplierPaymentToCloud(pay); } catch (e) { console.warn(e); }
+  persistDb();
+  closeSupplierPayModal();
+  toast('Payment recorded');
+  purchasesView();
+}
+
+async function pushSupplierPaymentToCloud(pay) {
+  if (!cloud?.client || !cloud?.organizationId) return;
+  const s = db.suppliers.find(x => x.id === pay.supplier_id);
+  if (!s?.cloudId) return;
+  const { data, error } = await cloud.client.from('supplier_payments').insert({
+    organization_id: cloud.organizationId,
+    supplier_id: s.cloudId,
+    local_id: pay.id,
+    amount: pay.amount,
+    currency: pay.currency,
+    payment_date: pay.payment_date,
+    method: pay.method,
+    note: pay.note
+  }).select('id').single();
+  if (error) throw error;
+  pay.cloudId = data.id;
+}
+
+async function pullSuppliersFromCloud() {
+  if (!cloud?.client || !cloud?.organizationId) return;
+  const { data, error } = await cloud.client.from('suppliers')
+    .select('*')
+    .eq('organization_id', cloud.organizationId)
+    .order('name');
+  if (error) throw error;
+  ensurePosDb();
+  const byLocal = new Map(db.suppliers.map(s => [s.id, s]));
+  const byCloud = new Map(db.suppliers.filter(s => s.cloudId).map(s => [s.cloudId, s]));
+  (data || []).forEach(row => {
+    let s = byCloud.get(row.id) || (row.local_id && byLocal.get(row.local_id));
+    if (!s) {
+      s = { id: row.local_id || row.id, cloudId: row.id };
+      db.suppliers.push(s);
+    }
+    Object.assign(s, {
+      cloudId: row.id,
+      name: row.name,
+      phone: row.phone,
+      email: row.email,
+      note: row.note,
+      active: row.active !== false,
+      updated_at: row.updated_at
+    });
+  });
+  persistDb();
+}
+
+async function pullPurchasesFromCloud() {
+  if (!cloud?.client || !cloud?.organizationId) return;
+  const { data, error } = await cloud.client.from('purchases')
+    .select('*')
+    .eq('organization_id', cloud.organizationId)
+    .order('order_date', { ascending: false });
+  if (error) throw error;
+  ensurePosDb();
+  const byLocal = new Map(db.purchases.map(p => [p.id, p]));
+  const byCloud = new Map(db.purchases.filter(p => p.cloudId).map(p => [p.cloudId, p]));
+  const supplierByCloud = new Map(db.suppliers.filter(s => s.cloudId).map(s => [s.cloudId, s]));
+
+  for (const row of (data || [])) {
+    let po = byCloud.get(row.id) || (row.local_id && byLocal.get(row.local_id));
+    if (!po) {
+      po = { id: row.local_id || row.id, cloudId: row.id, lines: [] };
+      db.purchases.push(po);
+    }
+    const sup = row.supplier_id ? supplierByCloud.get(row.supplier_id) : null;
+    Object.assign(po, {
+      cloudId: row.id,
+      supplier_id: sup?.id || po.supplier_id || null,
+      purchase_number: row.purchase_number,
+      status: row.status,
+      order_date: row.order_date,
+      expected_date: row.expected_date,
+      currency: row.currency,
+      total: Number(row.total) || 0,
+      note: row.note,
+      updated_at: row.updated_at
+    });
+    // lines
+    try {
+      const { data: lines } = await cloud.client.from('purchase_lines')
+        .select('*')
+        .eq('purchase_id', row.id);
+      if (lines && lines.length) {
+        const productByCloud = new Map(db.products.filter(p => p.cloudId).map(p => [p.cloudId, p]));
+        po.lines = lines.map(l => {
+          const prod = l.product_id ? productByCloud.get(l.product_id) : null;
+          return {
+            id: l.id,
+            product_id: prod?.id || null,
+            product_name: l.product_name,
+            qty: Number(l.qty) || 0,
+            unit_cost: Number(l.unit_cost) || 0,
+            line_total: Number(l.line_total) || 0,
+            received_qty: Number(l.received_qty) || 0
+          };
+        });
+      }
+    } catch (e) { console.warn('purchase lines pull', e); }
+  }
+  persistDb();
+}
+
+async function pullSupplierPaymentsFromCloud() {
+  if (!cloud?.client || !cloud?.organizationId) return;
+  const { data, error } = await cloud.client.from('supplier_payments')
+    .select('*')
+    .eq('organization_id', cloud.organizationId)
+    .order('payment_date', { ascending: false });
+  if (error) throw error;
+  ensurePosDb();
+  const byLocal = new Map(db.supplierPayments.map(p => [p.id, p]));
+  const byCloud = new Map(db.supplierPayments.filter(p => p.cloudId).map(p => [p.cloudId, p]));
+  const supplierByCloud = new Map(db.suppliers.filter(s => s.cloudId).map(s => [s.cloudId, s]));
+  (data || []).forEach(row => {
+    let pay = byCloud.get(row.id) || (row.local_id && byLocal.get(row.local_id));
+    if (!pay) {
+      pay = { id: row.local_id || row.id, cloudId: row.id };
+      db.supplierPayments.push(pay);
+    }
+    const sup = supplierByCloud.get(row.supplier_id);
+    Object.assign(pay, {
+      cloudId: row.id,
+      supplier_id: sup?.id || pay.supplier_id,
+      amount: Number(row.amount) || 0,
+      currency: row.currency,
+      payment_date: row.payment_date,
+      method: row.method,
+      note: row.note,
+      created_at: row.created_at
+    });
+  });
+  persistDb();
+}
+
+async function pullPurchasesBundleFromCloud() {
+  await pullSuppliersFromCloud();
+  await pullPurchasesFromCloud();
+  await pullSupplierPaymentsFromCloud();
 }
 
 function renderSuppliersList() {
@@ -7995,9 +8343,23 @@ function renderSuppliersList() {
         <td><b>${s.name}</b></td>
         <td>${s.phone || '—'}</td>
         <td class="right">${bal > 0.001 ? formatPosMoney(bal) : '—'}</td>
-        <td><button class="button small" type="button" data-edit-supplier="${s.id}">Edit</button></td>
+        <td><div class="client-actions">
+          <button class="button small" type="button" data-edit-supplier="${s.id}">Edit</button>
+          <button class="button small" type="button" data-pay-supplier="${s.id}">Pay</button>
+        </div></td>
       </tr>`;
-    }).join('')}</tbody></table>`;
+    }).join('')}</tbody></table>
+    <div class="mobile-list">${db.suppliers.map(s => {
+      const bal = supplierBalance(s.id);
+      return `<div class="mobile-card">
+        <div class="mobile-card-title">${s.name}</div>
+        <div class="mobile-card-sub">${s.phone || 'No phone'}${bal > 0.001 ? ' · Owes ' + formatPosMoney(bal) : ''}</div>
+        <div class="mobile-card-actions">
+          <button class="button small" type="button" data-edit-supplier="${s.id}">Edit</button>
+          <button class="button small" type="button" data-pay-supplier="${s.id}">Pay</button>
+        </div>
+      </div>`;
+    }).join('')}</div>`;
 }
 
 /* ---------- POS + Inventory (Phase 1) ---------- */
@@ -16357,6 +16719,8 @@ $('#addClient').onclick = () => openClientModal(null);
 document.getElementById('btnAddSupplier')?.addEventListener('click', () => openSupplierModal(null));
 document.getElementById('supplierModalCancel')?.addEventListener('click', closeSupplierModal);
 document.getElementById('supplierModalSave')?.addEventListener('click', () => { saveSupplierFromModal().catch(e => toast(e.message || 'Save failed')); });
+document.getElementById('supplierPayCancel')?.addEventListener('click', closeSupplierPayModal);
+document.getElementById('supplierPaySave')?.addEventListener('click', () => { saveSupplierPayment().catch(e => toast(e.message || 'Payment failed')); });
 document.getElementById('btnNewPurchase')?.addEventListener('click', openPurchaseModal);
 document.getElementById('purchaseModalCancel')?.addEventListener('click', closePurchaseModal);
 document.getElementById('purchaseSaveDraft')?.addEventListener('click', () => { savePurchase('draft').catch(e => toast(e.message || 'Save failed')); });
@@ -16462,10 +16826,25 @@ document.addEventListener('click', (e) => {
     openReceiveModal(recv.getAttribute('data-receive-po'));
     return;
   }
+  const orderPo = e.target.closest('[data-order-po]');
+  if (orderPo) {
+    markPurchaseOrdered(orderPo.getAttribute('data-order-po'));
+    return;
+  }
+  const cancelPo = e.target.closest('[data-cancel-po]');
+  if (cancelPo) {
+    cancelPurchaseOrder(cancelPo.getAttribute('data-cancel-po'));
+    return;
+  }
   const editSup = e.target.closest('[data-edit-supplier]');
   if (editSup) {
     const s = db.suppliers.find(x => x.id === editSup.getAttribute('data-edit-supplier'));
     if (s) openSupplierModal(s);
+    return;
+  }
+  const paySup = e.target.closest('[data-pay-supplier]');
+  if (paySup) {
+    openSupplierPayModal(paySup.getAttribute('data-pay-supplier'));
     return;
   }
   const add = e.target.closest('[data-pos-add]');
