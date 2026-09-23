@@ -796,15 +796,17 @@ let lastCompletedSale = null;
 
 function printSaleReceipt(sale) {
   if (!sale) { toast('Nothing to print'); return; }
-  const loc = getActiveLocation();
+  const loc = sale.location_name
+    ? { name: sale.location_name }
+    : getActiveLocation();
   const biz = (db.profile && (db.profile.businessName || db.profile.name)) || 'Store';
   const lines = (sale.lines || []).map(l =>
     '<tr><td style="padding:4px 0">' + escapeHtml(l.name) + ' × ' + l.qty +
     '</td><td style="text-align:right;padding:4px 0">' + money(l.total) + '</td></tr>'
   ).join('');
-  const html = '<div style="font-family:ui-monospace,monospace;max-width:280px;margin:0 auto;font-size:12px">' +
+  const bodyHtml = '<div style="font-family:ui-monospace,Menlo,Consolas,monospace;max-width:280px;margin:0 auto;font-size:12px;color:#111">' +
     '<div style="text-align:center;font-weight:800;font-size:14px">' + escapeHtml(biz) + '</div>' +
-    (loc ? '<div style="text-align:center;color:#666">' + escapeHtml(loc.name) + '</div>' : '') +
+    (loc && loc.name ? '<div style="text-align:center;color:#666">' + escapeHtml(loc.name) + '</div>' : '') +
     '<div style="text-align:center;margin:8px 0">' + escapeHtml(sale.sale_number) + '<br>' +
     String(sale.sold_at || '').replace('T', ' ').slice(0, 16) + '</div>' +
     '<table style="width:100%;border-top:1px dashed #999;border-bottom:1px dashed #999;margin:8px 0">' +
@@ -816,11 +818,46 @@ function printSaleReceipt(sale) {
       '<br>Change: ' + money(sale.change_given) + '</div>' : '') +
     (sale.payment_note ? '<div style="margin-top:4px">' + escapeHtml(sale.payment_note) + '</div>' : '') +
     '<div style="text-align:center;margin-top:14px;color:#666">Thank you</div></div>';
-  const w = window.open('', '_blank', 'noopener,width=320,height=480');
-  if (!w) { toast('Allow pop-ups to print receipt'); return; }
-  w.document.write('<!doctype html><html><head><title>' + escapeHtml(sale.sale_number) +
-    '</title></head><body onload="setTimeout(function(){print()},300)">' + html + '</body></html>');
-  w.document.close();
+
+  // Prefer hidden iframe (no pop-up blocker). Fallback to window.open.
+  const docHtml = '<!doctype html><html><head><meta charset="utf-8"><title>' +
+    escapeHtml(sale.sale_number || 'Receipt') +
+    '</title><style>@page{margin:6mm}body{margin:0;padding:8px}</style></head><body>' +
+    bodyHtml + '</body></html>';
+
+  try {
+    let iframe = document.getElementById('posPrintFrame');
+    if (!iframe) {
+      iframe = document.createElement('iframe');
+      iframe.id = 'posPrintFrame';
+      iframe.setAttribute('aria-hidden', 'true');
+      iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none';
+      document.body.appendChild(iframe);
+    }
+    const idoc = iframe.contentDocument || iframe.contentWindow.document;
+    idoc.open();
+    idoc.write(docHtml);
+    idoc.close();
+    const trigger = () => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch (err) {
+        toast('Use browser Print (Ctrl/Cmd+P) if dialog did not open');
+      }
+    };
+    setTimeout(trigger, 250);
+  } catch (e) {
+    const w = window.open('', '_blank', 'noopener,width=360,height=560');
+    if (!w) {
+      toast('Allow pop-ups once, or enable printing for this site');
+      return;
+    }
+    w.document.open();
+    w.document.write(docHtml);
+    w.document.close();
+    setTimeout(() => { try { w.focus(); w.print(); } catch (_) {} }, 300);
+  }
 }
 
 
