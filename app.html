@@ -5951,37 +5951,41 @@ async function cancelPlanRenewal() {
     toast('You are on the Free plan.');
     return;
   }
-  if (!confirm('Cancel automatic renewal? You will keep ' + (e.plan_name || plan) + ' until the end of the current period.')) {
-    return;
-  }
-  const btn = document.getElementById('btnCancelRenewal');
-  if (btn) btn.disabled = true;
-  try {
-    const organizationId = await ensureCloudOrganization();
-    const client = cloud.client || await getSupabase();
-    const { data, error } = await client.functions.invoke('cancel-subscription', {
-      body: { organization_id: organizationId }
-    });
-    if (error) throw error;
-    const payload = typeof data === 'string' ? JSON.parse(data) : data;
-    const status = document.getElementById('billingCancelStatus');
-    if (status) {
-      status.style.display = 'block';
-      status.textContent = payload?.ok
-        ? ('Renewal cancelled. Access continues' + (payload.plan_renews_at ? ' until ' + new Date(payload.plan_renews_at).toLocaleDateString() : ' until the end of your paid period') + '.')
-        : (payload?.message || payload?.error || 'Could not cancel. Email ' + SUPPORT_EMAIL);
-    }
-    track('billing_cancel_requested', { plan, ok: !!payload?.ok });
-    toast(payload?.ok ? 'Renewal cancelled.' : (payload?.message || 'Cancel failed'));
-    await getEntitlements(true);
-    if (typeof planView === 'function') planView();
-  } catch (err) {
-    console.warn('cancel renewal', err.message || err);
-    toast('Could not cancel renewal. Email ' + SUPPORT_EMAIL);
-    track('billing_cancel_failed', { error: String(err.message || err) });
-  } finally {
-    if (btn) btn.disabled = false;
-  }
+  confirmAction(
+    'Cancel automatic renewal',
+    'You will keep ' + (e.plan_name || plan) + ' until the end of the current period. Continue?',
+    async () => {
+      const btn = document.getElementById('btnCancelRenewal');
+      if (btn) btn.disabled = true;
+      try {
+        const organizationId = await ensureCloudOrganization();
+        const client = cloud.client || await getSupabase();
+        const { data, error } = await client.functions.invoke('cancel-subscription', {
+          body: { organization_id: organizationId }
+        });
+        if (error) throw error;
+        const payload = typeof data === 'string' ? JSON.parse(data) : data;
+        const status = document.getElementById('billingCancelStatus');
+        if (status) {
+          status.style.display = 'block';
+          status.textContent = payload?.ok
+            ? ('Renewal cancelled. Access continues' + (payload.plan_renews_at ? ' until ' + new Date(payload.plan_renews_at).toLocaleDateString() : ' until the end of your paid period') + '.')
+            : (payload?.message || payload?.error || 'Could not cancel. Email ' + SUPPORT_EMAIL);
+        }
+        track('billing_cancel_requested', { plan, ok: !!payload?.ok });
+        toast(payload?.ok ? 'Renewal cancelled.' : (payload?.message || 'Cancel failed'));
+        await getEntitlements(true);
+        if (typeof planView === 'function') planView();
+      } catch (err) {
+        console.warn('cancel renewal', err.message || err);
+        toast('Could not cancel renewal. Email ' + SUPPORT_EMAIL);
+        track('billing_cancel_failed', { error: String(err.message || err) });
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    },
+    { okLabel: 'Cancel renewal', danger: true }
+  );
 }
 
 document.getElementById('btnCancelRenewal')?.addEventListener('click', () => {
@@ -6086,12 +6090,18 @@ document.addEventListener('click', (e) => {
     e.preventDefault();
     const id = rjDel.getAttribute('data-rj-del');
     const sch = (db.recurringJournals || []).find(s => s.id === id);
-    if (!confirm('Delete schedule “' + ((sch && sch.memo) || 'this') + '”? Posted journals stay in the ledger.')) return;
-    db.recurringJournals = (db.recurringJournals || []).filter(s => s.id !== id);
-    save();
-    try { queueBooksCloudSync(); } catch (_) {}
-    try { renderBooksRecurringJ(); } catch (_) { booksView(); }
-    toast('Schedule deleted');
+    confirmAction(
+      'Delete schedule',
+      'Delete schedule “' + ((sch && sch.memo) || 'this') + '”? Posted journals stay in the ledger.',
+      () => {
+        db.recurringJournals = (db.recurringJournals || []).filter(s => s.id !== id);
+        save();
+        try { queueBooksCloudSync(); } catch (_) {}
+        try { renderBooksRecurringJ(); } catch (_) { booksView(); }
+        toast('Schedule deleted');
+      },
+      { okLabel: 'Delete', danger: true }
+    );
     return;
   }
   const delAcc = e.target.closest('[data-del-account]');
@@ -6280,9 +6290,12 @@ async function startPaystackCheckout(plan, source) {
 
   if (!cloud.user) {
     track('upgrade_signin_required', { plan: planId, source: source || 'unknown' });
-    if (confirm(`${priceLine}\n\nSign in to upgrade your plan.`)) {
-      goToSignup();
-    }
+    confirmAction(
+      'Sign in required',
+      priceLine + '\n\nSign in to upgrade your plan.',
+      () => goToSignup(),
+      { okLabel: 'Sign in' }
+    );
     return;
   }
 
@@ -6327,7 +6340,7 @@ async function startPaystackCheckout(plan, source) {
     track('checkout_failed', { plan: planId, error: String(e.message || e) });
     const msg = String(e.message || e);
     if (msg.includes('SIGN_IN_REQUIRED') || msg.includes('not authenticated')) {
-      if (confirm('Sign in to upgrade your plan.')) goToSignup();
+      confirmAction('Sign in required', 'Sign in to upgrade your plan.', () => goToSignup(), { okLabel: 'Sign in' });
       return;
     }
     if (msg.includes('FunctionsFetchError') || msg.includes('Failed to send') || msg.includes('404')) {
@@ -6756,11 +6769,23 @@ function switchTo(v) {
   if (v === 'plan') planView();
 }
 
-function confirmAction(title, message, onConfirm) {
+function confirmAction(title, message, onConfirm, opts) {
+  opts = opts || {};
   pendingConfirm = onConfirm;
-  $('#confirmTitle').textContent = title;
-  $('#confirmMessage').textContent = message;
-  $('#confirmModal').classList.add('show');
+  const titleEl = $('#confirmTitle');
+  const msgEl = $('#confirmMessage');
+  const okBtn = $('#confirmOk');
+  if (titleEl) titleEl.textContent = title || 'Confirm';
+  if (msgEl) {
+    msgEl.textContent = message || '';
+    msgEl.style.whiteSpace = 'pre-wrap';
+  }
+  if (okBtn) {
+    okBtn.textContent = opts.okLabel || 'Confirm';
+    okBtn.className = 'button ' + (opts.danger ? 'danger' : 'primary');
+  }
+  const modal = $('#confirmModal');
+  if (modal) modal.classList.add('show');
 }
 
 function relativeDueLabel(due) {
@@ -12809,9 +12834,13 @@ function renderBooksJournal() {
   });
   el.querySelectorAll('[data-j-reverse]').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (!confirm('Post a reversing journal? The original stays for the audit trail.')) return;
-      reverseJournal(btn.getAttribute('data-j-reverse'));
-      booksView();
+      const jid = btn.getAttribute('data-j-reverse');
+      confirmAction(
+        'Reverse journal',
+        'Post a reversing journal? The original stays for the audit trail.',
+        () => { reverseJournal(jid); booksView(); },
+        { okLabel: 'Post reversal' }
+      );
     });
   });
 }
@@ -13589,9 +13618,13 @@ function renderBooksCoa() {
   el.querySelectorAll('[data-hide-account]').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-hide-account');
-      if (!confirm('Hide account ' + id + ' from lists and reports? Existing journals stay intact. You can unhide later.')) return;
-      persistMeta(id, { hidden: true });
-      toast('Account hidden');
+      confirmAction(
+        'Hide account',
+        'Hide account ' + id + ' from lists and reports? Existing journals stay intact. You can unhide later.',
+        () => { persistMeta(id, { hidden: true }); toast('Account hidden'); try { booksView(); } catch (_) {} },
+        { okLabel: 'Hide account', danger: true }
+      );
+      return;
       renderBooksCoa();
     });
   });
@@ -14520,54 +14553,72 @@ function postOpeningBalances() {
     toast('Opening balances invalid: ' + (v.errors[0] || 'check form'));
     return;
   }
-  if (v.warnings.length) {
-    if (!confirm(v.warnings.join('\n') + '\n\nPost anyway?')) return;
-  }
-  const date = document.getElementById('obDate')?.value || today;
-  if (db.journals.some(j => j.source === 'opening_balance')) {
-    if (!confirm('Opening balances were already posted. Post another opening journal anyway?')) return;
-  }
-  const lines = [];
-  let assets = 0, credits = 0;
-  document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
-    const id = row.getAttribute('data-ob-id');
-    const amt = Number(row.querySelector('.ob-amt')?.value || 0);
-    if (!(amt > 0)) return;
-    const type = row.querySelector('.ob-amt')?.dataset.obType;
-    if (type === 'asset') {
-      lines.push({ accountId: id, debit: amt, credit: 0 });
-      assets += amt;
-    } else {
-      lines.push({ accountId: id, debit: 0, credit: amt });
-      credits += amt;
+  const runPost = () => {
+    const date = document.getElementById('obDate')?.value || today;
+    const lines = [];
+    let assets = 0, credits = 0;
+    document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
+      const id = row.getAttribute('data-ob-id');
+      const amt = Number(row.querySelector('.ob-amt')?.value || 0);
+      if (!(amt > 0)) return;
+      const type = row.querySelector('.ob-amt')?.dataset.obType;
+      if (type === 'asset') {
+        lines.push({ accountId: id, debit: amt, credit: 0 });
+        assets += amt;
+      } else {
+        lines.push({ accountId: id, debit: 0, credit: amt });
+        credits += amt;
+      }
+    });
+    const plug = Math.round((assets - credits) * 100) / 100;
+    // Assets − (Liabilities + Equity entered) → Retained earnings (3200)
+    if (Math.abs(plug) > 0.02) {
+      if (plug > 0) lines.push({ accountId: '3200', debit: 0, credit: plug });
+      else lines.push({ accountId: '3200', debit: -plug, credit: 0 });
     }
-  });
-  const plug = Math.round((assets - credits) * 100) / 100;
-  // Assets − (Liabilities + Equity entered) → Retained earnings (3200)
-  if (Math.abs(plug) > 0.02) {
-    if (plug > 0) lines.push({ accountId: '3200', debit: 0, credit: plug });
-    else lines.push({ accountId: '3200', debit: -plug, credit: 0 });
-  }
-  if (lines.length < 2) {
-    toast('Enter at least two account balances');
+    if (lines.length < 2) {
+      toast('Enter at least two account balances');
+      return;
+    }
+    const entry = postJournal({
+      date,
+      memo: 'Opening balances as at ' + date,
+      source: 'opening_balance',
+      sourceKey: 'j:opening:' + date + ':' + crypto.randomUUID(),
+      lines
+    });
+    if (!entry) { toast('Could not post opening balances'); return; }
+    db.booksSettings.openingDate = date;
+    db.booksSettings.openingPostedAt = new Date().toISOString();
+    save();
+    closeOpeningModal();
+    toast('Opening balances posted');
+    booksTab = 'balance';
+    booksView();
+    track('opening_balances_posted', { lines: lines.length });
+  };
+  const afterWarnings = () => {
+    if (db.journals.some(j => j.source === 'opening_balance')) {
+      confirmAction(
+        'Opening balances already posted',
+        'Opening balances were already posted. Post another opening journal anyway?',
+        runPost,
+        { okLabel: 'Post another' }
+      );
+      return;
+    }
+    runPost();
+  };
+  if (v.warnings.length) {
+    confirmAction(
+      'Review warnings',
+      v.warnings.join('\n') + '\n\nPost anyway?',
+      afterWarnings,
+      { okLabel: 'Post anyway' }
+    );
     return;
   }
-  const entry = postJournal({
-    date,
-    memo: 'Opening balances as at ' + date,
-    source: 'opening_balance',
-    sourceKey: 'j:opening:' + date + ':' + crypto.randomUUID(),
-    lines
-  });
-  if (!entry) { toast('Could not post opening balances'); return; }
-  db.booksSettings.openingDate = date;
-  db.booksSettings.openingPostedAt = new Date().toISOString();
-  save();
-  closeOpeningModal();
-  toast('Opening balances posted');
-  booksTab = 'balance';
-  booksView();
-  track('opening_balances_posted', { lines: lines.length });
+  afterWarnings();
 }
 
 /* ---- Bank reconciliation ---- */
@@ -14918,25 +14969,32 @@ function saveReconciliation() {
     });
   });
   const diff = statement - cleared;
+  const finishRecon = () => {
+    db.reconciliations.push({
+      id: crypto.randomUUID(),
+      accountId,
+      statementBalance: statement,
+      clearedBalance: cleared,
+      difference: diff,
+      statementDate: date,
+      savedAt: new Date().toISOString()
+    });
+    save();
+    toast(Math.abs(diff) < 0.05 ? 'Reconciliation saved — matched' : 'Reconciliation saved with difference');
+    track('bank_reconciled', { accountId, difference: diff });
+    renderBooksReconcile();
+  };
   if (Math.abs(diff) > 0.05) {
-    if (!confirm('Difference is ' + money(diff) + '. Save this reconciliation anyway?')) return;
+    confirmAction(
+      'Save reconciliation',
+      'Difference is ' + money(diff) + '. Save this reconciliation anyway?',
+      finishRecon,
+      { okLabel: 'Save anyway' }
+    );
+    return;
   }
-  db.reconciliations.push({
-    id: crypto.randomUUID(),
-    accountId,
-    statementBalance: statement,
-    clearedBalance: cleared,
-    difference: diff,
-    statementDate: date,
-    savedAt: new Date().toISOString()
-  });
-  save();
-  toast(Math.abs(diff) < 0.05 ? 'Reconciliation saved — matched' : 'Reconciliation saved with difference');
-  track('bank_reconciled', { accountId, difference: diff });
-  renderBooksReconcile();
+  finishRecon();
 }
-
-
 
 /* ========== Bank statement CSV import ========== */
 
@@ -17132,8 +17190,21 @@ function clearPendingBankTx(opts) {
     });
   } else {
     const n = (db.bankTransactions || []).filter(t => t.status === 'pending').length;
-    if (n > 0 && !confirm('Remove ' + n + ' pending bank lines? Matched/added/excluded stay.\n\nFile locks for empty imports are also cleared so you can re-upload and re-map.')) return;
-    db.bankTransactions = (db.bankTransactions || []).filter(t => t.status !== 'pending');
+    if (n > 0) {
+      confirmAction(
+        'Clear pending lines',
+        'Remove ' + n + ' pending bank lines? Matched/added/excluded stay.\n\nFile locks for empty imports are also cleared so you can re-upload and re-map.',
+        () => {
+          db.bankTransactions = (db.bankTransactions || []).filter(t => t.status !== 'pending');
+          const pruned = pruneOrphanStatementImports();
+          save();
+          renderBankTransactions();
+          toast('Pending lines removed' + (pruned ? (' · ' + pruned + ' file locks cleared') : ''));
+        },
+        { okLabel: 'Remove pending', danger: true }
+      );
+      return;
+    }
   }
   const pruned = pruneOrphanStatementImports();
   save();
@@ -17209,22 +17280,24 @@ function offerReimportBankFile(prior, onProceed) {
       'No lines remain from that import (already cleared). Clear the file lock and map again?\n\n' +
       'OK = open mapper\nCancel = keep lock';
   }
-  if (!confirm(msg)) {
-    toast('Import cancelled — existing data kept');
-    try { track('bank_tx_import_dup_cancel', {}); } catch (_) {}
-    return true;
-  }
-  // Clear lock + pending
-  const r = undoPendingBankImport(prior.id);
-  // If prior was only a lock with no batch id match, still remove by contentHash
-  db.statementImports = (db.statementImports || []).filter(s => s.contentHash !== prior.contentHash);
-  try { save(); } catch (_) {}
-  toast(
-    (r.removed ? ('Removed ' + r.removed + ' pending · ') : '') +
-    'Re-map columns for a clean import'
+  confirmAction(
+    'Duplicate import',
+    msg,
+    () => {
+      const r = undoPendingBankImport(prior.id);
+      // If prior was only a lock with no batch id match, still remove by contentHash
+      db.statementImports = (db.statementImports || []).filter(x => x.contentHash !== prior.contentHash);
+      try { save(); } catch (_) {}
+      toast(
+        (r.removed ? ('Removed ' + r.removed + ' pending · ') : '') +
+        'Re-map columns for a clean import'
+      );
+      try { track('bank_tx_import_remap', { removed: r.removed }); } catch (_) {}
+      if (typeof onProceed === 'function') onProceed();
+    },
+    { okLabel: 'Continue' }
   );
-  try { track('bank_tx_import_remap', { removed: r.removed }); } catch (_) {}
-  if (typeof onProceed === 'function') onProceed();
+  // Cancel path: keep existing data (user closed modal or clicked Cancel)
   return true;
 }
 
@@ -18307,11 +18380,17 @@ document.getElementById('rjSave')?.addEventListener('click', () => {
 document.getElementById('rjCloseX')?.addEventListener('click', closeRecurringJournalModal);
 
 document.getElementById('reconClearTicks')?.addEventListener('click', () => {
-  if (!confirm('Clear all reconciliation ticks?')) return;
-  db.clearedJournalLines = {};
-  save();
-  renderBooksReconcile();
-  toast('Ticks cleared');
+  confirmAction(
+    'Clear ticks',
+    'Clear all reconciliation ticks?',
+    () => {
+      db.clearedJournalLines = {};
+      save();
+      renderBooksReconcile();
+      toast('Ticks cleared');
+    },
+    { okLabel: 'Clear ticks', danger: true }
+  );
 });
 
 document.getElementById('jeCancel')?.addEventListener('click', closeJournalModal);
@@ -20087,9 +20166,18 @@ function addPaymentToEdit(amount, date, note, method) {
     if (rDel) {
       e.preventDefault();
       const id = rDel.getAttribute('data-recurring-delete');
-      if (!confirm('Delete this recurring schedule? Existing invoices stay.')) return;
-      db.recurring = (db.recurring || []).filter(x => x.id !== id);
-      save();
+      confirmAction(
+        'Delete schedule',
+        'Delete this recurring schedule? Existing invoices stay.',
+        () => {
+          db.recurring = (db.recurring || []).filter(x => x.id !== id);
+          save();
+          try { recurringView(); } catch (_) {}
+          toast('Schedule deleted');
+        },
+        { okLabel: 'Delete', danger: true }
+      );
+      return;
       if (cloud.client) {
         cloud.client.from('recurring_invoice_schedules').delete().eq('id', id).then(() => {}).catch(() => {});
       }
@@ -20528,37 +20616,42 @@ document.addEventListener('click', async (e) => {
     toast('Missing invite id — refresh and try again');
     return;
   }
-  if (!confirm('Revoke this invite? The link will stop working.')) return;
-  revokeBtn.disabled = true;
-  try {
-    if (!cloud.client || !cloud.user) throw new Error('Sign in first');
-    // Prefer security-definer RPC (bypasses tricky RLS edge cases)
-    let revoked = false;
-    try {
-      const { data, error } = await cloud.client.rpc('revoke_organization_invite', { p_invite_id: inviteId });
-      if (!error) revoked = true;
-      else console.warn('revoke rpc', error.message || error);
-    } catch (rpcErr) {
-      console.warn('revoke rpc missing?', rpcErr.message || rpcErr);
-    }
-    if (!revoked) {
-      const { data, error } = await cloud.client
-        .from('organization_invites')
-        .update({ status: 'revoked' })
-        .eq('id', inviteId)
-        .eq('status', 'pending')
-        .select('id')
-        .maybeSingle();
-      if (error) throw error;
-      if (!data?.id) throw new Error('Revoke blocked (RLS) or invite already used. Run fix_revoke_invite.sql.');
-    }
-    toast('Invite revoked');
-    await loadTeamPanel();
-  } catch (err) {
-    console.error(err);
-    toast(err.message || 'Could not revoke invite');
-    revokeBtn.disabled = false;
-  }
+  confirmAction(
+    'Revoke invite',
+    'Revoke this invite? The link will stop working.',
+    async () => {
+      revokeBtn.disabled = true;
+      try {
+        if (!cloud.client || !cloud.user) throw new Error('Sign in first');
+        let revoked = false;
+        try {
+          const { data, error } = await cloud.client.rpc('revoke_organization_invite', { p_invite_id: inviteId });
+          if (!error) revoked = true;
+          else console.warn('revoke rpc', error.message || error);
+        } catch (rpcErr) {
+          console.warn('revoke rpc missing?', rpcErr.message || rpcErr);
+        }
+        if (!revoked) {
+          const { data, error } = await cloud.client
+            .from('organization_invites')
+            .update({ status: 'revoked' })
+            .eq('id', inviteId)
+            .eq('status', 'pending')
+            .select('id')
+            .maybeSingle();
+          if (error) throw error;
+          if (!data?.id) throw new Error('Revoke blocked (RLS) or invite already used. Run fix_revoke_invite.sql.');
+        }
+        toast('Invite revoked');
+        await loadTeamPanel();
+      } catch (err) {
+        console.error(err);
+        toast(err.message || 'Could not revoke invite');
+        revokeBtn.disabled = false;
+      }
+    },
+    { okLabel: 'Revoke', danger: true }
+  );
 });
 
 document.addEventListener('click', async (e) => {
@@ -20567,42 +20660,47 @@ document.addEventListener('click', async (e) => {
   const userId = removeBtn.getAttribute('data-remove-member');
   const email = removeBtn.getAttribute('data-remove-email') || 'this member';
   if (!userId) return;
-  if (!confirm(`Remove ${email} from this business? They will lose access to shared invoices and clients.`)) return;
-  removeBtn.disabled = true;
-  try {
-    if (!cloud.client || !cloud.user) throw new Error('Sign in first');
-    const organizationId = await ensureCloudOrganization();
-    // Prefer RPC; fall back to direct delete if SQL migration not applied yet
-    let removed = false;
-    const { data, error } = await cloud.client.rpc('remove_organization_member', {
-      p_organization_id: organizationId,
-      p_user_id: userId
-    });
-    if (!error) {
-      removed = true;
-    } else {
-      console.warn('remove rpc', error.message || error);
-      const { data: delRows, error: delErr } = await cloud.client
-        .from('organization_members')
-        .delete()
-        .eq('organization_id', organizationId)
-        .eq('user_id', userId)
-        .select('user_id');
-      if (delErr) throw delErr;
-      if (!delRows?.length) {
-        throw new Error('Could not remove member. Run fix_remove_member.sql in Supabase, then try again.');
+  confirmAction(
+    'Remove member',
+    'Remove ' + email + ' from this business? They will lose access to shared invoices and clients.',
+    async () => {
+      removeBtn.disabled = true;
+      try {
+        if (!cloud.client || !cloud.user) throw new Error('Sign in first');
+        const organizationId = await ensureCloudOrganization();
+        let removed = false;
+        const { data, error } = await cloud.client.rpc('remove_organization_member', {
+          p_organization_id: organizationId,
+          p_user_id: userId
+        });
+        if (!error) {
+          removed = true;
+        } else {
+          console.warn('remove rpc', error.message || error);
+          const { data: delRows, error: delErr } = await cloud.client
+            .from('organization_members')
+            .delete()
+            .eq('organization_id', organizationId)
+            .eq('user_id', userId)
+            .select('user_id');
+          if (delErr) throw delErr;
+          if (!delRows?.length) {
+            throw new Error('Could not remove member. Run fix_remove_member.sql in Supabase, then try again.');
+          }
+          removed = true;
+        }
+        if (removed) {
+          toast('Member removed');
+          await loadTeamPanel();
+        }
+      } catch (err) {
+        console.error(err);
+        toast(err.message || 'Could not remove member');
+        removeBtn.disabled = false;
       }
-      removed = true;
-    }
-    if (removed) {
-      toast('Member removed');
-      await loadTeamPanel();
-    }
-  } catch (err) {
-    console.error(err);
-    toast(err.message || 'Could not remove member');
-    removeBtn.disabled = false;
-  }
+    },
+    { okLabel: 'Remove', danger: true }
+  );
 });
 
 const PENDING_INVITE_KEY = 'invoicedey-pending-invite';
