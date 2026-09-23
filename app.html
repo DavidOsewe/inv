@@ -2400,6 +2400,8 @@ input:focus:not(:focus-visible) {
           <button class="button primary" type="button" id="addProduct">+ Add product</button>
         </div>
       </div>
+      <div id="inventoryNeedsAttention" class="insight" style="margin-bottom:14px;display:none"></div>
+      <div id="inventoryReplenish" class="insight" style="margin-bottom:14px;display:none"></div>
       <div class="client-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <div class="search-bar" style="margin:0;flex:1;max-width:420px">
           <input type="search" id="productSearch" placeholder="Search name, SKU or barcode…">
@@ -8591,6 +8593,15 @@ function transfersView() {
   ensurePosDb();
   renderTransfersList();
   renderInventoryAuditList();
+  // Surface replenish count in transfer subtitle
+  try {
+    const n = getReplenishSuggestions(50).length;
+    const countEl = document.getElementById('transferCount');
+    if (countEl && n && String(db.myOrgRole || '').toLowerCase() !== 'member') {
+      const base = countEl.textContent || '';
+      if (!base.includes('replenish')) countEl.textContent = base + ' · ' + n + ' replenish idea' + (n === 1 ? '' : 's');
+    }
+  } catch (_) {}
 }
 
 function transferStatusBadge(status) {
@@ -9976,15 +9987,261 @@ async function pullProductsFromCloud() {
   persistDb();
 }
 
+
+/* ---------- Phase C: low-stock alerts + replenish suggestions ---------- */
+function getWarehouseLocations() {
+  ensurePosDb();
+  return db.locations.filter(l => l.active !== false && (l.location_type === 'warehouse' || l.is_default));
+}
+
+function getOutletLocations() {
+  ensurePosDb();
+  return db.locations.filter(l => l.active !== false && l.location_type !== 'warehouse');
+}
+
+/** Low / out stock rows per location (tracked products only). */
+function getLowStockAlerts(opts) {
+  ensurePosDb();
+  opts = opts || {};
+  const onlyLocationId = opts.locationId || null;
+  const alerts = [];
+  const locs = db.locations.filter(l => l.active !== false && (!onlyLocationId || l.id === onlyLocationId));
+  db.products.forEach(p => {
+    if (p.active === false || p.track_stock === false) return;
+    const threshold = Number(p.low_stock_at) || 0;
+    locs.forEach(loc => {
+      const qty = locationStockQty(p.id, loc.id);
+      if (qty <= 0) {
+        alerts.push({ level: 'out', product: p, location: loc, qty, threshold, need: Math.max(threshold, 1) });
+      } else if (threshold > 0 && qty <= threshold) {
+        alerts.push({ level: 'low', product: p, location: loc, qty, threshold, need: Math.max(1, threshold * 2 - qty) });
+      }
+    });
+  });
+  // Prefer out first, then lowest qty
+  alerts.sort((a, b) => {
+    if (a.level !== b.level) return a.level === 'out' ? -1 : 1;
+    return a.qty - b.qty;
+  });
+  return alerts;
+}
+
+/**
+ * Suggest moving stock from warehouse (or richest source) to outlets that are low/out.
+ * Returns { product, to, from, qty, onHandTo, onHandFrom }
+ */
+function getReplenishSuggestions(limit) {
+  ensurePosDb();
+  limit = limit || 25;
+  const suggestions = [];
+  const sources = db.locations.filter(l => l.active !== false);
+  // Prefer warehouse as source
+  const rankSource = (l) => (l.location_type === 'warehouse' ? 0 : l.is_default ? 1 : 2);
+
+  db.products.forEach(p => {
+    if (p.active === false || p.track_stock === false) return;
+    const threshold = Number(p.low_stock_at) || 0;
+    const outlets = getOutletLocations();
+    // If no typed outlets, any non-warehouse location that is low
+    const targets = outlets.length ? outlets : db.locations.filter(l => l.active !== false && l.location_type !== 'warehouse');
+    targets.forEach(to => {
+      const onHandTo = locationStockQty(p.id, to.id);
+      const isLow = onHandTo <= 0 || (threshold > 0 && onHandTo <= threshold);
+      if (!isLow) return;
+      // Target fill: at least threshold*2 or 10 units if no threshold
+      const target = threshold > 0 ? Math.max(threshold * 2, threshold + 5) : Math.max(10, onHandTo + 5);
+      let need = Math.max(1, target - onHandTo);
+
+      // Find best source with stock
+      let best = null;
+      sources.forEach(from => {
+        if (from.id === to.id) return;
+        const onHandFrom = locationStockQty(p.id, from.id);
+        if (onHandFrom <= 0) return;
+        if (!best || rankSource(from) < rankSource(best.from) ||
+            (rankSource(from) === rankSource(best.from) && onHandFrom > best.onHandFrom)) {
+          best = { from, onHandFrom };
+        }
+      });
+      if (!best) return;
+      const qty = Math.min(need, best.onHandFrom);
+      if (qty <= 0) return;
+      suggestions.push({
+        product: p,
+        to,
+        from: best.from,
+        qty,
+        onHandTo,
+        onHandFrom: best.onHandFrom,
+        level: onHandTo <= 0 ? 'out' : 'low'
+      });
+    });
+  });
+  suggestions.sort((a, b) => (a.level === 'out' ? 0 : 1) - (b.level === 'out' ? 0 : 1) || a.onHandTo - b.onHandTo);
+  return suggestions.slice(0, limit);
+}
+
+function renderInventoryNeedsAttention() {
+  const el = document.getElementById('inventoryNeedsAttention');
+  if (!el) return;
+  ensurePosDb();
+  const role = String(db.myOrgRole || '').toLowerCase();
+  const myDef = getMyDefaultLocationId();
+  const scoped = role === 'member' && myDef ? myDef : null;
+  const alerts = getLowStockAlerts(scoped ? { locationId: scoped } : {});
+  if (!alerts.length) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = '';
+  const top = alerts.slice(0, 8);
+  el.innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:flex-start">
+      <div>
+        <h3 style="font-size:14px;margin:0 0 4px">Needs attention</h3>
+        <p class="section-sub" style="margin:0">${alerts.length} low / out-of-stock line${alerts.length === 1 ? '' : 's'}${scoped ? ' at your location' : ' across locations'}</p>
+      </div>
+      <button class="button small" type="button" id="btnFilterLowStock">Show low stock</button>
+    </div>
+    <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+      ${top.map(a => {
+        const badge = a.level === 'out'
+          ? '<span style="color:var(--red-text);font-weight:700">Out</span>'
+          : '<span style="color:orange;font-weight:700">Low</span>';
+        return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;flex-wrap:wrap">
+          <span>${badge} · <b>${a.product.name}</b> @ ${a.location.name}</span>
+          <span class="client-meta">${a.qty} on hand${a.threshold ? ' · alert ≤ ' + a.threshold : ''}</span>
+        </div>`;
+      }).join('')}
+      ${alerts.length > top.length ? `<div class="client-meta">+${alerts.length - top.length} more</div>` : ''}
+    </div>`;
+  document.getElementById('btnFilterLowStock')?.addEventListener('click', () => {
+    const f = document.getElementById('productFilter');
+    if (f) f.value = 'low';
+    if (scoped) {
+      const locF = document.getElementById('productLocationFilter');
+      if (locF && [...locF.options].some(o => o.value === scoped)) locF.value = scoped;
+    }
+    renderProductsList();
+  });
+}
+
+function renderInventoryReplenish() {
+  const el = document.getElementById('inventoryReplenish');
+  if (!el) return;
+  ensurePosDb();
+  const role = String(db.myOrgRole || '').toLowerCase();
+  // Members usually don't create transfers from warehouse
+  if (role === 'member') {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  const suggestions = getReplenishSuggestions(12);
+  if (!suggestions.length) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = '';
+  // Group by route from → to for "Transfer all on route"
+  const byRoute = new Map();
+  suggestions.forEach(s => {
+    const key = s.from.id + '→' + s.to.id;
+    if (!byRoute.has(key)) byRoute.set(key, { from: s.from, to: s.to, items: [] });
+    byRoute.get(key).items.push(s);
+  });
+  el.innerHTML = `<div>
+      <h3 style="font-size:14px;margin:0 0 4px">Replenish outlets</h3>
+      <p class="section-sub" style="margin:0 0 10px">Warehouse / source has stock that low outlets need. One tap builds a transfer.</p>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${suggestions.slice(0, 6).map((s, i) => `
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px;padding:8px 0;border-bottom:1px solid var(--line)">
+          <div>
+            <b>${s.product.name}</b>
+            <div class="client-meta">${s.from.name} (${s.onHandFrom}) → ${s.to.name} (${s.onHandTo}) · suggest <b>${s.qty}</b></div>
+          </div>
+          <button class="button small primary" type="button" data-replenish-idx="${i}">Transfer ${s.qty}</button>
+        </div>`).join('')}
+    </div>
+    <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px">
+      ${[...byRoute.values()].slice(0, 3).map(r =>
+        `<button class="button small" type="button" data-replenish-route="${r.from.id}|${r.to.id}">All: ${r.from.name} → ${r.to.name} (${r.items.length})</button>`
+      ).join('')}
+    </div>`;
+  // stash suggestions for click handlers
+  window.__replenishSuggestions = suggestions;
+  el.querySelectorAll('[data-replenish-idx]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const s = (window.__replenishSuggestions || [])[Number(btn.getAttribute('data-replenish-idx'))];
+      if (s) openTransferFromReplenish([s]);
+    });
+  });
+  el.querySelectorAll('[data-replenish-route]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const [fromId, toId] = (btn.getAttribute('data-replenish-route') || '').split('|');
+      const items = (window.__replenishSuggestions || []).filter(s => s.from.id === fromId && s.to.id === toId);
+      if (items.length) openTransferFromReplenish(items);
+    });
+  });
+}
+
+function openTransferFromReplenish(items) {
+  if (!items || !items.length) return;
+  ensurePosDb();
+  if (typeof openStockTransferModal !== 'function') {
+    toast('Open Transfers to create a transfer');
+    return;
+  }
+  openStockTransferModal();
+  const first = items[0];
+  const fromSel = document.getElementById('transferFrom');
+  const toSel = document.getElementById('transferTo');
+  if (fromSel) fromSel.value = first.from.id;
+  if (toSel) toSel.value = first.to.id;
+  document.getElementById('transferShipMode').value = 'quick';
+  document.getElementById('transferNote').value = 'Replenish (suggested)';
+  const lines = items.map(s => ({ product_id: s.product.id, qty: s.qty }));
+  document.getElementById('transferLinesEditor').innerHTML = transferLineEditorHtml(lines);
+  try { initSearchableSelects(document.getElementById('stockTransferModal')); } catch (_) {}
+  toast('Review quantities, then save transfer');
+}
+
+function refreshInventoryOpsPanels() {
+  try { renderInventoryNeedsAttention(); } catch (e) { console.warn(e); }
+  try { renderInventoryReplenish(); } catch (e) { console.warn(e); }
+}
+
+
 function productsView() {
   ensurePosDb();
   fillProductLocationFilter();
+  // Phase C: members default to their assigned location view
+  try {
+    const role = String(db.myOrgRole || '').toLowerCase();
+    const myDef = getMyDefaultLocationId();
+    const locF = document.getElementById('productLocationFilter');
+    if (role === 'member' && myDef && locF && [...locF.options].some(o => o.value === myDef)) {
+      locF.value = myDef;
+    }
+  } catch (_) {}
   try {
     pullProductsFromCloud()
       .then(() => pullLocationsFromCloud())
-      .then(() => { fillProductLocationFilter(); renderProductsList(); })
-      .catch(() => renderProductsList());
-  } catch { renderProductsList(); }
+      .then(() => {
+        fillProductLocationFilter();
+        const role = String(db.myOrgRole || '').toLowerCase();
+        const myDef = getMyDefaultLocationId();
+        const locF = document.getElementById('productLocationFilter');
+        if (role === 'member' && myDef && locF && [...locF.options].some(o => o.value === myDef)) {
+          locF.value = myDef;
+        }
+        renderProductsList();
+        refreshInventoryOpsPanels();
+      })
+      .catch(() => { renderProductsList(); refreshInventoryOpsPanels(); });
+  } catch { renderProductsList(); refreshInventoryOpsPanels(); }
 }
 
 function fillProductLocationFilter() {
@@ -9992,11 +10249,17 @@ function fillProductLocationFilter() {
   const sel = document.getElementById('productLocationFilter');
   if (!sel) return;
   const cur = sel.value || 'all';
-  sel.innerHTML = '<option value="all">All locations (total)</option>' +
-    db.locations.filter(l => l.active !== false).map(l =>
+  const role = String(db.myOrgRole || '').toLowerCase();
+  const myDef = getMyDefaultLocationId();
+  const locked = role === 'member' && myDef;
+  let locs = db.locations.filter(l => l.active !== false);
+  if (locked) locs = locs.filter(l => l.id === myDef);
+  sel.innerHTML = (locked ? '' : '<option value="all">All locations (total)</option>') +
+    locs.map(l =>
       `<option value="${l.id}">${l.name}${l.is_default ? ' (default)' : ''}</option>`
     ).join('');
-  if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  if (locked) sel.value = myDef;
+  else if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
 }
 
 function openLocationsModal() {
