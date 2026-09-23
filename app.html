@@ -2481,7 +2481,48 @@ input:focus:not(:focus-visible) {
         <div id="transferDetailBody" style="max-height:360px;overflow:auto"></div>
         <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
           <button class="button" type="button" id="transferDetailClose">Close</button>
+          <button class="button" type="button" id="transferDetailShare">Share</button>
+          <button class="button" type="button" id="transferDetailPrint">Print</button>
           <button class="button primary" type="button" id="transferDetailReceive" hidden>Receive</button>
+        </div>
+      </div>
+    </div>
+
+    
+    <div class="modalback" id="transferPrintOptionsModal">
+      <div class="modal" style="max-width:440px">
+        <h2>Transfer print layout</h2>
+        <p class="section-sub">Customize the packing / delivery note for drivers.</p>
+        <input type="hidden" id="transferPrintTargetId">
+        <div class="field"><label>Document title</label>
+          <select id="trPrintTitle">
+            <option value="Delivery note">Delivery note</option>
+            <option value="Packing list">Packing list</option>
+            <option value="Stock transfer">Stock transfer</option>
+            <option value="Dispatch note">Dispatch note</option>
+          </select>
+        </div>
+        <div class="field"><label>Density</label>
+          <select id="trPrintDensity">
+            <option value="comfortable">Comfortable (A4)</option>
+            <option value="compact">Compact (less paper)</option>
+          </select>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;font-size:13px;margin:12px 0">
+          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="trPrintBiz" checked> Business name</label>
+          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="trPrintAddr" checked> Location addresses</label>
+          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="trPrintStatus" checked> Status</label>
+          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="trPrintNote" checked> Note</label>
+          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="trPrintCheck" checked> Check column</label>
+          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="trPrintRecv"> Received qty</label>
+          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="trPrintDriver" checked> Driver sign block</label>
+          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="trPrintReceiver" checked> Receiver sign block</label>
+          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="trPrintFooter" checked> Footer / timestamp</label>
+        </div>
+        <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button class="button" type="button" id="trPrintOptsCancel">Cancel</button>
+          <button class="button" type="button" id="trPrintOptsSave">Save layout</button>
+          <button class="button primary" type="button" id="trPrintOptsPrint">Print</button>
         </div>
       </div>
     </div>
@@ -5399,6 +5440,7 @@ const defaultDB = {
   locations: [],
   locationStock: [],
   activeLocationId: null,
+  transferPrintOptions: null,
   stockTransfers: [],
   transferNextNumber: 1
 };
@@ -8545,6 +8587,248 @@ function transferLinesSummary(t) {
   return n + ' line' + (n === 1 ? '' : 's') + ' · sent ' + sent + (recv ? ' · recv ' + recv : '');
 }
 
+
+function getBusinessNameForPrint() {
+  try {
+    return (db.profile && (db.profile.businessName || db.profile.name)) || 'Business';
+  } catch { return 'Business'; }
+}
+
+function defaultTransferPrintOptions() {
+  return {
+    title: 'Delivery note',
+    density: 'comfortable',
+    showBusinessName: true,
+    showAddresses: true,
+    showStatus: true,
+    showNote: true,
+    showCheckColumn: true,
+    showReceivedQty: false,
+    showDriverSign: true,
+    showReceiverSign: true,
+    showFooter: true
+  };
+}
+
+function getTransferPrintOptions() {
+  const d = defaultTransferPrintOptions();
+  const saved = db.transferPrintOptions || {};
+  return Object.assign({}, d, saved);
+}
+
+function saveTransferPrintOptionsFromForm() {
+  const o = {
+    title: document.getElementById('trPrintTitle')?.value || 'Delivery note',
+    density: document.getElementById('trPrintDensity')?.value || 'comfortable',
+    showBusinessName: !!document.getElementById('trPrintBiz')?.checked,
+    showAddresses: !!document.getElementById('trPrintAddr')?.checked,
+    showStatus: !!document.getElementById('trPrintStatus')?.checked,
+    showNote: !!document.getElementById('trPrintNote')?.checked,
+    showCheckColumn: !!document.getElementById('trPrintCheck')?.checked,
+    showReceivedQty: !!document.getElementById('trPrintRecv')?.checked,
+    showDriverSign: !!document.getElementById('trPrintDriver')?.checked,
+    showReceiverSign: !!document.getElementById('trPrintReceiver')?.checked,
+    showFooter: !!document.getElementById('trPrintFooter')?.checked
+  };
+  db.transferPrintOptions = o;
+  try { persistDb(); } catch (e) { try { save(); } catch (_) {} }
+  return o;
+}
+
+function fillTransferPrintOptionsForm() {
+  const o = getTransferPrintOptions();
+  const set = (id, val, isCheck) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (isCheck) el.checked = !!val;
+    else el.value = val;
+  };
+  set('trPrintTitle', o.title);
+  set('trPrintDensity', o.density);
+  set('trPrintBiz', o.showBusinessName, true);
+  set('trPrintAddr', o.showAddresses, true);
+  set('trPrintStatus', o.showStatus, true);
+  set('trPrintNote', o.showNote, true);
+  set('trPrintCheck', o.showCheckColumn, true);
+  set('trPrintRecv', o.showReceivedQty, true);
+  set('trPrintDriver', o.showDriverSign, true);
+  set('trPrintReceiver', o.showReceiverSign, true);
+  set('trPrintFooter', o.showFooter, true);
+}
+
+function openTransferPrintOptions(transferId) {
+  ensurePosDb();
+  document.getElementById('transferPrintTargetId').value = transferId || '';
+  fillTransferPrintOptionsForm();
+  document.getElementById('transferPrintOptionsModal')?.classList.add('show');
+  try { initSearchableSelects(document.getElementById('transferPrintOptionsModal')); } catch (_) {}
+}
+
+function closeTransferPrintOptions() {
+  document.getElementById('transferPrintOptionsModal')?.classList.remove('show');
+}
+
+/** Plain text for WhatsApp / SMS — driver packing note */
+function buildTransferShareText(t) {
+  ensurePosDb();
+  const from = db.locations.find(l => l.id === t.from_location_id);
+  const to = db.locations.find(l => l.id === t.to_location_id);
+  const biz = getBusinessNameForPrint();
+  const lines = (t.lines || []).map((l, i) =>
+    (i + 1) + '. ' + (l.product_name || 'Item') + ' × ' + (Number(l.qty_sent) || 0)
+  ).join('\n');
+  const date = String(t.shipped_at || t.created_at || '').slice(0, 10);
+  return (
+    '*' + biz + '* — Stock transfer\n' +
+    (t.transfer_number || '') + ' · ' + date + '\n' +
+    'From: ' + (from?.name || '?') + (from?.address ? ' (' + from.address + ')' : '') + '\n' +
+    'To: ' + (to?.name || '?') + (to?.address ? ' (' + to.address + ')' : '') + '\n' +
+    'Status: ' + String(t.status || '').replace('_', ' ') + '\n' +
+    (t.note ? 'Note: ' + t.note + '\n' : '') +
+    '\n*Items*\n' + (lines || '(none)') + '\n\n' +
+    'Driver: ___________  Phone: ___________\n' +
+    'Received by: ___________  Sign: _______'
+  );
+}
+
+/** Printable delivery / packing note HTML */
+function buildTransferPrintBody(t, opts) {
+  ensurePosDb();
+  opts = Object.assign({}, getTransferPrintOptions(), opts || {});
+  const from = db.locations.find(l => l.id === t.from_location_id);
+  const to = db.locations.find(l => l.id === t.to_location_id);
+  const biz = getBusinessNameForPrint();
+  const date = String(t.shipped_at || t.created_at || '').slice(0, 10);
+  const status = String(t.status || '').replace('_', ' ');
+  const pad = opts.density === 'compact' ? '6px' : '8px';
+  const font = opts.density === 'compact' ? '12px' : '13px';
+  const title = opts.title || 'Delivery note';
+
+  const colCount = 2 + (opts.showReceivedQty ? 1 : 0) + (opts.showCheckColumn ? 1 : 0);
+  const rows = (t.lines || []).map((l, i) => {
+    const sent = Number(l.qty_sent) || 0;
+    const recv = Number(l.qty_received) || 0;
+    let cells = '<td style="padding:' + pad + ';border-bottom:1px solid #e5e7eb">' + (i + 1) + '</td>' +
+      '<td style="padding:' + pad + ';border-bottom:1px solid #e5e7eb">' + (l.product_name || 'Item') + '</td>' +
+      '<td style="padding:' + pad + ';border-bottom:1px solid #e5e7eb;text-align:right;font-variant-numeric:tabular-nums">' + sent + '</td>';
+    if (opts.showReceivedQty) {
+      cells += '<td style="padding:' + pad + ';border-bottom:1px solid #e5e7eb;text-align:right">' + recv + '</td>';
+    }
+    if (opts.showCheckColumn) {
+      cells += '<td style="padding:' + pad + ';border-bottom:1px solid #e5e7eb;width:72px"></td>';
+    }
+    return '<tr>' + cells + '</tr>';
+  }).join('');
+
+  let thead = '<th style="padding:' + pad + ';border-bottom:2px solid #e5e7eb;width:36px">#</th>' +
+    '<th style="padding:' + pad + ';border-bottom:2px solid #e5e7eb">Product</th>' +
+    '<th style="padding:' + pad + ';border-bottom:2px solid #e5e7eb;text-align:right">Qty</th>';
+  if (opts.showReceivedQty) thead += '<th style="padding:' + pad + ';border-bottom:2px solid #e5e7eb;text-align:right">Recv</th>';
+  if (opts.showCheckColumn) thead += '<th style="padding:' + pad + ';border-bottom:2px solid #e5e7eb">Check</th>';
+
+  const headerLeft = opts.showBusinessName
+    ? '<div style="font-size:20px;font-weight:800">' + biz + '</div><div style="color:#6b7280;font-size:13px;margin-top:4px">' + title + '</div>'
+    : '<div style="font-size:16px;font-weight:800">' + title + '</div>';
+
+  const metaRight = '<div style="font-size:18px;font-weight:800">' + (t.transfer_number || '') + '</div>' +
+    '<div style="font-size:13px;color:#6b7280">' + date +
+    (opts.showStatus ? ' · ' + status : '') + '</div>';
+
+  const fromAddr = opts.showAddresses && from?.address ? '<div style="color:#6b7280;margin-top:2px">' + from.address + '</div>' : '';
+  const toAddr = opts.showAddresses && to?.address ? '<div style="color:#6b7280;margin-top:2px">' + to.address + '</div>' : '';
+
+  let signs = '';
+  if (opts.showDriverSign || opts.showReceiverSign) {
+    const blocks = [];
+    if (opts.showDriverSign) {
+      blocks.push('<div><div style="font-weight:700;margin-bottom:20px">Driver</div>' +
+        '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Name: </div>' +
+        '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Phone: </div>' +
+        '<div style="border-bottom:1px solid #9ca3af;padding-bottom:4px">Sign / date: </div></div>');
+    }
+    if (opts.showReceiverSign) {
+      blocks.push('<div><div style="font-weight:700;margin-bottom:20px">Received at destination</div>' +
+        '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Name: </div>' +
+        '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Sign / date: </div>' +
+        '<div style="border-bottom:1px solid #9ca3af;padding-bottom:4px">Qty OK? Y / N · Variance: </div></div>');
+    }
+    const cols = blocks.length === 2 ? '1fr 1fr' : '1fr';
+    signs = '<div style="display:grid;grid-template-columns:' + cols + ';gap:24px;margin-top:32px;font-size:' + font + '">' +
+      blocks.join('') + '</div>';
+  }
+
+  const footer = opts.showFooter
+    ? '<p style="margin-top:24px;font-size:11px;color:#9ca3af">Generated with InvoiceDay · ' +
+      new Date().toISOString().slice(0, 16).replace('T', ' ') + '</p>'
+    : '';
+
+  return (
+    '<div style="max-width:720px;margin:0 auto;font-family:system-ui,sans-serif;color:#111;font-size:' + font + '">' +
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px">' +
+    '<div>' + headerLeft + '</div><div style="text-align:right">' + metaRight + '</div></div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;font-size:' + font + '">' +
+    '<div style="padding:12px;border:1px solid #e5e7eb;border-radius:8px"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700">From</div>' +
+    '<div style="font-weight:700;margin-top:4px">' + (from?.name || '—') + '</div>' + fromAddr + '</div>' +
+    '<div style="padding:12px;border:1px solid #e5e7eb;border-radius:8px"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700">To</div>' +
+    '<div style="font-weight:700;margin-top:4px">' + (to?.name || '—') + '</div>' + toAddr + '</div></div>' +
+    (opts.showNote && t.note ? '<p style="margin:0 0 14px"><b>Note:</b> ' + t.note + '</p>' : '') +
+    '<table style="width:100%;border-collapse:collapse;font-size:' + font + '">' +
+    '<thead><tr style="background:#f9fafb;text-align:left">' + thead + '</tr></thead>' +
+    '<tbody>' + (rows || '<tr><td colspan="' + (3 + (opts.showReceivedQty?1:0) + (opts.showCheckColumn?1:0)) + '" style="padding:12px">No lines</td></tr>') +
+    '</tbody></table>' +
+    signs + footer +
+    '</div>'
+  );
+}
+
+function printStockTransfer(transferId, opts) {
+  ensurePosDb();
+  const t = db.stockTransfers.find(x => x.id === transferId);
+  if (!t) { toast('Transfer not found'); return; }
+  const o = Object.assign({}, getTransferPrintOptions(), opts || {});
+  const title = (t.transfer_number || 'Transfer') + ' · ' + (o.title || 'delivery note');
+  if (typeof openPrintDocument === 'function') {
+    openPrintDocument(title, buildTransferPrintBody(t, o));
+  } else {
+    const w = window.open('', '_blank');
+    if (!w) { toast('Allow pop-ups to print'); return; }
+    w.document.write('<!doctype html><html><head><title>' + title + '</title></head><body>' +
+      buildTransferPrintBody(t, o) + '<script>setTimeout(function(){print()},300)</'+'script></body></html>');
+    w.document.close();
+  }
+  try { appendInventoryAudit('transfer.printed', 'stock_transfer', t.id, 'Printed ' + (t.transfer_number || ''), { title: o.title }); } catch (e) {}
+}
+
+async function shareStockTransfer(transferId) {
+  ensurePosDb();
+  const t = db.stockTransfers.find(x => x.id === transferId);
+  if (!t) { toast('Transfer not found'); return; }
+  const text = buildTransferShareText(t);
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: t.transfer_number || 'Transfer', text });
+      try { appendInventoryAudit('transfer.shared', 'stock_transfer', t.id, 'Shared ' + (t.transfer_number || ''), {}); } catch (e) {}
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  }
+  // Fallback: copy + WhatsApp
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied — paste to WhatsApp for the driver');
+  } catch {
+    // last resort prompt
+    window.prompt('Copy this transfer note for the driver:', text);
+  }
+  try {
+    const wa = 'https://wa.me/?text=' + encodeURIComponent(text);
+    window.open(wa, '_blank', 'noopener');
+  } catch (e) {}
+  try { appendInventoryAudit('transfer.shared', 'stock_transfer', t.id, 'Shared ' + (t.transfer_number || ''), {}); } catch (e) {}
+}
+
+
 function openTransferDetailModal(transferId) {
   ensurePosDb();
   const t = db.stockTransfers.find(x => x.id === transferId);
@@ -8597,6 +8881,10 @@ function openTransferDetailModal(transferId) {
       openTransferReceiveModal(t.id);
     };
   }
+  const printBtn = document.getElementById('transferDetailPrint');
+  if (printBtn) printBtn.onclick = () => openTransferPrintOptions(t.id);
+  const shareBtn = document.getElementById('transferDetailShare');
+  if (shareBtn) shareBtn.onclick = () => { shareStockTransfer(t.id).catch(() => {}); };
   document.getElementById('transferDetailModal').classList.add('show');
 }
 
@@ -8650,6 +8938,8 @@ function renderTransfersList() {
         <td>${String(t.shipped_at || t.created_at || '').slice(0, 10)}</td>
         <td><div class="client-actions">
           <button class="button small" type="button" data-view-transfer="${t.id}">View</button>
+          <button class="button small" type="button" data-print-transfer="${t.id}">Print</button>
+          <button class="button small" type="button" data-share-transfer="${t.id}">Share</button>
           ${canRecv ? `<button class="button small" type="button" data-recv-transfer="${t.id}">Receive</button>` : ''}
           ${canCancel ? `<button class="button small" type="button" data-cancel-transfer="${t.id}">Cancel</button>` : ''}
         </div></td>
@@ -8664,6 +8954,8 @@ function renderTransfersList() {
         <div class="mobile-card-sub">${from?.name || '?'} → ${to?.name || '?'} · ${transferLinesSummary(t)}</div>
         <div class="mobile-card-actions">
           <button class="button small" type="button" data-view-transfer="${t.id}">View</button>
+          <button class="button small" type="button" data-print-transfer="${t.id}">Print</button>
+          <button class="button small" type="button" data-share-transfer="${t.id}">Share</button>
           ${canRecv ? `<button class="button small" type="button" data-recv-transfer="${t.id}">Receive</button>` : ''}
           ${t.status === 'in_transit' || t.status === 'draft' ? `<button class="button small" type="button" data-cancel-transfer="${t.id}">Cancel</button>` : ''}
         </div>
@@ -17928,6 +18220,17 @@ document.getElementById('btnManageLocations')?.addEventListener('click', openLoc
 
 document.getElementById('btnNewTransfer')?.addEventListener('click', openStockTransferModal);
 document.getElementById('transferDetailClose')?.addEventListener('click', () => document.getElementById('transferDetailModal')?.classList.remove('show'));
+document.getElementById('trPrintOptsCancel')?.addEventListener('click', closeTransferPrintOptions);
+document.getElementById('trPrintOptsSave')?.addEventListener('click', () => {
+  saveTransferPrintOptionsFromForm();
+  toast('Print layout saved');
+});
+document.getElementById('trPrintOptsPrint')?.addEventListener('click', () => {
+  const id = document.getElementById('transferPrintTargetId')?.value;
+  const opts = saveTransferPrintOptionsFromForm();
+  closeTransferPrintOptions();
+  if (id) printStockTransfer(id, opts);
+});
 document.getElementById('stockTransferModalCancel')?.addEventListener('click', closeStockTransferModal);
 document.getElementById('stockTransferModalSave')?.addEventListener('click', () => {
   saveStockTransfer().catch(e => toast(e.message || 'Transfer failed'));
@@ -18060,6 +18363,16 @@ document.addEventListener('click', (e) => {
     return;
   }
 
+  const printTr = e.target.closest('[data-print-transfer]');
+  if (printTr) {
+    openTransferPrintOptions(printTr.getAttribute('data-print-transfer'));
+    return;
+  }
+  const shareTr = e.target.closest('[data-share-transfer]');
+  if (shareTr) {
+    shareStockTransfer(shareTr.getAttribute('data-share-transfer')).catch(() => {});
+    return;
+  }
   const viewTr = e.target.closest('[data-view-transfer]');
   if (viewTr) {
     openTransferDetailModal(viewTr.getAttribute('data-view-transfer'));
