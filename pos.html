@@ -311,6 +311,7 @@ button { cursor: pointer; }
 <div id="app">
   <header class="topbar">
     <div class="title">POS Checkout</div>
+    <span class="meta" id="locationLabel" title="Selling location">—</span>
     <span class="offline" id="offlineBadge">Offline</span>
     <span class="pending" id="pendingBadge" title="Sales waiting to sync">0 pending</span>
     <span class="meta" id="orgLabel">—</span>
@@ -321,7 +322,7 @@ button { cursor: pointer; }
 
   <div class="layout">
     <section class="products-pane">
-      <input class="search" id="search" type="search" placeholder="Search name, SKU or barcode…" autocomplete="off">
+      <input class="search" id="search" type="search" placeholder="Scan barcode or search…" autocomplete="off" enterkeyhint="done">
       <div class="grid" id="productGrid"></div>
     </section>
 
@@ -390,6 +391,7 @@ button { cursor: pointer; }
     <div id="successBody" style="line-height:1.6;font-size:14px"></div>
     <div class="modal-actions" style="margin-top:16px">
       <button class="btn" type="button" data-close="successModal">Close</button>
+      <button class="btn" type="button" id="successPrint">Print receipt</button>
       <button class="btn primary" type="button" id="successNew">New sale</button>
     </div>
   </div>
@@ -457,8 +459,11 @@ function loadUserLocalDb(userId) {
   if (!Array.isArray(db.posCart)) db.posCart = [];
   if (!Array.isArray(db.cashEntries)) db.cashEntries = [];
   if (!Array.isArray(db.journals)) db.journals = [];
+  if (!Array.isArray(db.locations)) db.locations = [];
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
   if (!db.posNextSaleNumber || db.posNextSaleNumber < 1) db.posNextSaleNumber = 1;
   if (!db.profile) db.profile = { reporting: 'NGN', name: '' };
+  ensurePosLocation();
 }
 
 function persistDb() {
@@ -474,6 +479,9 @@ function persistDb() {
     full.posNextSaleNumber = db.posNextSaleNumber;
     full.cashEntries = db.cashEntries;
     full.journals = db.journals;
+    full.locations = db.locations;
+    full.locationStock = db.locationStock;
+    full.activeLocationId = db.activeLocationId;
     if (db.profile) full.profile = Object.assign({}, full.profile || {}, db.profile);
     localStorage.setItem(key, JSON.stringify(full));
     // Dedicated product cache for offline boot
@@ -656,6 +664,166 @@ async function flushSyncQueue() {
   else if (remaining.length && remaining.length < queue.length) toast('Synced some pending sales');
 }
 
+
+function ensurePosLocation() {
+  if (!Array.isArray(db.locations)) db.locations = [];
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  if (!db.locations.length) {
+    const loc = {
+      id: crypto.randomUUID(),
+      name: 'Main store',
+      code: 'MAIN',
+      location_type: 'store',
+      is_default: true,
+      active: true
+    };
+    db.locations.push(loc);
+    db.activeLocationId = loc.id;
+  }
+  // Prefer member-assigned location, then active, then default
+  try {
+    const memberKey = 'invoicedey-member-location-' + (activeUserId || 'anon');
+    const mid = localStorage.getItem(memberKey);
+    if (mid && db.locations.some(l => l.id === mid)) db.activeLocationId = mid;
+  } catch {}
+  try {
+    const activeKey = 'invoicedey-active-location-' + (activeUserId || 'anon');
+    const aid = localStorage.getItem(activeKey);
+    if (!db.activeLocationId && aid && db.locations.some(l => l.id === aid)) db.activeLocationId = aid;
+  } catch {}
+  if (!db.activeLocationId || !db.locations.some(l => l.id === db.activeLocationId)) {
+    const def = db.locations.find(l => l.is_default) || db.locations[0];
+    db.activeLocationId = def ? def.id : null;
+  }
+}
+
+function getActiveLocation() {
+  ensurePosLocation();
+  return db.locations.find(l => l.id === db.activeLocationId) || db.locations[0] || null;
+}
+
+function locationStockQty(productId, locationId) {
+  const lid = locationId || db.activeLocationId;
+  const row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === lid);
+  if (row) return Number(row.qty) || 0;
+  // Fallback: total product stock if no location rows yet
+  const p = db.products.find(x => x.id === productId);
+  return Number(p?.stock_qty) || 0;
+}
+
+function adjustLocationStockLocal(productId, locationId, qtyChange, meta) {
+  meta = meta || {};
+  let row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === locationId);
+  if (!row) {
+    row = { product_id: productId, location_id: locationId, qty: 0 };
+    db.locationStock.push(row);
+  }
+  row.qty = (Number(row.qty) || 0) + (Number(qtyChange) || 0);
+  const p = db.products.find(x => x.id === productId);
+  if (p) {
+    p.stock_qty = (db.locationStock || [])
+      .filter(s => s.product_id === productId)
+      .reduce((n, s) => n + (Number(s.qty) || 0), 0);
+    p.updated_at = new Date().toISOString();
+  }
+  const mov = {
+    id: crypto.randomUUID(),
+    product_id: productId,
+    location_id: locationId,
+    qty_change: Number(qtyChange) || 0,
+    reason: meta.reason || 'sale',
+    reference: meta.reference || null,
+    note: meta.note || null,
+    created_at: new Date().toISOString()
+  };
+  db.stockMovements.push(mov);
+  return { row, mov, product: p };
+}
+
+function updateLocationLabel() {
+  const el = document.getElementById('locationLabel');
+  if (!el) return;
+  const loc = getActiveLocation();
+  el.textContent = loc ? loc.name : 'No location';
+}
+
+/** USB / Bluetooth barcode scanners act as keyboards ending with Enter */
+let _scanBuffer = '';
+let _scanTimer = null;
+function handleBarcodeKeydown(e) {
+  // Ignore if typing in an input that is not the search box (cash tender, notes)
+  const tag = (e.target && e.target.tagName) || '';
+  const id = (e.target && e.target.id) || '';
+  if (tag === 'INPUT' && id !== 'search') return;
+  if (e.key === 'Enter') {
+    const code = (_scanBuffer || (id === 'search' ? e.target.value : '') || '').trim();
+    _scanBuffer = '';
+    if (_scanTimer) clearTimeout(_scanTimer);
+    if (!code) return;
+    if (id === 'search') e.preventDefault();
+    const hit = findProductByBarcode(code);
+    if (hit) {
+      document.getElementById('search').value = '';
+      addToCart(hit.id);
+      toast(hit.name);
+    } else if (code.length >= 4) {
+      toast('No product for barcode ' + code);
+      document.getElementById('search').value = code;
+      renderProducts();
+    }
+    return;
+  }
+  if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    // Rapid input = scanner
+    _scanBuffer += e.key;
+    if (_scanTimer) clearTimeout(_scanTimer);
+    _scanTimer = setTimeout(() => { _scanBuffer = ''; }, 80);
+  }
+}
+
+function findProductByBarcode(code) {
+  const c = String(code || '').trim().toLowerCase();
+  if (!c) return null;
+  return db.products.find(p =>
+    p.active !== false && (
+      String(p.barcode || '').trim().toLowerCase() === c ||
+      String(p.sku || '').trim().toLowerCase() === c
+    )
+  ) || null;
+}
+
+let lastCompletedSale = null;
+
+function printSaleReceipt(sale) {
+  if (!sale) { toast('Nothing to print'); return; }
+  const loc = getActiveLocation();
+  const biz = (db.profile && (db.profile.businessName || db.profile.name)) || 'Store';
+  const lines = (sale.lines || []).map(l =>
+    '<tr><td style="padding:4px 0">' + escapeHtml(l.name) + ' × ' + l.qty +
+    '</td><td style="text-align:right;padding:4px 0">' + money(l.total) + '</td></tr>'
+  ).join('');
+  const html = '<div style="font-family:ui-monospace,monospace;max-width:280px;margin:0 auto;font-size:12px">' +
+    '<div style="text-align:center;font-weight:800;font-size:14px">' + escapeHtml(biz) + '</div>' +
+    (loc ? '<div style="text-align:center;color:#666">' + escapeHtml(loc.name) + '</div>' : '') +
+    '<div style="text-align:center;margin:8px 0">' + escapeHtml(sale.sale_number) + '<br>' +
+    String(sale.sold_at || '').replace('T', ' ').slice(0, 16) + '</div>' +
+    '<table style="width:100%;border-top:1px dashed #999;border-bottom:1px dashed #999;margin:8px 0">' +
+    lines + '</table>' +
+    '<div style="display:flex;justify-content:space-between;font-weight:800"><span>TOTAL</span><span>' +
+    money(sale.total) + '</span></div>' +
+    '<div style="margin-top:6px">Paid: ' + escapeHtml(sale.payment_method) + '</div>' +
+    (sale.payment_method === 'cash' ? '<div>Tendered: ' + money(sale.amount_tendered) +
+      '<br>Change: ' + money(sale.change_given) + '</div>' : '') +
+    (sale.payment_note ? '<div style="margin-top:4px">' + escapeHtml(sale.payment_note) + '</div>' : '') +
+    '<div style="text-align:center;margin-top:14px;color:#666">Thank you</div></div>';
+  const w = window.open('', '_blank', 'noopener,width=320,height=480');
+  if (!w) { toast('Allow pop-ups to print receipt'); return; }
+  w.document.write('<!doctype html><html><head><title>' + escapeHtml(sale.sale_number) +
+    '</title></head><body onload="setTimeout(function(){print()},300)">' + html + '</body></html>');
+  w.document.close();
+}
+
+
 function cartTotal() {
   return db.posCart.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
 }
@@ -675,13 +843,14 @@ function renderProducts() {
     document.getElementById('emptyGoApp')?.addEventListener('click', () => location.href = 'app.html');
     return;
   }
+  const loc = getActiveLocation();
   grid.innerHTML = list.map(p => {
-    const stock = Number(p.stock_qty) || 0;
+    const stock = loc ? locationStockQty(p.id, loc.id) : Number(p.stock_qty) || 0;
     const out = p.track_stock !== false && stock <= 0;
     return `<button type="button" class="product-card${out ? ' out' : ''}" data-add="${p.id}" ${out ? 'disabled' : ''}>
       <div class="name">${escapeHtml(p.name)}</div>
       <div class="price">${money(p.price)}</div>
-      <div class="stock">${out ? 'Out of stock' : 'Stock ' + stock}</div>
+      <div class="stock">${out ? 'Out here' : 'Here ' + stock}</div>
     </button>`;
   }).join('');
 }
@@ -724,14 +893,16 @@ function renderCart() {
 function addToCart(productId) {
   const p = db.products.find(x => x.id === productId && x.active !== false);
   if (!p) return;
-  if (p.track_stock !== false && Number(p.stock_qty) <= 0) {
-    toast('Out of stock');
+  const loc = getActiveLocation();
+  const onHand = loc ? locationStockQty(p.id, loc.id) : Number(p.stock_qty) || 0;
+  if (p.track_stock !== false && onHand <= 0) {
+    toast('Out of stock at this location');
     return;
   }
   const line = db.posCart.find(l => l.product_id === productId);
   if (line) {
-    if (p.track_stock !== false && line.qty + 1 > Number(p.stock_qty)) {
-      toast('Not enough stock');
+    if (p.track_stock !== false && line.qty + 1 > onHand) {
+      toast('Not enough stock here');
       return;
     }
     line.qty += 1;
@@ -760,9 +931,11 @@ function setQty(productId, qty) {
     db.posCart = db.posCart.filter(l => l.product_id !== productId);
   } else {
     const p = db.products.find(x => x.id === productId);
-    if (p && p.track_stock !== false && qty > Number(p.stock_qty)) {
-      toast('Not enough stock');
-      qty = Number(p.stock_qty);
+    const loc = getActiveLocation();
+    const onHand = loc ? locationStockQty(productId, loc.id) : Number(p?.stock_qty) || 0;
+    if (p && p.track_stock !== false && qty > onHand) {
+      toast('Not enough stock here');
+      qty = onHand;
     }
     line.qty = qty;
   }
@@ -966,6 +1139,7 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
   const saleNumber = await nextSaleNumber();
   const saleId = crypto.randomUUID();
   const now = new Date().toISOString();
+  const saleLoc = getActiveLocation();
   const sale = {
     id: saleId,
     sale_number: saleNumber,
@@ -978,6 +1152,8 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
     change_given: change_given != null ? change_given : null,
     payment_note: payment_note || null,
     lines,
+    location_id: saleLoc?.id || null,
+    location_name: saleLoc?.name || null,
     cloudId: null,
     synced: false
   };
@@ -986,22 +1162,32 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
   for (const line of lines) {
     const p = db.products.find(x => x.id === line.product_id);
     if (!p || p.track_stock === false) continue;
-    p.stock_qty = (Number(p.stock_qty) || 0) - line.qty;
-    p.updated_at = now;
-    const mov = {
-      id: crypto.randomUUID(),
-      product_id: p.id,
-      qty_change: -line.qty,
-      reason: 'sale',
-      reference: saleNumber,
-      note: null,
-      created_at: now
-    };
-    db.stockMovements.push(mov);
+    let mov;
+    if (saleLoc) {
+      const r = adjustLocationStockLocal(p.id, saleLoc.id, -line.qty, {
+        reason: 'sale',
+        reference: saleNumber
+      });
+      mov = r.mov;
+    } else {
+      p.stock_qty = (Number(p.stock_qty) || 0) - line.qty;
+      p.updated_at = now;
+      mov = {
+        id: crypto.randomUUID(),
+        product_id: p.id,
+        qty_change: -line.qty,
+        reason: 'sale',
+        reference: saleNumber,
+        note: null,
+        created_at: now
+      };
+      db.stockMovements.push(mov);
+    }
     enqueueSync({
       type: 'stock',
       product_id: p.id,
       product_cloud_id: p.cloudId || null,
+      location_id: saleLoc?.id || null,
       movement: mov
     });
   }
@@ -1029,7 +1215,9 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
   }
   if (payment_note) body += `<div style="color:var(--muted)">${escapeHtml(payment_note)}</div>`;
   body += offlineNote;
+  if (saleLoc) body += `<div style="margin-top:6px;color:var(--muted)">Location: ${escapeHtml(saleLoc.name)}</div>`;
   document.getElementById('successBody').innerHTML = body;
+  lastCompletedSale = sale;
   openModal('successModal');
   renderCart();
   renderProducts();
@@ -1103,6 +1291,7 @@ async function boot() {
   document.getElementById('gate').style.display = 'none';
   document.getElementById('app').classList.add('show');
   updatePendingBadge();
+  updateLocationLabel();
   renderProducts();
   renderCart();
   if (isOnline()) flushSyncQueue().catch(() => {});
@@ -1168,18 +1357,25 @@ document.getElementById('noteConfirm').onclick = () => {
     payment_note: note || null
   }).catch(e => toast(e.message || 'Sale failed'));
 };
+/* successPrint wired below */
 document.getElementById('successNew').onclick = () => {
   closeModal('successModal');
+  lastCompletedSale = null;
   renderCart();
   renderProducts();
 };
+document.getElementById('successPrint')?.addEventListener('click', () => {
+  printSaleReceipt(lastCompletedSale);
+});
 document.querySelectorAll('[data-close]').forEach(btn => {
   btn.addEventListener('click', () => closeModal(btn.getAttribute('data-close')));
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     ['cashModal', 'noteModal', 'successModal'].forEach(closeModal);
+    return;
   }
+  handleBarcodeKeydown(e);
 });
 
 boot();
