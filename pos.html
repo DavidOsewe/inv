@@ -317,6 +317,14 @@ button { cursor: pointer; }
     <span class="meta" id="orgLabel">—</span>
     <button class="btn sm ghost" type="button" id="btnSync" title="Sync now">Sync</button>
     <button class="btn sm ghost" type="button" id="btnBackApp" title="Back office">App</button>
+    <select class="btn sm" id="receiptWidth" title="Receipt paper width" style="max-width:88px;padding:4px 6px;font-weight:600">
+      <option value="80">80mm</option>
+      <option value="58">58mm</option>
+    </select>
+    <label class="btn sm" id="autoPrintLabel" title="Print receipt automatically after each sale" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;max-width:none">
+      <input type="checkbox" id="autoPrint" style="margin:0;accent-color:var(--blue)">
+      Auto-print
+    </label>
     <button class="btn sm" type="button" id="btnClear">Clear</button>
   </header>
 
@@ -423,12 +431,19 @@ function scopedDbKey(userId) {
   return 'invoicedey-v2-user-' + userId;
 }
 
-function toast(msg) {
+function toast(msg, opts) {
+  msg = String(msg || '').trim();
+  if (!msg) return;
   const el = document.getElementById('toast');
+  if (!el) return;
+  if (toast._last === msg && Date.now() - (toast._at || 0) < 1200) return;
+  toast._last = msg;
+  toast._at = Date.now();
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => el.classList.remove('show'), 2200);
+  const ms = (opts && opts.ms) || (msg.length > 80 ? 3200 : 2200);
+  toast._t = setTimeout(() => el.classList.remove('show'), ms);
 }
 
 function money(n, c) {
@@ -482,6 +497,8 @@ function persistDb() {
     full.locations = db.locations;
     full.locationStock = db.locationStock;
     full.activeLocationId = db.activeLocationId;
+    if (db.posReceiptWidth) full.posReceiptWidth = db.posReceiptWidth;
+    if (db.posAutoPrint === true || db.posAutoPrint === false) full.posAutoPrint = db.posAutoPrint;
     if (db.profile) full.profile = Object.assign({}, full.profile || {}, db.profile);
     localStorage.setItem(key, JSON.stringify(full));
     // Dedicated product cache for offline boot
@@ -765,11 +782,14 @@ function handleBarcodeKeydown(e) {
     if (hit) {
       document.getElementById('search').value = '';
       addToCart(hit.id);
-      toast(hit.name);
-    } else if (code.length >= 4) {
-      toast('No product for barcode ' + code);
+      // toast + focus handled inside addToCart on success; still focus if stock blocked
+      focusSearchBox({ clear: true });
+    } else {
+      // Scanner or Enter on search: unknown barcode / SKU
+      toast('Unknown barcode: ' + code);
       document.getElementById('search').value = code;
       renderProducts();
+      focusSearchBox({ clear: false });
     }
     return;
   }
@@ -792,7 +812,93 @@ function findProductByBarcode(code) {
   ) || null;
 }
 
+/** Keep scan box ready for the next USB/BT keyboard-wedge scan */
+function focusSearchBox(opts) {
+  const clear = !opts || opts.clear !== false;
+  const el = document.getElementById('search');
+  if (!el) return;
+  // Don't steal focus from cash/note/success modals
+  const modalOpen = ['cashModal', 'noteModal', 'successModal'].some(id => {
+    const m = document.getElementById(id);
+    return m && m.classList.contains('show');
+  });
+  if (modalOpen) return;
+  if (clear) el.value = '';
+  try {
+    el.focus({ preventScroll: true });
+    if (typeof el.select === 'function' && el.value) el.select();
+  } catch (_) {
+    try { el.focus(); } catch (__) {}
+  }
+}
+
 let lastCompletedSale = null;
+
+
+function receiptWidthKey() {
+  return 'invoicedey-pos-receipt-width-' + (activeUserId || 'anon');
+}
+
+function getReceiptWidthMm() {
+  let w = 80;
+  try {
+    const fromDb = Number(db.posReceiptWidth);
+    if (fromDb === 58 || fromDb === 80) w = fromDb;
+  } catch {}
+  try {
+    const fromLs = Number(localStorage.getItem(receiptWidthKey()));
+    if (fromLs === 58 || fromLs === 80) w = fromLs;
+  } catch {}
+  return w === 58 ? 58 : 80;
+}
+
+function setReceiptWidthMm(mm) {
+  mm = Number(mm) === 58 ? 58 : 80;
+  try { db.posReceiptWidth = mm; } catch {}
+  try { localStorage.setItem(receiptWidthKey(), String(mm)); } catch {}
+  try { persistDb(); } catch {}
+  const sel = document.getElementById('receiptWidth');
+  if (sel) sel.value = String(mm);
+  return mm;
+}
+
+function syncReceiptWidthSelect() {
+  const sel = document.getElementById('receiptWidth');
+  if (!sel) return;
+  sel.value = String(getReceiptWidthMm());
+}
+
+function autoPrintKey() {
+  return 'invoicedey-pos-auto-print-' + (activeUserId || 'anon');
+}
+
+function getAutoPrint() {
+  try {
+    if (db.posAutoPrint === true || db.posAutoPrint === false) return !!db.posAutoPrint;
+  } catch {}
+  try {
+    const v = localStorage.getItem(autoPrintKey());
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch {}
+  return false;
+}
+
+function setAutoPrint(on) {
+  on = !!on;
+  try { db.posAutoPrint = on; } catch {}
+  try { localStorage.setItem(autoPrintKey(), on ? '1' : '0'); } catch {}
+  try { persistDb(); } catch {}
+  const el = document.getElementById('autoPrint');
+  if (el) el.checked = on;
+  return on;
+}
+
+function syncAutoPrintCheck() {
+  const el = document.getElementById('autoPrint');
+  if (el) el.checked = getAutoPrint();
+}
+
 
 function printSaleReceipt(sale) {
   if (!sale) { toast('Nothing to print'); return; }
@@ -800,16 +906,20 @@ function printSaleReceipt(sale) {
     ? { name: sale.location_name }
     : getActiveLocation();
   const biz = (db.profile && (db.profile.businessName || db.profile.name)) || 'Store';
+  const paperMm = getReceiptWidthMm();
+  const contentMm = paperMm === 58 ? 48 : 72;
+  const fontPx = paperMm === 58 ? 10 : 12;
   const lines = (sale.lines || []).map(l =>
-    '<tr><td style="padding:4px 0">' + escapeHtml(l.name) + ' × ' + l.qty +
-    '</td><td style="text-align:right;padding:4px 0">' + money(l.total) + '</td></tr>'
+    '<tr><td style="padding:3px 0;word-break:break-word">' + escapeHtml(l.name) + ' × ' + l.qty +
+    '</td><td style="text-align:right;padding:3px 0;white-space:nowrap">' + money(l.total) + '</td></tr>'
   ).join('');
-  const bodyHtml = '<div style="font-family:ui-monospace,Menlo,Consolas,monospace;max-width:280px;margin:0 auto;font-size:12px;color:#111">' +
-    '<div style="text-align:center;font-weight:800;font-size:14px">' + escapeHtml(biz) + '</div>' +
-    (loc && loc.name ? '<div style="text-align:center;color:#666">' + escapeHtml(loc.name) + '</div>' : '') +
-    '<div style="text-align:center;margin:8px 0">' + escapeHtml(sale.sale_number) + '<br>' +
+  const bodyHtml = '<div class="receipt" style="font-family:ui-monospace,Menlo,Consolas,monospace;width:' + contentMm +
+    'mm;max-width:100%;margin:0 auto;font-size:' + fontPx + 'px;color:#000;line-height:1.35">' +
+    '<div style="text-align:center;font-weight:800;font-size:' + (paperMm === 58 ? 12 : 14) + 'px">' + escapeHtml(biz) + '</div>' +
+    (loc && loc.name ? '<div style="text-align:center">' + escapeHtml(loc.name) + '</div>' : '') +
+    '<div style="text-align:center;margin:6px 0">' + escapeHtml(sale.sale_number) + '<br>' +
     String(sale.sold_at || '').replace('T', ' ').slice(0, 16) + '</div>' +
-    '<table style="width:100%;border-top:1px dashed #999;border-bottom:1px dashed #999;margin:8px 0">' +
+    '<table style="width:100%;border-top:1px dashed #000;border-bottom:1px dashed #000;margin:6px 0;border-collapse:collapse">' +
     lines + '</table>' +
     '<div style="display:flex;justify-content:space-between;font-weight:800"><span>TOTAL</span><span>' +
     money(sale.total) + '</span></div>' +
@@ -817,12 +927,18 @@ function printSaleReceipt(sale) {
     (sale.payment_method === 'cash' ? '<div>Tendered: ' + money(sale.amount_tendered) +
       '<br>Change: ' + money(sale.change_given) + '</div>' : '') +
     (sale.payment_note ? '<div style="margin-top:4px">' + escapeHtml(sale.payment_note) + '</div>' : '') +
-    '<div style="text-align:center;margin-top:14px;color:#666">Thank you</div></div>';
+    '<div style="text-align:center;margin-top:12px">Thank you</div>' +
+    '<div style="text-align:center;margin-top:4px;font-size:9px">' + paperMm + 'mm</div></div>';
 
-  // Prefer hidden iframe (no pop-up blocker). Fallback to window.open.
+  const pageCss =
+    '@page { size: ' + paperMm + 'mm auto; margin: 2mm; }' +
+    'html, body { margin: 0; padding: 0; background: #fff; }' +
+    'body { padding: 2mm; }' +
+    '* { -webkit-print-color-adjust: exact; print-color-adjust: exact; }';
+
   const docHtml = '<!doctype html><html><head><meta charset="utf-8"><title>' +
     escapeHtml(sale.sale_number || 'Receipt') +
-    '</title><style>@page{margin:6mm}body{margin:0;padding:8px}</style></head><body>' +
+    '</title><style>' + pageCss + '</style></head><body>' +
     bodyHtml + '</body></html>';
 
   try {
@@ -859,7 +975,6 @@ function printSaleReceipt(sale) {
     setTimeout(() => { try { w.focus(); w.print(); } catch (_) {} }, 300);
   }
 }
-
 
 function cartTotal() {
   return db.posCart.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
@@ -929,28 +1044,33 @@ function renderCart() {
 
 function addToCart(productId) {
   const p = db.products.find(x => x.id === productId && x.active !== false);
-  if (!p) return;
+  if (!p) {
+    focusSearchBox({ clear: true });
+    return;
+  }
   const loc = getActiveLocation();
   const onHand = loc ? locationStockQty(p.id, loc.id) : Number(p.stock_qty) || 0;
   if (p.track_stock !== false && onHand <= 0) {
     toast('Out of stock at this location');
+    focusSearchBox({ clear: true });
     return;
   }
   const line = db.posCart.find(l => l.product_id === productId);
   if (line) {
     if (p.track_stock !== false && line.qty + 1 > onHand) {
       toast('Not enough stock here');
+      focusSearchBox({ clear: true });
       return;
     }
     line.qty += 1;
   } else {
     db.posCart.push({
-    product_id: p.id,
-    name: p.name,
-    price: Number(p.price) || 0,
-    cost: Number(p.cost) || 0,
-    qty: 1
-  });
+      product_id: p.id,
+      name: p.name,
+      price: Number(p.price) || 0,
+      cost: Number(p.cost) || 0,
+      qty: 1
+    });
   }
   persistDb();
   renderCart();
@@ -958,6 +1078,7 @@ function addToCart(productId) {
   if (window.matchMedia('(max-width: 860px)').matches) {
     document.getElementById('cartPanel').classList.add('open');
   }
+  focusSearchBox({ clear: true });
 }
 
 function setQty(productId, qty) {
@@ -986,6 +1107,9 @@ function openModal(id) {
 }
 function closeModal(id) {
   document.getElementById(id).classList.remove('show');
+  if (id === 'cashModal' || id === 'noteModal' || id === 'successModal') {
+    setTimeout(() => focusSearchBox({ clear: true }), 50);
+  }
 }
 
 function updateCashChange() {
@@ -1261,6 +1385,14 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
   updatePendingBadge();
   document.getElementById('cartPanel').classList.remove('open');
 
+  if (getAutoPrint()) {
+    setTimeout(() => {
+      try { printSaleReceipt(sale); } catch (err) {
+        toast('Auto-print failed — use Print receipt');
+      }
+    }, 350);
+  }
+
   // Best-effort immediate sync if online
   if (isOnline()) {
     flushSyncQueue().catch(() => {});
@@ -1329,8 +1461,11 @@ async function boot() {
   document.getElementById('app').classList.add('show');
   updatePendingBadge();
   updateLocationLabel();
+  syncReceiptWidthSelect();
+  syncAutoPrintCheck();
   renderProducts();
   renderCart();
+  focusSearchBox({ clear: true });
   if (isOnline()) flushSyncQueue().catch(() => {});
 }
 
@@ -1345,12 +1480,21 @@ document.getElementById('btnSync').onclick = () => {
     .then(() => { renderProducts(); toast('Sync complete'); })
     .catch(e => toast(e.message || 'Sync failed'));
 };
+document.getElementById('receiptWidth')?.addEventListener('change', (e) => {
+  setReceiptWidthMm(e.target.value);
+  /* quiet setting change */
+});
+document.getElementById('autoPrint')?.addEventListener('change', (e) => {
+  setAutoPrint(e.target.checked);
+  /* quiet setting change */
+});
 document.getElementById('btnClear').onclick = () => {
   db.posCart = [];
   persistDb();
   renderCart();
   renderProducts();
   document.getElementById('cartPanel').classList.remove('open');
+  focusSearchBox({ clear: true });
 };
 document.getElementById('search').addEventListener('input', renderProducts);
 document.getElementById('productGrid').addEventListener('click', (e) => {
@@ -1400,6 +1544,7 @@ document.getElementById('successNew').onclick = () => {
   lastCompletedSale = null;
   renderCart();
   renderProducts();
+  focusSearchBox({ clear: true });
 };
 document.getElementById('successPrint')?.addEventListener('click', () => {
   printSaleReceipt(lastCompletedSale);
