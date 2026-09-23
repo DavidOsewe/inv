@@ -2489,6 +2489,26 @@ input:focus:not(:focus-visible) {
     </div>
 
     
+
+    <div class="modalback" id="transferSignModal">
+      <div class="modal" style="max-width:480px">
+        <h2 id="transferSignTitle">Sign transfer</h2>
+        <p class="section-sub" id="transferSignSub">Draw signature below</p>
+        <input type="hidden" id="transferSignId">
+        <input type="hidden" id="transferSignRole">
+        <div class="field"><label>Full name *</label><input id="transferSignName" placeholder="Name of person signing" autocomplete="name"></div>
+        <div style="border:1px solid var(--line);border-radius:10px;background:#fff;touch-action:none;position:relative">
+          <canvas id="transferSignCanvas" width="440" height="160" style="width:100%;height:160px;display:block;border-radius:10px;cursor:crosshair"></canvas>
+        </div>
+        <p class="section-sub" style="margin:6px 0 0">Sign with finger or mouse · clear if you need to retry</p>
+        <div class="buttons" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button class="button" type="button" id="transferSignClear">Clear</button>
+          <button class="button" type="button" id="transferSignCancel">Cancel</button>
+          <button class="button primary" type="button" id="transferSignSave">Save signature</button>
+        </div>
+      </div>
+    </div>
+
     <div class="modalback" id="transferPrintOptionsModal">
       <div class="modal" style="max-width:440px">
         <h2>Transfer print layout</h2>
@@ -8392,6 +8412,8 @@ async function saveStockTransfer() {
   closeStockTransferModal();
   toast(mode === 'quick' ? 'Transfer completed' : 'Shipped — in transit');
   transfersView();
+  // Digital process: driver signs after ship (optional but prompted)
+  setTimeout(() => openTransferSignModal(tr.id, 'driver'), 450);
 }
 
 async function pushStockTransferToCloud(tr) {
@@ -8513,6 +8535,10 @@ async function confirmTransferReceive() {
   closeTransferReceiveModal();
   toast(allDone ? 'Transfer received' : 'Partial receive saved');
   transfersView();
+  // Complete digital process: capture receiver e-signature
+  if (allDone && !(tr.signatures && tr.signatures.receiver && tr.signatures.receiver.dataUrl)) {
+    setTimeout(() => openTransferSignModal(tr.id, 'receiver'), 400);
+  }
 }
 
 function cancelStockTransfer(transferId) {
@@ -8585,6 +8611,147 @@ function transferLinesSummary(t) {
   const sent = lines.reduce((a, l) => a + (Number(l.qty_sent) || 0), 0);
   const recv = lines.reduce((a, l) => a + (Number(l.qty_received) || 0), 0);
   return n + ' line' + (n === 1 ? '' : 's') + ' · sent ' + sent + (recv ? ' · recv ' + recv : '');
+}
+
+
+
+/* ---------- Transfer e-signature ---------- */
+let _signPad = null;
+
+function initTransferSignPad() {
+  const canvas = document.getElementById('transferSignCanvas');
+  if (!canvas) return null;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.max(300, Math.floor(rect.width * dpr));
+  canvas.height = Math.floor(160 * dpr);
+  ctx.scale(dpr, dpr);
+  ctx.lineWidth = 2.2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#111';
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  let drawing = false;
+  let last = null;
+  const pos = (e) => {
+    const r = canvas.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return { x: t.clientX - r.left, y: t.clientY - r.top };
+  };
+  const start = (e) => { e.preventDefault(); drawing = true; last = pos(e); };
+  const move = (e) => {
+    if (!drawing) return;
+    e.preventDefault();
+    const p = pos(e);
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    last = p;
+  };
+  const end = (e) => { e.preventDefault(); drawing = false; };
+  canvas.onmousedown = start;
+  canvas.onmousemove = move;
+  canvas.onmouseup = end;
+  canvas.onmouseleave = end;
+  canvas.ontouchstart = start;
+  canvas.ontouchmove = move;
+  canvas.ontouchend = end;
+  _signPad = { canvas, ctx, clear() {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(300, Math.floor(rect.width * dpr));
+    canvas.height = Math.floor(160 * dpr);
+    ctx.scale(dpr, dpr);
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#111';
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, rect.width, 160);
+  }, isEmpty() {
+    // crude: sample a few pixels — always allow save if name filled; empty check via data URL length
+    try {
+      const blank = document.createElement('canvas');
+      blank.width = canvas.width; blank.height = canvas.height;
+      return canvas.toDataURL() === blank.toDataURL();
+    } catch { return false; }
+  }, toDataURL() { return canvas.toDataURL('image/png'); } };
+  return _signPad;
+}
+
+function openTransferSignModal(transferId, role) {
+  ensurePosDb();
+  const t = db.stockTransfers.find(x => x.id === transferId);
+  if (!t) return;
+  role = role === 'driver' ? 'driver' : 'receiver';
+  document.getElementById('transferSignId').value = transferId;
+  document.getElementById('transferSignRole').value = role;
+  document.getElementById('transferSignTitle').textContent =
+    role === 'driver' ? 'Driver signature' : 'Receiver signature';
+  document.getElementById('transferSignSub').textContent =
+    (t.transfer_number || 'Transfer') + ' · sign on device (finger or mouse)';
+  const existing = (t.signatures && t.signatures[role]) || null;
+  document.getElementById('transferSignName').value = existing?.name || '';
+  document.getElementById('transferSignModal').classList.add('show');
+  setTimeout(() => {
+    initTransferSignPad();
+    if (existing?.dataUrl) {
+      // show existing as background hint? keep clear for re-sign
+    }
+  }, 50);
+}
+
+function closeTransferSignModal() {
+  document.getElementById('transferSignModal')?.classList.remove('show');
+}
+
+function saveTransferSignature() {
+  ensurePosDb();
+  const id = document.getElementById('transferSignId').value;
+  const role = document.getElementById('transferSignRole').value || 'receiver';
+  const name = (document.getElementById('transferSignName').value || '').trim();
+  if (!name) { toast('Enter the signer\'s full name'); return; }
+  if (!_signPad) initTransferSignPad();
+  if (!_signPad) { toast('Signature pad not ready'); return; }
+  let dataUrl;
+  try { dataUrl = _signPad.toDataURL(); } catch (e) { toast('Could not capture signature'); return; }
+  // Reject nearly-empty canvas
+  if (dataUrl.length < 3000) {
+    toast('Please draw a signature first');
+    return;
+  }
+  const t = db.stockTransfers.find(x => x.id === id);
+  if (!t) return;
+  if (!t.signatures) t.signatures = {};
+  t.signatures[role] = {
+    name,
+    dataUrl,
+    at: new Date().toISOString(),
+    byUserId: (typeof activeUserId !== 'undefined' ? activeUserId : null) || cloud?.user?.id || null
+  };
+  t.updated_at = new Date().toISOString();
+  try {
+    appendInventoryAudit(
+      role === 'driver' ? 'transfer.signed_driver' : 'transfer.signed_receiver',
+      'stock_transfer',
+      t.id,
+      (role === 'driver' ? 'Driver' : 'Receiver') + ' signed ' + (t.transfer_number || '') + ' · ' + name,
+      { role }
+    );
+  } catch (e) {}
+  persistDb();
+  closeTransferSignModal();
+  toast('Signature saved');
+  // Refresh detail if open
+  try {
+    if (document.getElementById('transferDetailModal')?.classList.contains('show')) {
+      openTransferDetailModal(t.id);
+    }
+  } catch (e) {}
 }
 
 
@@ -8739,18 +8906,33 @@ function buildTransferPrintBody(t, opts) {
 
   let signs = '';
   if (opts.showDriverSign || opts.showReceiverSign) {
+    const sigs = t.signatures || {};
     const blocks = [];
     if (opts.showDriverSign) {
-      blocks.push('<div><div style="font-weight:700;margin-bottom:20px">Driver</div>' +
-        '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Name: </div>' +
-        '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Phone: </div>' +
-        '<div style="border-bottom:1px solid #9ca3af;padding-bottom:4px">Sign / date: </div></div>');
+      const ds = sigs.driver;
+      if (ds && ds.dataUrl) {
+        blocks.push('<div><div style="font-weight:700;margin-bottom:8px">Driver (e-signed)</div>' +
+          '<div style="font-size:12px;margin-bottom:6px">' + (ds.name || '') + ' · ' + String(ds.at || '').slice(0, 16).replace('T', ' ') + '</div>' +
+          '<img src="' + ds.dataUrl + '" alt="driver signature" style="max-width:100%;height:64px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;background:#fff"/></div>');
+      } else {
+        blocks.push('<div><div style="font-weight:700;margin-bottom:20px">Driver</div>' +
+          '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Name: </div>' +
+          '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Phone: </div>' +
+          '<div style="border-bottom:1px solid #9ca3af;padding-bottom:4px">Sign / date: </div></div>');
+      }
     }
     if (opts.showReceiverSign) {
-      blocks.push('<div><div style="font-weight:700;margin-bottom:20px">Received at destination</div>' +
-        '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Name: </div>' +
-        '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Sign / date: </div>' +
-        '<div style="border-bottom:1px solid #9ca3af;padding-bottom:4px">Qty OK? Y / N · Variance: </div></div>');
+      const rs = sigs.receiver;
+      if (rs && rs.dataUrl) {
+        blocks.push('<div><div style="font-weight:700;margin-bottom:8px">Received (e-signed)</div>' +
+          '<div style="font-size:12px;margin-bottom:6px">' + (rs.name || '') + ' · ' + String(rs.at || '').slice(0, 16).replace('T', ' ') + '</div>' +
+          '<img src="' + rs.dataUrl + '" alt="receiver signature" style="max-width:100%;height:64px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;background:#fff"/></div>');
+      } else {
+        blocks.push('<div><div style="font-weight:700;margin-bottom:20px">Received at destination</div>' +
+          '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Name: </div>' +
+          '<div style="border-bottom:1px solid #9ca3af;margin-bottom:14px;padding-bottom:4px">Sign / date: </div>' +
+          '<div style="border-bottom:1px solid #9ca3af;padding-bottom:4px">Qty OK? Y / N · Variance: </div></div>');
+      }
     }
     const cols = blocks.length === 2 ? '1fr 1fr' : '1fr';
     signs = '<div style="display:grid;grid-template-columns:' + cols + ';gap:24px;margin-top:32px;font-size:' + font + '">' +
@@ -8870,9 +9052,26 @@ function openTransferDetailModal(transferId) {
         </div>`
       ).join('')
     : '';
+  const sig = t.signatures || {};
+  const sigBlock = (role, label) => {
+    const s = sig[role];
+    if (s && s.dataUrl) {
+      return `<div style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px">
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px">${label} · ${s.name || ''}</div>
+        <img src="${s.dataUrl}" alt="signature" style="max-width:100%;height:72px;object-fit:contain;background:#fff;border-radius:6px"/>
+        <div class="client-meta">${String(s.at || '').replace('T',' ').slice(0,16)}</div>
+      </div>`;
+    }
+    return `<div style="margin-top:12px;padding:10px;border:1px dashed var(--line);border-radius:10px;font-size:13px;color:var(--muted)">
+      ${label}: not signed yet
+      <div style="margin-top:8px"><button class="button small" type="button" data-sign-transfer="${t.id}" data-sign-role="${role}">Sign as ${label.toLowerCase()}</button></div>
+    </div>`;
+  };
+  const sigHtml = '<h3 style="font-size:13px;margin:16px 0 8px">E-signatures</h3>' +
+    sigBlock('driver', 'Driver') + sigBlock('receiver', 'Receiver');
   document.getElementById('transferDetailBody').innerHTML =
     '<div style="margin-bottom:12px;font-size:12px;color:var(--muted)">' + timeline.join(' · ') + '</div>' +
-    '<h3 style="font-size:13px;margin:0 0 8px">Lines</h3>' + lines + auditHtml;
+    '<h3 style="font-size:13px;margin:0 0 8px">Lines</h3>' + lines + sigHtml + auditHtml;
   const recvBtn = document.getElementById('transferDetailReceive');
   if (recvBtn) {
     recvBtn.hidden = t.status !== 'in_transit';
@@ -8934,7 +9133,7 @@ function renderTransfersList() {
         <td><b>${t.transfer_number}</b>${t.note ? `<div class="client-meta">${t.note}</div>` : ''}</td>
         <td>${from?.name || '?'} → ${to?.name || '?'}</td>
         <td class="client-meta">${transferLinesSummary(t)}</td>
-        <td>${transferStatusBadge(t.status)}</td>
+        <td>${transferStatusBadge(t.status)}${(t.signatures&&t.signatures.driver&&t.signatures.driver.dataUrl)?' <span class="client-meta">· driver ✓</span>':''}${(t.signatures&&t.signatures.receiver&&t.signatures.receiver.dataUrl)?' <span class="client-meta">· recv ✓</span>':''}</td>
         <td>${String(t.shipped_at || t.created_at || '').slice(0, 10)}</td>
         <td><div class="client-actions">
           <button class="button small" type="button" data-view-transfer="${t.id}">View</button>
@@ -18220,6 +18419,9 @@ document.getElementById('btnManageLocations')?.addEventListener('click', openLoc
 
 document.getElementById('btnNewTransfer')?.addEventListener('click', openStockTransferModal);
 document.getElementById('transferDetailClose')?.addEventListener('click', () => document.getElementById('transferDetailModal')?.classList.remove('show'));
+document.getElementById('transferSignClear')?.addEventListener('click', () => { try { _signPad && _signPad.clear(); } catch (e) {} });
+document.getElementById('transferSignCancel')?.addEventListener('click', closeTransferSignModal);
+document.getElementById('transferSignSave')?.addEventListener('click', saveTransferSignature);
 document.getElementById('trPrintOptsCancel')?.addEventListener('click', closeTransferPrintOptions);
 document.getElementById('trPrintOptsSave')?.addEventListener('click', () => {
   saveTransferPrintOptionsFromForm();
@@ -18363,6 +18565,11 @@ document.addEventListener('click', (e) => {
     return;
   }
 
+  const signTr = e.target.closest('[data-sign-transfer]');
+  if (signTr) {
+    openTransferSignModal(signTr.getAttribute('data-sign-transfer'), signTr.getAttribute('data-sign-role') || 'receiver');
+    return;
+  }
   const printTr = e.target.closest('[data-print-transfer]');
   if (printTr) {
     openTransferPrintOptions(printTr.getAttribute('data-print-transfer'));
