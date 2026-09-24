@@ -1,11 +1,53 @@
 {
   "version": 2,
   "routes": [
-    {"src": "/app.html", "dest": "/app.html"},
-    {"src": "/invoice.html", "dest": "/invoice.html"},
-    {"src": "/growth.html", "dest": "/growth.html"},
-    {"src": "/growth-intelligence.html", "dest": "/growth-intelligence.html"},
-    {"src": "/growth-intelligence-v2.html", "dest": "/growth-intelligence-v2.html"},
-    {"src": "/", "dest": "/index.html"}
+    {
+      "src": "/payment-success.html",
+      "dest": "/payment-success.html"
+    },
+    {
+      "src": "/refunds.html",
+      "dest": "/refunds.html"
+    },
+    {
+      "src": "/privacy.html",
+      "dest": "/privacy.html"
+    },
+    {
+      "src": "/terms.html",
+      "dest": "/terms.html"
+    },
+    {
+      "src": "/app.html",
+      "dest": "/app.html"
+    },
+    {
+      "src": "/pos.html",
+      "dest": "/pos.html"
+    },
+    {
+      "src": "/pos-sw.js",
+      "dest": "/pos-sw.js"
+    },
+    {
+      "src": "/invoice.html",
+      "dest": "/invoice.html"
+    },
+    {
+      "src": "/growth.html",
+      "dest": "/growth.html"
+    },
+    {
+      "src": "/growth-intelligence.html",
+      "dest": "/growth-intelligence.html"
+    },
+    {
+      "src": "/growth-intelligence-v2.html",
+      "dest": "/growth-intelligence-v2.html"
+    },
+    {
+      "src": "/",
+      "dest": "/index.html"
+    }
   ]
 }

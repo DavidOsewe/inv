@@ -1876,7 +1876,7 @@ input:focus:not(:focus-visible) {
   display: none;
   place-items: center;
   padding: 18px;
-  z-index: 50;
+  z-index: 80;
   transition: background var(--ease);
 }
 [data-theme="dark"] .modalback {
@@ -1917,7 +1917,7 @@ input:focus:not(:focus-visible) {
   transform: translateY(100px);
   opacity: 0;
   transition: transform var(--ease-out), opacity var(--ease-out);
-  z-index: 60;
+  z-index: 90;
   box-shadow: var(--shadow-md);
 }
 .toast.show {
@@ -2643,7 +2643,7 @@ input:focus:not(:focus-visible) {
       <button data-view="products"><span>■</span> Products</button>
       <button data-view="purchases"><span>□</span> Purchases</button>
       <button data-view="transfers"><span>⇄</span> Transfers</button>
-      <a class="nav-link-pos" href="pos.html"><span>▣</span> POS</a>
+      <a class="nav-link-pos" href="/pos.html"><span>▣</span> POS</a>
 
       <div class="nav-section">Books</div>
       <button data-view="books"><span>◎</span> Books</button>
@@ -2770,7 +2770,7 @@ input:focus:not(:focus-visible) {
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="button" type="button" id="btnManageLocations">Locations</button>
-          <a class="button" href="pos.html" id="btnOpenPosFromProducts">Open POS</a>
+          <a class="button" href="/pos.html" id="btnOpenPosFromProducts">Open POS</a>
           <button class="button primary" type="button" id="addProduct">+ Add product</button>
         </div>
       </div>
@@ -3915,7 +3915,7 @@ input:focus:not(:focus-visible) {
       <button type="button" data-more-view="products"><span>■</span>Products</button>
       <button type="button" data-more-view="purchases"><span>□</span>Purchases</button>
       <button type="button" data-more-view="transfers"><span>⇄</span>Transfers</button>
-      <a href="pos.html"><span>▣</span>POS</a>
+      <a href="/pos.html"><span>▣</span>POS</a>
     </div>
     <div class="more-sheet-title">Books &amp; account</div>
     <div class="more-sheet-grid">
@@ -4523,6 +4523,7 @@ const $ = s => document.querySelector(s);
 function showModal(id) {
   const m = document.getElementById(id);
   if (!m) return null;
+  try { closeMoreSheet(); } catch (_) {}
   m.classList.add('show');
   try {
     m.style.display = 'grid';
@@ -7188,6 +7189,7 @@ function switchTo(v) {
 
 function confirmAction(title, message, onConfirm, opts) {
   opts = opts || {};
+  try { closeMoreSheet(); } catch (_) {}
   pendingConfirm = onConfirm;
   const titleEl = $('#confirmTitle');
   const msgEl = $('#confirmMessage');
@@ -19290,7 +19292,7 @@ document.getElementById('locationsList')?.addEventListener('click', (e) => {
     toast('Default location updated');
   }
 });
-document.getElementById('btnOpenPosFromProducts')?.addEventListener('click', () => { location.href = 'pos.html'; });
+document.getElementById('btnOpenPosFromProducts')?.addEventListener('click', () => { location.href = '/pos.html'; });
 document.getElementById('btnPosToProducts')?.addEventListener('click', () => switchTo('products'));
 document.getElementById('btnPosClearCart')?.addEventListener('click', () => {
   ensurePosDb();
