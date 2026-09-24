@@ -4097,8 +4097,8 @@ input:focus:not(:focus-visible) {
     </div>
     <p id="chatChannelModalHint" class="section-sub" style="margin:0"></p>
     <div class="buttons" style="justify-content:flex-end;margin-top:16px;gap:10px">
-      <button type="button" class="button" id="chatChannelModalCancel">Cancel</button>
-      <button type="button" class="button primary" id="chatChannelModalSave">Create</button>
+      <button type="button" class="button" id="chatChannelModalCancel" onclick="closeChatChannelModal(); return false;">Cancel</button>
+      <button type="button" class="button primary" id="chatChannelModalSave" onclick="submitChatChannelModal(); return false;">Create</button>
     </div>
   </div>
 </div>
@@ -22149,20 +22149,57 @@ function chatSlugify(name) {
 }
 
 function openChatChannelModal() {
+  const m = document.getElementById('chatChannelModal');
   const name = document.getElementById('chatChannelName');
   const topic = document.getElementById('chatChannelTopic');
   const hint = document.getElementById('chatChannelModalHint');
+  const saveBtn = document.getElementById('chatChannelModalSave');
   if (name) name.value = '';
   if (topic) topic.value = '';
   if (hint) hint.textContent = '';
-  if (typeof showModal === 'function') showModal('chatChannelModal');
-  else document.getElementById('chatChannelModal')?.classList.add('show');
-  setTimeout(() => name?.focus(), 50);
+  if (saveBtn) saveBtn.disabled = false;
+  if (m) {
+    m.classList.add('show');
+    try {
+      m.style.display = 'grid';
+      m.style.zIndex = '90';
+    } catch (_) {}
+  }
+  try { closeMoreSheet(); } catch (_) {}
+  setTimeout(() => { try { name?.focus(); } catch (_) {} }, 50);
 }
 
 function closeChatChannelModal() {
-  if (typeof hideModal === 'function') hideModal('chatChannelModal');
-  else document.getElementById('chatChannelModal')?.classList.remove('show');
+  const m = document.getElementById('chatChannelModal');
+  if (m) {
+    m.classList.remove('show');
+    try {
+      m.style.display = '';
+      m.style.zIndex = '';
+    } catch (_) {}
+  }
+  const saveBtn = document.getElementById('chatChannelModalSave');
+  if (saveBtn) saveBtn.disabled = false;
+}
+
+async function submitChatChannelModal() {
+  const name = document.getElementById('chatChannelName')?.value || '';
+  const topic = document.getElementById('chatChannelTopic')?.value || '';
+  const hint = document.getElementById('chatChannelModalHint');
+  const btn = document.getElementById('chatChannelModalSave');
+  if (hint) hint.textContent = '';
+  if (btn) btn.disabled = true;
+  try {
+    const ch = await chatCreateChannel(name, topic);
+    closeChatChannelModal();
+    toast('Created #' + (ch.slug || ch.name));
+  } catch (err) {
+    const msg = err?.message || String(err);
+    if (hint) hint.textContent = msg;
+    try { toast(msg); } catch (_) {}
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function chatCreateChannel(rawName, topicText) {
@@ -22247,37 +22284,63 @@ async function chatView() {
   }
 }
 
+
+document.addEventListener('click', (e) => {
+  const t = e.target && e.target.closest && e.target.closest('#chatChannelModalSave, #chatChannelModalCancel, #chatNewChannelBtn, #chatNewChannelSideBtn');
+  if (!t) return;
+  if (t.id === 'chatChannelModalCancel') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeChatChannelModal();
+  } else if (t.id === 'chatChannelModalSave') {
+    e.preventDefault();
+    e.stopPropagation();
+    submitChatChannelModal();
+  } else if (t.id === 'chatNewChannelBtn' || t.id === 'chatNewChannelSideBtn') {
+    e.preventDefault();
+    e.stopPropagation();
+    openChatChannelModal();
+  }
+}, true);
+
 (function wireChatUi() {
   document.getElementById('chatRefreshBtn')?.addEventListener('click', () => {
     chatView().catch(() => {});
   });
-  document.getElementById('chatNewChannelBtn')?.addEventListener('click', openChatChannelModal);
-  document.getElementById('chatNewChannelSideBtn')?.addEventListener('click', openChatChannelModal);
-  document.getElementById('chatChannelModalCancel')?.addEventListener('click', closeChatChannelModal);
-  document.getElementById('chatChannelModal')?.addEventListener('click', (e) => {
-    if (e.target.id === 'chatChannelModal') closeChatChannelModal();
+  document.getElementById('chatNewChannelBtn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openChatChannelModal();
   });
-  document.getElementById('chatChannelModalSave')?.addEventListener('click', async () => {
-    const name = document.getElementById('chatChannelName')?.value || '';
-    const topic = document.getElementById('chatChannelTopic')?.value || '';
-    const hint = document.getElementById('chatChannelModalHint');
-    const btn = document.getElementById('chatChannelModalSave');
-    if (btn) btn.disabled = true;
-    try {
-      const ch = await chatCreateChannel(name, topic);
+  document.getElementById('chatNewChannelSideBtn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openChatChannelModal();
+  });
+  document.getElementById('chatChannelModalCancel')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeChatChannelModal();
+  });
+  document.getElementById('chatChannelModalSave')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    submitChatChannelModal();
+  });
+  document.getElementById('chatChannelModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'chatChannelModal') {
+      e.preventDefault();
       closeChatChannelModal();
-      toast('Created #' + (ch.slug || ch.name));
-    } catch (err) {
-      if (hint) hint.textContent = err.message || String(err);
-      else toast(err.message || 'Could not create channel');
-    } finally {
-      if (btn) btn.disabled = false;
     }
+  });
+  // Clicks inside the panel should not bubble to global handlers oddly
+  document.querySelector('#chatChannelModal .modal')?.addEventListener('click', (e) => {
+    e.stopPropagation();
   });
   document.getElementById('chatChannelName')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      document.getElementById('chatChannelModalSave')?.click();
+      submitChatChannelModal();
     }
   });
   document.getElementById('chatCompose')?.addEventListener('submit', async (e) => {
