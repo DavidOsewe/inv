@@ -14788,7 +14788,16 @@ function openCashModal() {
   document.getElementById('cashCurrency').value = (db.profile.reporting || 'NGN');
   document.getElementById('cashDate').value = today;
   document.getElementById('cashNote').value = '';
-  m.classList.add('show');
+  try {
+    const docsIn = document.getElementById('cashDocs');
+    if (docsIn) docsIn.value = '';
+    const docsList = document.getElementById('cashDocsList');
+    if (docsList) docsList.innerHTML = '';
+  } catch (_) {}
+  try { wireDocsPreview('cashDocs', 'cashDocsList'); } catch (_) {}
+  if (typeof showModal === 'function') showModal('cashModal');
+  else m.classList.add('show');
+  try { initSearchableSelects(m); } catch (_) {}
 }
 function closeCashModal() {
   document.getElementById('cashModal')?.classList.remove('show');
@@ -19318,7 +19327,10 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
 
 document.getElementById('btnExportBooks')?.addEventListener('click', exportBooksCsv);
 document.getElementById('cashCancel')?.addEventListener('click', closeCashModal);
-document.getElementById('cashType')?.addEventListener('change', (e) => fillCashCategoryOptions(e.target.value));
+document.getElementById('cashType')?.addEventListener('change', (e) => {
+  fillCashCategoryOptions(e.target.value);
+  try { fillCashLedgerSelects(); } catch (_) {}
+});
 document.getElementById('booksTypeFilter')?.addEventListener('change', () => booksView());
 document.getElementById('booksTabs')?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-books-tab]');
@@ -19349,39 +19361,75 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
     appendBooksAudit('cash.manual', 'cash', id, (type === 'out' ? 'Cash out' : 'Cash in') + ' · ' + note + ((typeof docs !== 'undefined' && docs.length) ? (' · ' + docs.length + ' file(s)') : ''), null, { id, type, amount, currency, documents: (typeof docs !== 'undefined' ? docs : []) }, { documents: (typeof docs !== 'undefined' ? docs : []) });
   } catch (_) {}
   const amt = toRep(amount, currency);
-  if (type === 'out') {
-    const expenseAccount = EXPENSE_ACCOUNT_BY_CATEGORY[category] || '5700';
-    if (expenseAccount === '3100') {
-      postJournal({
-        date, memo: note, source: 'manual_expense', sourceKey: 'j:cash:' + id,
-        lines: [
-          { accountId: '3100', debit: amt, credit: 0 },
-          { accountId: '1000', debit: 0, credit: amt }
-        ]
-      });
+  // Ledger selection: bank/cash account + offset (expense/income). Fall back to category maps.
+  const cashId = bankAccountId || defaultCashAccountId() || '1000';
+  let offsetId = offsetAccountId;
+  if (!offsetId) {
+    if (type === 'out') {
+      offsetId = (typeof EXPENSE_ACCOUNT_BY_CATEGORY !== 'undefined' && EXPENSE_ACCOUNT_BY_CATEGORY[category])
+        || '5700';
     } else {
-      postJournal({
-        date, memo: note, source: 'manual_expense', sourceKey: 'j:cash:' + id,
-        lines: [
-          { accountId: expenseAccount, debit: amt, credit: 0 },
-          { accountId: '1000', debit: 0, credit: amt }
-        ]
-      });
+      offsetId = category === 'loan_in' ? '3000' : (category === 'sales_other' ? '4100' : '4100');
     }
-  } else {
+  }
+  // Validate accounts exist on COA; keep best-effort fallbacks
+  try {
+    const coa = (typeof getCoa === 'function' ? getCoa() : []) || [];
+    const has = (id) => coa.some(a => a.id === id);
+    if (!has(cashId)) {
+      toast('Cash account ' + cashId + ' is not on the chart — using 1000');
+    }
+    if (!has(offsetId)) {
+      offsetId = type === 'out' ? '5700' : '4100';
+    }
+  } catch (_) {}
+
+  const cashAcct = (typeof getCoa === 'function' && getCoa().some(a => a.id === cashId)) ? cashId : '1000';
+  const offsetAcct = offsetId;
+
+  if (type === 'out') {
+    // Expense (or drawings): Dr offset · Cr cash/bank
     postJournal({
-      date, memo: note, source: 'manual_income', sourceKey: 'j:cash:' + id,
+      date,
+      memo: note,
+      source: 'manual_expense',
+      sourceKey: 'j:cash:' + id,
       lines: [
-        { accountId: '1000', debit: amt, credit: 0 },
-        { accountId: category === 'loan_in' ? '3000' : '4100', debit: 0, credit: amt }
-      ]
+        { accountId: offsetAcct, debit: amt, credit: 0 },
+        { accountId: cashAcct, debit: 0, credit: amt }
+      ],
+      documents: docs
+    });
+  } else {
+    // Income: Dr cash/bank · Cr offset (income/equity)
+    postJournal({
+      date,
+      memo: note,
+      source: 'manual_income',
+      sourceKey: 'j:cash:' + id,
+      lines: [
+        { accountId: cashAcct, debit: amt, credit: 0 },
+        { accountId: offsetAcct, debit: 0, credit: amt }
+      ],
+      documents: docs
     });
   }
+  // Refresh cash entry with resolved ledger ids
+  try {
+    const ce = (db.cashEntries || []).find(x => x.id === id);
+    if (ce) {
+      ce.bankAccountId = cashAcct;
+      ce.offsetAccountId = offsetAcct;
+      ce.documents = docs;
+    }
+  } catch (_) {}
   save();
   closeCashModal();
-  toast('Posted to books');
-  booksView();
-  track('cash_entry_added', { type, category, accrual: true });
+  const sideLabel = type === 'out' ? 'Expense' : 'Income';
+  toast(sideLabel + ' posted · ' + cashAcct + (type === 'out' ? ' credited' : ' debited') +
+    (docs.length ? (' · ' + docs.length + ' file(s)') : ''));
+  try { booksView(); } catch (_) {}
+  try { track('cash_entry_added', { type, category, cashAcct, offsetAcct, docs: docs.length, accrual: true }); } catch (_) {}
 });
 
 /* ---------- Scheduled reminder nudges (local) ---------- */
