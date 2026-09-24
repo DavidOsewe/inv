@@ -3482,17 +3482,19 @@ input:focus:not(:focus-visible) {
       <div class="section-head">
         <div>
           <h2>Team chat</h2>
-          <div class="client-count" id="chatSubtitle">Org channels — start with #general</div>
+          <div class="client-count" id="chatSubtitle">Org channels — #general plus custom rooms</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="button" type="button" id="chatRefreshBtn">Refresh</button>
+          <button class="button primary" type="button" id="chatNewChannelBtn">+ Channel</button>
         </div>
       </div>
       <div class="chat-layout" id="chatLayout">
         <aside class="chat-sidebar" id="chatSidebar">
           <div class="chat-sidebar-head">Channels</div>
           <div id="chatChannelList" class="chat-channel-list"></div>
-          <p class="section-sub" style="margin:10px 8px 0;font-size:11px">DMs come next. Phase 1 is #general only.</p>
+          <button type="button" class="button small" id="chatNewChannelSideBtn" style="width:100%;margin-top:8px">+ New channel</button>
+          <p class="section-sub" style="margin:10px 8px 0;font-size:11px">DMs come in Phase C.</p>
         </aside>
         <div class="chat-main">
           <div class="chat-room-head">
@@ -4079,6 +4081,27 @@ input:focus:not(:focus-visible) {
   </div>
 </div>
 
+
+
+<div class="modalback" id="chatChannelModal">
+  <div class="modal" style="max-width:420px">
+    <h2>New channel</h2>
+    <p class="section-sub">Visible to everyone in this organisation. Use lowercase names like <b>ikeja</b> or <b>accounts</b>.</p>
+    <div class="field">
+      <label>Name</label>
+      <input id="chatChannelName" placeholder="e.g. ikeja" maxlength="40" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Topic (optional)</label>
+      <input id="chatChannelTopic" placeholder="What this channel is for" maxlength="120">
+    </div>
+    <p id="chatChannelModalHint" class="section-sub" style="margin:0"></p>
+    <div class="buttons" style="justify-content:flex-end;margin-top:16px;gap:10px">
+      <button type="button" class="button" id="chatChannelModalCancel">Cancel</button>
+      <button type="button" class="button primary" id="chatChannelModalSave">Create</button>
+    </div>
+  </div>
+</div>
 
 <div class="modalback" id="supplierModal">
   <div class="modal" style="max-width:440px">
@@ -7339,7 +7362,7 @@ function switchTo(v) {
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
     plan: ['Plan & billing', 'Manage your plan, usage and feature access.'],
-    chat: ['Team chat', 'Org channels — coordinate without leaving invoicedey.'],
+    chat: ['Team chat', 'Channels for your organisation — #general and custom rooms.'],
     editor: ['Invoice editor', 'Create a clear invoice your client can pay.']
   }[v] || ['invoicedey', ''];
   $('#heading').textContent = h[0];
@@ -22044,6 +22067,11 @@ function renderChatChannels() {
   const ch = chatState.channels.find(c => c.id === chatState.channelId);
   if (title) title.textContent = '#' + (ch ? (ch.name || ch.slug) : chatState.channelName);
   if (topic) topic.textContent = ch && ch.topic ? ch.topic : '';
+  const input = document.getElementById('chatInput');
+  if (input) {
+    const nm = ch ? (ch.name || ch.slug) : chatState.channelName;
+    input.placeholder = 'Message #' + nm + '…';
+  }
 }
 
 async function chatLoadMessages() {
@@ -22110,6 +22138,92 @@ async function chatSendMessage(text) {
   await chatLoadMessages();
 }
 
+
+function chatSlugify(name) {
+  return String(name || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'channel';
+}
+
+function openChatChannelModal() {
+  const name = document.getElementById('chatChannelName');
+  const topic = document.getElementById('chatChannelTopic');
+  const hint = document.getElementById('chatChannelModalHint');
+  if (name) name.value = '';
+  if (topic) topic.value = '';
+  if (hint) hint.textContent = '';
+  if (typeof showModal === 'function') showModal('chatChannelModal');
+  else document.getElementById('chatChannelModal')?.classList.add('show');
+  setTimeout(() => name?.focus(), 50);
+}
+
+function closeChatChannelModal() {
+  if (typeof hideModal === 'function') hideModal('chatChannelModal');
+  else document.getElementById('chatChannelModal')?.classList.remove('show');
+}
+
+async function chatCreateChannel(rawName, topicText) {
+  const ok = await chatEnsureClient();
+  if (!ok) throw new Error('Sign in required');
+  const slug = chatSlugify(rawName);
+  if (slug.length < 2) throw new Error('Name is too short');
+  if (slug === 'general') throw new Error('#general already exists');
+  const display = slug.replace(/-/g, ' ');
+  // Unique check locally first
+  if ((chatState.channels || []).some(c => c.slug === slug)) {
+    throw new Error('#' + slug + ' already exists');
+  }
+  const userId = cloud.user?.id;
+  if (!userId) throw new Error('Sign in required');
+
+  const { data: ch, error } = await cloud.client
+    .from('chat_channels')
+    .insert({
+      organization_id: cloud.organizationId,
+      name: display,
+      slug,
+      type: 'channel',
+      topic: (topicText || '').trim() || null,
+      created_by: userId
+    })
+    .select('id, name, slug, type, topic, is_archived, created_at')
+    .single();
+  if (error) {
+    if (/unique|duplicate/i.test(error.message || '')) {
+      throw new Error('#' + slug + ' already exists');
+    }
+    throw error;
+  }
+
+  // Join creator
+  try {
+    await cloud.client.from('chat_channel_members').insert({
+      channel_id: ch.id,
+      user_id: userId
+    });
+  } catch (_) {}
+
+  // System-ish first message from creator
+  try {
+    await cloud.client.from('chat_messages').insert({
+      organization_id: cloud.organizationId,
+      channel_id: ch.id,
+      user_id: userId,
+      body: 'Created #' + slug + (topicText ? (' — ' + String(topicText).trim()) : ''),
+      attachments: []
+    });
+  } catch (_) {}
+
+  chatState.channelId = ch.id;
+  chatState.channelName = ch.name || ch.slug;
+  await chatLoadChannels();
+  await chatLoadMessages();
+  return ch;
+}
+
 async function chatView() {
   chatSetStatus('Connecting…');
   try {
@@ -22136,6 +22250,35 @@ async function chatView() {
 (function wireChatUi() {
   document.getElementById('chatRefreshBtn')?.addEventListener('click', () => {
     chatView().catch(() => {});
+  });
+  document.getElementById('chatNewChannelBtn')?.addEventListener('click', openChatChannelModal);
+  document.getElementById('chatNewChannelSideBtn')?.addEventListener('click', openChatChannelModal);
+  document.getElementById('chatChannelModalCancel')?.addEventListener('click', closeChatChannelModal);
+  document.getElementById('chatChannelModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'chatChannelModal') closeChatChannelModal();
+  });
+  document.getElementById('chatChannelModalSave')?.addEventListener('click', async () => {
+    const name = document.getElementById('chatChannelName')?.value || '';
+    const topic = document.getElementById('chatChannelTopic')?.value || '';
+    const hint = document.getElementById('chatChannelModalHint');
+    const btn = document.getElementById('chatChannelModalSave');
+    if (btn) btn.disabled = true;
+    try {
+      const ch = await chatCreateChannel(name, topic);
+      closeChatChannelModal();
+      toast('Created #' + (ch.slug || ch.name));
+    } catch (err) {
+      if (hint) hint.textContent = err.message || String(err);
+      else toast(err.message || 'Could not create channel');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+  document.getElementById('chatChannelName')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('chatChannelModalSave')?.click();
+    }
   });
   document.getElementById('chatCompose')?.addEventListener('submit', async (e) => {
     e.preventDefault();
