@@ -2737,6 +2737,26 @@ input:focus:not(:focus-visible) {
   }
 }
 
+
+.chat-live-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--green-text, #0f7b4a);
+  background: var(--green-soft, #e8f8ef);
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+.chat-live-badge[data-state="off"] {
+  color: var(--muted);
+  background: var(--panel-2);
+}
+.chat-live-badge[data-state="error"] {
+  color: #b42318;
+  background: #fff1f1;
+}
+
 </style>
 </head>
 <body>
@@ -3502,6 +3522,7 @@ input:focus:not(:focus-visible) {
           <div class="chat-room-head">
             <b id="chatRoomTitle">#general</b>
             <span class="client-meta" id="chatRoomTopic"></span>
+            <span class="chat-live-badge" id="chatLiveBadge" hidden title="Realtime connection">● Live</span>
           </div>
           <div id="chatMessages" class="chat-messages" role="log" aria-live="polite"></div>
           <form id="chatCompose" class="chat-compose" autocomplete="off">
@@ -7366,6 +7387,9 @@ function updateHeaderActions(view) {
 
 function switchTo(v) {
   try { closeMoreSheet(); } catch (_) {}
+  try {
+    if (v !== 'chat' && typeof chatStopRealtime === 'function') chatStopRealtime();
+  } catch (_) {}
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('active', x.id === v));
   document.querySelectorAll('.nav button, .bottom-nav button').forEach(x => {
     x.classList.toggle('active', x.dataset.view === v);
@@ -7383,7 +7407,7 @@ function switchTo(v) {
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
     plan: ['Plan & billing', 'Manage your plan, usage and feature access.'],
-    chat: ['Team chat', 'Channels and DMs for your organisation.'],
+    chat: ['Team chat', 'Live channels and DMs for your organisation.'],
     editor: ['Invoice editor', 'Create a clear invoice your client can pay.']
   }[v] || ['invoicedey', ''];
   $('#heading').textContent = h[0];
@@ -22179,6 +22203,107 @@ function renderChatDms() {
   });
 }
 
+
+let chatRealtimeChannel = null;
+
+function chatSetLiveBadge(state, label) {
+  const el = document.getElementById('chatLiveBadge');
+  if (!el) return;
+  if (!state || state === 'hidden') {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  el.dataset.state = state === 'on' ? 'on' : (state === 'error' ? 'error' : 'off');
+  el.textContent = label || (state === 'on' ? '● Live' : state === 'error' ? '○ Offline' : '○ …');
+}
+
+function chatStopRealtime() {
+  try {
+    if (chatRealtimeChannel && cloud.client) {
+      cloud.client.removeChannel(chatRealtimeChannel);
+    }
+  } catch (_) {}
+  chatRealtimeChannel = null;
+  chatSetLiveBadge('hidden');
+}
+
+function chatStartRealtime() {
+  chatStopRealtime();
+  if (!cloud.client || !chatState.channelId) return;
+  chatSetLiveBadge('off', '○ Connecting…');
+  const channelId = chatState.channelId;
+  try {
+    chatRealtimeChannel = cloud.client
+      .channel('chat-msgs-' + channelId)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'chat_messages',
+          filter: 'channel_id=eq.' + channelId
+        },
+        (payload) => {
+          try {
+            if (chatState.channelId !== channelId) return;
+            const row = payload?.new;
+            if (!row || row.deleted_at) return;
+            if ((chatState.messages || []).some(m => m.id === row.id)) return;
+            chatState.messages = (chatState.messages || []).concat([row]);
+            renderChatMessages();
+          } catch (e) {
+            console.warn('chat realtime insert', e);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'chat_messages',
+          filter: 'channel_id=eq.' + channelId
+        },
+        (payload) => {
+          try {
+            if (chatState.channelId !== channelId) return;
+            const row = payload?.new;
+            if (!row) return;
+            const idx = (chatState.messages || []).findIndex(m => m.id === row.id);
+            if (row.deleted_at) {
+              chatState.messages = (chatState.messages || []).filter(m => m.id !== row.id);
+            } else if (idx >= 0) {
+              chatState.messages[idx] = row;
+            }
+            renderChatMessages();
+          } catch (e) {
+            console.warn('chat realtime update', e);
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          chatSetLiveBadge('on', '● Live');
+          if (!(chatState.messages || []).length) {
+            chatSetStatus('Live — waiting for messages');
+          } else {
+            chatSetStatus('');
+          }
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          chatSetLiveBadge('error', '○ Offline');
+          chatSetStatus('Live updates unavailable — use Refresh');
+        } else if (status === 'CLOSED') {
+          chatSetLiveBadge('off', '○ …');
+        }
+      });
+  } catch (e) {
+    console.warn('chatStartRealtime', e);
+    chatSetLiveBadge('error', '○ Offline');
+  }
+}
+
+
 async function chatLoadMessages() {
   if (!chatState.channelId) return;
   const ok = await chatEnsureClient();
@@ -22195,6 +22320,7 @@ async function chatLoadMessages() {
   chatState.messages = data || [];
   renderChatMessages();
   chatSetStatus(chatState.messages.length ? '' : 'No messages yet — say hello to the team.');
+  try { chatStartRealtime(); } catch (_) {}
 }
 
 function renderChatMessages() {
