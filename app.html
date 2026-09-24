@@ -2757,6 +2757,39 @@ input:focus:not(:focus-visible) {
   background: #fff1f1;
 }
 
+
+.nav-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: #e11d48;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+.nav button .nav-badge[hidden],
+.more-sheet-grid .nav-badge[hidden] { display: none !important; }
+.chat-channel-btn .unread-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e11d48;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.chat-msg-attach {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 </style>
 </head>
 <body>
@@ -2783,7 +2816,7 @@ input:focus:not(:focus-visible) {
       <button data-view="books"><span>◎</span> Books</button>
 
       <div class="nav-section">Account</div>
-      <button data-view="chat"><span>💬</span> Chat</button>
+      <button data-view="chat"><span>💬</span> Chat <span class="nav-badge" id="chatNavBadge" hidden></span></button>
       <button data-view="profile"><span>⚙</span> Profile</button>
       <button data-view="plan"><span>◆</span> Plan</button>
     </nav>
@@ -3526,9 +3559,14 @@ input:focus:not(:focus-visible) {
           </div>
           <div id="chatMessages" class="chat-messages" role="log" aria-live="polite"></div>
           <form id="chatCompose" class="chat-compose" autocomplete="off">
+            <label class="chat-attach-btn button" title="Attach file" style="margin:0;cursor:pointer;min-width:44px;min-height:44px;display:grid;place-items:center">
+              📎
+              <input type="file" id="chatAttach" accept="image/*,.pdf,.png,.jpg,.jpeg" hidden>
+            </label>
             <input type="text" id="chatInput" placeholder="Message #general…" maxlength="4000" />
             <button class="button primary" type="submit" id="chatSendBtn">Send</button>
           </form>
+          <div id="chatAttachPreview" class="client-meta" style="padding:0 14px 8px"></div>
           <p id="chatStatus" class="section-sub" style="margin:6px 0 0"></p>
         </div>
       </div>
@@ -4098,7 +4136,7 @@ input:focus:not(:focus-visible) {
     <div class="more-sheet-title">Books &amp; account</div>
     <div class="more-sheet-grid">
       <button type="button" data-more-view="books"><span>◎</span>Books</button>
-      <button type="button" data-more-view="chat"><span>💬</span>Chat</button>
+      <button type="button" data-more-view="chat"><span>💬</span>Chat <span class="nav-badge" id="chatMoreBadge" hidden></span></button>
       <button type="button" data-more-view="plan"><span>◆</span>Plan</button>
     </div>
   </div>
@@ -7426,7 +7464,7 @@ function switchTo(v) {
     try { closePreviewSheet(); } catch {}
   }
   updateGrowthMeter();
-  if (v === 'dashboard') dashboard();
+  if (v === 'dashboard') { dashboard(); try { chatRefreshUnread(); } catch (_) {} }
   if (v === 'books') booksView();
   if (v === 'products') productsView();
   if (v === 'chat') chatView();
@@ -7524,6 +7562,7 @@ function renderInvoiceRows(arr, options = {}) {
             ${bal > 0.001 ? `<button class="button small" data-remind-wa="${i.id}">Remind</button>` : ''}
             ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Record payment</button>` : ''}
             ${paid > 0 ? `<button class="button small" data-receipt="${i.id}" title="${hasFeature('payment_receipts') ? 'Download receipt' : 'Receipts require Starter'}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
+            <button class="button small" data-chat-discuss-invoice="${i.id}">Discuss</button>
             <button class="button small danger" data-delete-invoice="${i.id}">Delete</button>
           </td>` : ''}
         </tr>`;
@@ -7547,6 +7586,7 @@ function renderInvoiceRows(arr, options = {}) {
           ${bal > 0.001 ? `<button class="button small" data-remind-wa="${i.id}">Remind</button>` : ''}
           ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
           ${paid > 0 ? `<button class="button small" data-receipt="${i.id}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
+          <button class="button small" data-chat-discuss-invoice="${i.id}">Discuss</button>
           <button class="button small danger" data-delete-invoice="${i.id}">Delete</button>
         </div>` : '';
       return `<div class="mobile-card" role="listitem" data-open="${i.id}">
@@ -9798,6 +9838,17 @@ function openTransferDetailModal(transferId) {
   if (printBtn) printBtn.onclick = () => openTransferPrintOptions(t.id);
   const shareBtn = document.getElementById('transferDetailShare');
   if (shareBtn) shareBtn.onclick = () => { shareStockTransfer(t.id).catch(() => {}); };
+  const discussBtn = document.getElementById('transferDetailDiscuss');
+  if (discussBtn) {
+    discussBtn.onclick = () => {
+      try { document.getElementById('transferDetailModal')?.classList.remove('show'); } catch (_) {}
+      const num = t.transfer_number || t.number || String(t.id).slice(0, 8);
+      const summary = 'Transfer #' + num + ' · ' + (t.status || '') +
+        ' · from ' + (t.from_location_name || t.from_location_id || '?') +
+        ' → ' + (t.to_location_name || t.to_location_id || '?');
+      chatDiscussEntity('transfer', t.id, summary);
+    };
+  }
   document.getElementById('transferDetailModal').classList.add('show');
 }
 
@@ -22025,7 +22076,9 @@ let chatState = {
   dms: [],
   members: [],
   messages: [],
-  loading: false
+  loading: false,
+  unreadByChannel: {},
+  pendingAttach: null
 };
 
 function chatSetStatus(msg) {
@@ -22142,7 +22195,8 @@ function renderChatChannels() {
   }
   el.innerHTML = chatState.channels.map(c =>
     '<button type="button" class="chat-channel-btn' + (c.id === chatState.channelId ? ' active' : '') +
-    '" data-chat-channel="' + c.id + '">#' + String(c.name || c.slug).replace(/</g, '') + '</button>'
+    '" data-chat-channel="' + c.id + '">#' + String(c.name || c.slug).replace(/</g, '') +
+    (typeof chatUnreadDot === 'function' ? chatUnreadDot(c.id) : '') + '</button>'
   ).join('');
   el.querySelectorAll('[data-chat-channel]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -22188,7 +22242,8 @@ function renderChatDms() {
   }
   el.innerHTML = chatState.dms.map(c =>
     '<button type="button" class="chat-channel-btn' + (c.id === chatState.channelId ? ' active' : '') +
-    '" data-chat-dm="' + c.id + '">@' + String(c.name || 'direct').replace(/</g, '') + '</button>'
+    '" data-chat-dm="' + c.id + '">@' + String(c.name || 'direct').replace(/</g, '') +
+    (typeof chatUnreadDot === 'function' ? chatUnreadDot(c.id) : '') + '</button>'
   ).join('');
   el.querySelectorAll('[data-chat-dm]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -22252,6 +22307,9 @@ function chatStartRealtime() {
             if ((chatState.messages || []).some(m => m.id === row.id)) return;
             chatState.messages = (chatState.messages || []).concat([row]);
             renderChatMessages();
+            if (row.user_id !== (cloud.user && cloud.user.id)) {
+              try { chatMarkChannelRead(channelId); } catch (_) {}
+            }
           } catch (e) {
             console.warn('chat realtime insert', e);
           }
@@ -22304,6 +22362,118 @@ function chatStartRealtime() {
 }
 
 
+
+async function chatMarkChannelRead(channelId) {
+  if (!channelId || !cloud.client || !(cloud.user && cloud.user.id)) return;
+  try {
+    await cloud.client.from('chat_channel_members').upsert({
+      channel_id: channelId,
+      user_id: cloud.user.id,
+      last_read_at: new Date().toISOString()
+    }, { onConflict: 'channel_id,user_id' });
+    if (!chatState.unreadByChannel) chatState.unreadByChannel = {};
+    chatState.unreadByChannel[channelId] = 0;
+    chatUpdateUnreadUi();
+  } catch (e) {
+    console.warn('chatMarkChannelRead', e);
+  }
+}
+
+async function chatRefreshUnread() {
+  if (!cloud.client || !cloud.organizationId || !(cloud.user && cloud.user.id)) return;
+  try {
+    const { data: memberships } = await cloud.client
+      .from('chat_channel_members')
+      .select('channel_id, last_read_at')
+      .eq('user_id', cloud.user.id);
+    const memMap = {};
+    (memberships || []).forEach(m => { memMap[m.channel_id] = m.last_read_at; });
+
+    const channelIds = []
+      .concat(chatState.channels || [])
+      .concat(chatState.dms || [])
+      .map(c => c.id)
+      .filter(Boolean);
+    if (!channelIds.length) {
+      chatState.unreadByChannel = {};
+      chatUpdateUnreadUi();
+      return;
+    }
+
+    const { data: msgs } = await cloud.client
+      .from('chat_messages')
+      .select('id, channel_id, user_id, created_at, deleted_at')
+      .eq('organization_id', cloud.organizationId)
+      .in('channel_id', channelIds)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(400);
+
+    const counts = {};
+    channelIds.forEach(id => { counts[id] = 0; });
+    const me = cloud.user.id;
+    (msgs || []).forEach(m => {
+      if (!m.channel_id || m.user_id === me) return;
+      const lastRead = memMap[m.channel_id];
+      if (!lastRead || String(m.created_at) > String(lastRead)) {
+        counts[m.channel_id] = (counts[m.channel_id] || 0) + 1;
+      }
+    });
+    if (chatState.channelId) counts[chatState.channelId] = 0;
+    chatState.unreadByChannel = counts;
+    chatUpdateUnreadUi();
+  } catch (e) {
+    console.warn('chatRefreshUnread', e);
+  }
+}
+
+function chatUpdateUnreadUi() {
+  const counts = chatState.unreadByChannel || {};
+  let total = 0;
+  Object.keys(counts).forEach(k => { total += Number(counts[k]) || 0; });
+  ['chatNavBadge', 'chatMoreBadge'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (total > 0) {
+      el.hidden = false;
+      el.textContent = total > 99 ? '99+' : String(total);
+    } else {
+      el.hidden = true;
+      el.textContent = '';
+    }
+  });
+}
+
+function chatUnreadDot(channelId) {
+  const n = (chatState.unreadByChannel || {})[channelId] || 0;
+  return n > 0 ? '<span class="unread-dot" title="' + n + ' unread"></span>' : '';
+}
+
+async function chatDiscussEntity(kind, entityId, summary) {
+  try {
+    await chatEnsureClient();
+    await chatLoadChannels();
+    const gen = (chatState.channels || []).find(c => c.slug === 'general') || (chatState.channels || [])[0];
+    if (gen) {
+      chatState.channelId = gen.id;
+      chatState.channelName = gen.name || gen.slug;
+      chatState.channelType = 'channel';
+    }
+    if (typeof switchTo === 'function') switchTo('chat');
+    await chatLoadMessages();
+    const tag = kind === 'transfer' ? ('[transfer:' + entityId + ']') : ('[invoice:' + entityId + ']');
+    const draft = (summary || ('Discussing ' + kind)) + '\n' + tag;
+    const input = document.getElementById('chatInput');
+    if (input) {
+      input.value = draft;
+      input.focus();
+    }
+    toast('Chat opened — send when ready');
+  } catch (e) {
+    toast(e.message || 'Could not open chat');
+  }
+}
+
 async function chatLoadMessages() {
   if (!chatState.channelId) return;
   const ok = await chatEnsureClient();
@@ -22321,51 +22491,118 @@ async function chatLoadMessages() {
   renderChatMessages();
   chatSetStatus(chatState.messages.length ? '' : 'No messages yet — say hello to the team.');
   try { chatStartRealtime(); } catch (_) {}
+  try { await chatMarkChannelRead(chatState.channelId); } catch (_) {}
+  try { await chatRefreshUnread(); } catch (_) {}
 }
 
 function renderChatMessages() {
   const el = document.getElementById('chatMessages');
   if (!el) return;
-  const myId = cloud.user?.id || null;
-  el.innerHTML = chatState.messages.map(m => {
+  const myId = (cloud.user && cloud.user.id) || null;
+  el.innerHTML = chatState.messages.map((m, mi) => {
     const mine = myId && m.user_id === myId;
     const when = String(m.created_at || '').replace('T', ' ').slice(0, 16);
     const who = mine ? 'You' : ('Member · ' + String(m.user_id || '').slice(0, 8));
+    let body = String(m.body || '').replace(/</g, '&lt;');
+    body = body.replace(/\[transfer:([a-f0-9-]{8,})\]/gi, function (_, id) {
+      return '<button type="button" class="button small" data-chat-open-transfer="' + id + '">Open transfer</button>';
+    });
+    body = body.replace(/\[invoice:([a-f0-9-]{8,})\]/gi, function (_, id) {
+      return '<button type="button" class="button small" data-chat-open-invoice="' + id + '">Open invoice</button>';
+    });
+    const docs = Array.isArray(m.attachments) ? m.attachments : [];
+    const attachHtml = docs.length
+      ? ('<div class="chat-msg-attach">' + docs.map(function (d, di) {
+          return '<button type="button" class="button small" data-chat-doc-msg="' + mi + '" data-chat-doc-idx="' + di + '">📎 ' +
+            String(d.name || ('File ' + (di + 1))).replace(/</g, '') + '</button>';
+        }).join('') + '</div>')
+      : '';
     return '<div class="chat-msg' + (mine ? ' mine' : '') + '">' +
       '<div class="chat-msg-meta">' + who + ' · ' + when + '</div>' +
-      '<div class="chat-msg-body">' + String(m.body || '').replace(/</g, '&lt;') + '</div>' +
+      '<div class="chat-msg-body">' + body + '</div>' +
+      attachHtml +
       '</div>';
   }).join('');
+  el.querySelectorAll('[data-chat-doc-msg]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      var mi = Number(btn.getAttribute('data-chat-doc-msg'));
+      var di = Number(btn.getAttribute('data-chat-doc-idx'));
+      var doc = chatState.messages[mi] && chatState.messages[mi].attachments && chatState.messages[mi].attachments[di];
+      if (doc && typeof openSupportingDocument === 'function') openSupportingDocument(doc);
+    });
+  });
+  el.querySelectorAll('[data-chat-open-transfer]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      var id = btn.getAttribute('data-chat-open-transfer');
+      try {
+        if (typeof switchTo === 'function') switchTo('transfers');
+        if (typeof openTransferDetailModal === 'function') openTransferDetailModal(id);
+      } catch (err) { toast(err.message || 'Could not open transfer'); }
+    });
+  });
+  el.querySelectorAll('[data-chat-open-invoice]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      var id = btn.getAttribute('data-chat-open-invoice');
+      try {
+        var inv = (db.invoices || []).find(function (i) { return i.id === id; });
+        if (inv) {
+          edit = structuredClone(inv);
+          edit.lines = (edit.lines || []).map(function (l) { return Object.assign({ unit: 'hours' }, l); });
+          if (typeof editor === 'function') editor();
+          else switchTo('invoices');
+        } else {
+          switchTo('invoices');
+          toast('Invoice not in local list');
+        }
+      } catch (err) { toast(err.message || 'Could not open invoice'); }
+    });
+  });
   try { el.scrollTop = el.scrollHeight; } catch (_) {}
 }
 
 async function chatSendMessage(text) {
-  const body = String(text || '').trim();
-  if (!body) return;
+  let body = String(text || '').trim();
+  let docs = [];
+  try {
+    if (chatState.pendingAttach) {
+      docs = [chatState.pendingAttach];
+    } else if (document.getElementById('chatAttach') && document.getElementById('chatAttach').files && document.getElementById('chatAttach').files.length) {
+      docs = await readSupportingDocsFromInput('chatAttach');
+    }
+  } catch (_) {}
+  if (!body && !docs.length) return;
+  if (!body && docs.length) body = 'Attachment: ' + (docs[0].name || 'file');
   if (!chatState.channelId) await chatLoadChannels();
   if (!chatState.channelId) throw new Error('No channel selected');
   const ok = await chatEnsureClient();
   if (!ok) throw new Error('Sign in required');
-  const uid = cloud.user?.id;
-  if (!uid) {
-    // try session
+  let userId = cloud.user && cloud.user.id;
+  if (!userId) {
     try {
       const { data } = await cloud.client.auth.getUser();
-      if (data?.user) {
-        cloud.user = data.user;
-      }
+      if (data && data.user) cloud.user = data.user;
     } catch (_) {}
+    userId = cloud.user && cloud.user.id;
   }
-  const userId = cloud.user?.id;
   if (!userId) throw new Error('Sign in required');
   const { error } = await cloud.client.from('chat_messages').insert({
     organization_id: cloud.organizationId,
     channel_id: chatState.channelId,
     user_id: userId,
     body: body.slice(0, 4000),
-    attachments: []
+    attachments: docs
   });
   if (error) throw error;
+  chatState.pendingAttach = null;
+  try {
+    const inp = document.getElementById('chatAttach');
+    if (inp) inp.value = '';
+    const prev = document.getElementById('chatAttachPreview');
+    if (prev) prev.textContent = '';
+  } catch (_) {}
   await chatLoadMessages();
 }
 
@@ -22579,6 +22816,7 @@ async function chatView() {
     await chatLoadChannels();
     await chatLoadMessages();
     try { await chatLoadMembers(); } catch (_) {}
+    try { await chatRefreshUnread(); } catch (_) {}
   } catch (e) {
     console.warn('chatView', e);
     chatSetStatus(e.message || String(e));
@@ -22619,6 +22857,21 @@ document.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     submitChatDmModal();
+  }
+}, true);
+
+
+document.addEventListener('click', (e) => {
+  const invDisc = e.target && e.target.closest && e.target.closest('[data-chat-discuss-invoice]');
+  if (invDisc) {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = invDisc.getAttribute('data-chat-discuss-invoice');
+    const inv = (db.invoices || []).find(i => i.id === id);
+    const summary = inv
+      ? ('Invoice ' + (inv.number || '') + ' · ' + (inv.status || '') + ' · ' + (typeof money === 'function' ? money(total(inv), inv.currency) : ''))
+      : ('Invoice ' + id);
+    chatDiscussEntity('invoice', id, summary);
   }
 }, true);
 
@@ -22679,6 +22932,27 @@ document.addEventListener('click', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       submitChatChannelModal();
+    }
+  });
+  document.getElementById('chatAttach')?.addEventListener('change', async () => {
+    const prev = document.getElementById('chatAttachPreview');
+    const f = document.getElementById('chatAttach')?.files?.[0];
+    if (!f) {
+      chatState.pendingAttach = null;
+      if (prev) prev.textContent = '';
+      return;
+    }
+    if (prev) prev.textContent = 'Attaching ' + f.name + '…';
+    try {
+      const docs = await readSupportingDocsFromInput('chatAttach');
+      chatState.pendingAttach = docs[0] || null;
+      if (prev) {
+        prev.textContent = chatState.pendingAttach
+          ? ('Ready: ' + chatState.pendingAttach.name)
+          : (f.name + ' too large or unreadable');
+      }
+    } catch (err) {
+      if (prev) prev.textContent = err.message || 'Attach failed';
     }
   });
   document.getElementById('chatCompose')?.addEventListener('submit', async (e) => {
