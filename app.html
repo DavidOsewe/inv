@@ -12478,6 +12478,27 @@ function appendBooksAudit(action, entityType, entityId, summary, before, after, 
     after: after != null ? after : null,
     meta: meta || {}
   };
+  // Keep supporting docs on the audit event for the audit log UI
+  try {
+    const docs =
+      (Array.isArray(ev.meta.documents) && ev.meta.documents) ||
+      (ev.after && Array.isArray(ev.after.documents) && ev.after.documents) ||
+      (ev.before && Array.isArray(ev.before.documents) && ev.before.documents) ||
+      null;
+    if (docs && docs.length) {
+      ev.meta = Object.assign({}, ev.meta, {
+        documents: docs.map(d => ({
+          name: d.name,
+          type: d.type,
+          size: d.size,
+          dataUrl: d.dataUrl,
+          at: d.at || null,
+          note: d.note || null
+        })),
+        documentCount: docs.length
+      });
+    }
+  } catch (_) {}
   db.auditEvents = db.auditEvents || [];
   db.auditEvents.push(ev);
   // Cap local store to last 2000 events
@@ -12549,8 +12570,8 @@ function postJournal({ date, memo, source, sourceKey, lines, currency, reversedF
       entry.id,
       (reverseOf ? 'Reversal · ' : 'Posted · ') + (entry.memo || entry.source || 'journal') + ' · ' + money(debits),
       null,
-      { id: entry.id, date: entry.date, memo: entry.memo, source: entry.source, lines: entry.lines, currency: entry.currency },
-      { sourceKey: entry.sourceKey, reverseOf: reverseOf || null }
+      { id: entry.id, date: entry.date, memo: entry.memo, source: entry.source, lines: entry.lines, currency: entry.currency, documents: entry.documents || [] },
+      { sourceKey: entry.sourceKey, reverseOf: reverseOf || null, documents: entry.documents || [], documentCount: (entry.documents || []).length }
     );
   } catch (e) { console.warn('audit', e); }
   try { queueBooksCloudSync(); } catch {}
@@ -13457,28 +13478,135 @@ function openJournalActivityModal(journalId, opts) {
           (dr ? ('Dr ' + money(dr)) : '') + (dr && cr ? ' · ' : '') + (cr ? ('Cr ' + money(cr)) : '') +
           '</span></div>';
       }).join('');
+      const jDocs = resolveSupportingDocs(j);
       entryEl.innerHTML =
         '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">' + badges.join(' ') + '</div>' +
         '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Id · ' + String(j.id || '').slice(0, 8) +
         (j.sourceKey ? (' · ' + String(j.sourceKey).slice(0, 40)) : '') + '</div>' +
-        linesHtml;
+        linesHtml +
+        (jDocs.length ? ('<div style="margin-top:12px"><div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Supporting documents</div>' +
+          supportingDocsHtml(jDocs, true) + '</div>') : '');
+      bindAuditDocButtons(entryEl, jDocs);
     }
   }
 
   if (!events.length) {
     body.innerHTML = '<p class="section-sub">No audit events for this journal yet (posted before audit trail was enabled, or audit not logging).</p>';
   } else {
-    body.innerHTML = events.map(e =>
-      '<div style="padding:10px 0;border-bottom:1px solid var(--line)">' +
-      '<div style="font-size:12px;color:var(--muted)">' + String(e.at || '').replace('T', ' ').slice(0, 19) +
-      ' · ' + (e.actorEmail || e.actorUserId || 'system') + '</div>' +
-      '<div style="font-size:13px;font-weight:600">' + (e.summary || e.action) + '</div>' +
-      '<div style="font-size:11px;color:var(--muted)">' + e.action +
-      (e.entityType ? (' · ' + e.entityType) : '') + '</div></div>'
-    ).join('');
+    body.innerHTML = events.map((e, idx) => {
+      const docs = resolveSupportingDocs(e);
+      return '<div class="audit-event" data-j-audit-idx="' + idx + '" style="padding:10px 0;border-bottom:1px solid var(--line)">' +
+        '<div style="font-size:12px;color:var(--muted)">' + String(e.at || '').replace('T', ' ').slice(0, 19) +
+        ' · ' + (e.actorEmail || e.actorUserId || 'system') + '</div>' +
+        '<div style="font-size:13px;font-weight:600">' + String(e.summary || e.action).replace(/</g, '') + '</div>' +
+        '<div style="font-size:11px;color:var(--muted)">' + String(e.action || '').replace(/</g, '') +
+        (e.entityType ? (' · ' + e.entityType) : '') +
+        (docs.length ? (' · ' + docs.length + ' file' + (docs.length === 1 ? '' : 's')) : '') + '</div>' +
+        supportingDocsHtml(docs, true) +
+        '</div>';
+    }).join('');
+    events.forEach((e, idx) => {
+      const row = body.querySelector('[data-j-audit-idx="' + idx + '"]');
+      bindAuditDocButtons(row, resolveSupportingDocs(e));
+    });
   }
   showModal('journalActivityModal');
 }
+
+
+function resolveSupportingDocs(evOrEntity) {
+  if (!evOrEntity) return [];
+  const tryDocs = (d) => (Array.isArray(d) && d.length ? d : null);
+  let docs = tryDocs(evOrEntity.documents)
+    || tryDocs(evOrEntity.meta && evOrEntity.meta.documents)
+    || tryDocs(evOrEntity.after && evOrEntity.after.documents)
+    || tryDocs(evOrEntity.before && evOrEntity.before.documents);
+  if (docs) return docs;
+  const type = evOrEntity.entityType;
+  const id = evOrEntity.entityId;
+  if (!type || !id) return [];
+  try {
+    ensureBooksDb();
+    if (type === 'journal') {
+      const j = (db.journals || []).find(x => x.id === id);
+      return tryDocs(j && j.documents) || [];
+    }
+    if (type === 'bill') {
+      const b = (db.bills || []).find(x => x.id === id);
+      return tryDocs(b && b.documents) || [];
+    }
+    if (type === 'cash' || type === 'cash_entry') {
+      const c = (db.cashEntries || []).find(x => x.id === id);
+      return tryDocs(c && c.documents) || [];
+    }
+  } catch (_) {}
+  return [];
+}
+
+function supportingDocsHtml(docs, compact) {
+  if (!docs || !docs.length) return '';
+  const items = docs.map((d, i) => {
+    const label = String(d.name || ('File ' + (i + 1))).replace(/</g, '');
+    const size = d.size ? (' · ' + Math.round(d.size / 1024) + ' KB') : '';
+    const canOpen = !!(d.dataUrl);
+    return '<button type="button" class="button small" data-audit-doc-idx="' + i + '"' +
+      (canOpen ? '' : ' disabled title="File data not stored"') + '>' +
+      (canOpen ? '📎 ' : '') + label + size + '</button>';
+  }).join(' ');
+  return '<div class="audit-docs" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">' +
+    (compact ? '' : '<span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-right:4px">Documents</span>') +
+    items + '</div>';
+}
+
+function openSupportingDocument(doc) {
+  if (!doc || !doc.dataUrl) {
+    toast('Document not available');
+    return;
+  }
+  const type = String(doc.type || '');
+  try {
+    if (type.startsWith('image/')) {
+      const w = window.open('', '_blank');
+      if (w) {
+        w.document.write('<title>' + String(doc.name || 'Image').replace(/</g, '') +
+          '</title><body style="margin:0;background:#111;display:grid;place-items:center;min-height:100vh">' +
+          '<img src="' + doc.dataUrl + '" alt="" style="max-width:100%;max-height:100vh;object-fit:contain"/></body>');
+        w.document.close();
+      } else {
+        // popup blocked — download
+        const a = document.createElement('a');
+        a.href = doc.dataUrl;
+        a.download = doc.name || 'document';
+        a.click();
+      }
+      return;
+    }
+    // PDF or other: open / download
+    const a = document.createElement('a');
+    a.href = doc.dataUrl;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    if (!type.includes('pdf')) a.download = doc.name || 'document';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (e) {
+    toast('Could not open file');
+  }
+}
+
+function bindAuditDocButtons(root, docs) {
+  if (!root || !docs || !docs.length) return;
+  root.querySelectorAll('[data-audit-doc-idx]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const i = Number(btn.getAttribute('data-audit-doc-idx'));
+      if (Number.isFinite(i) && docs[i]) openSupportingDocument(docs[i]);
+    });
+  });
+}
+
 
 function renderBooksAuditTrail() {
   const el = document.getElementById('booksAuditList');
@@ -13486,20 +13614,44 @@ function renderBooksAuditTrail() {
   ensureBooksDb();
   const list = [...(db.auditEvents || [])].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200);
   if (!list.length) {
-    el.innerHTML = '<p class="section-sub">No audit events yet. Post a journal, match a bank line, or change the chart of accounts.</p>';
+    el.innerHTML = '<p class="section-sub">No audit events yet. Post a journal, match a bank line, or change the chart of accounts. Supporting documents on journals and bills appear here.</p>';
     return;
   }
-  el.innerHTML = list.map(e =>
-    `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
-      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px">
-        <div>
-          <div style="font-size:12px;color:var(--muted)">${String(e.at || '').replace('T', ' ').slice(0, 19)} · ${e.actorEmail || e.actorUserId || 'local / system'}</div>
-          <b style="font-size:13px">${e.summary || e.action}</b>
-          <div style="font-size:11px;color:var(--muted)">${e.action} · ${e.entityType}${e.entityId ? ' · ' + String(e.entityId).slice(0, 12) : ''}</div>
-        </div>
-      </div>
-    </div>`
-  ).join('');
+  el.innerHTML = list.map((e, idx) => {
+    const docs = resolveSupportingDocs(e);
+    const docBadge = docs.length
+      ? (' · <span style="color:var(--blue)">' + docs.length + ' file' + (docs.length === 1 ? '' : 's') + '</span>')
+      : '';
+    const openJournalBtn = (e.entityType === 'journal' && e.entityId)
+      ? ('<button type="button" class="button small" data-audit-open-journal="' + e.entityId + '">Open entry</button>')
+      : '';
+    return '<div class="audit-event" data-audit-idx="' + idx + '" style="padding:10px 0;border-bottom:1px solid var(--line)">' +
+      '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;align-items:flex-start">' +
+      '<div style="min-width:0;flex:1">' +
+      '<div style="font-size:12px;color:var(--muted)">' + String(e.at || '').replace('T', ' ').slice(0, 19) +
+      ' · ' + (e.actorEmail || e.actorUserId || 'local / system') + '</div>' +
+      '<b style="font-size:13px">' + String(e.summary || e.action).replace(/</g, '') + '</b>' +
+      '<div style="font-size:11px;color:var(--muted)">' + String(e.action || '').replace(/</g, '') +
+      ' · ' + String(e.entityType || '').replace(/</g, '') +
+      (e.entityId ? (' · ' + String(e.entityId).slice(0, 12)) : '') + docBadge + '</div>' +
+      supportingDocsHtml(docs, true) +
+      '</div>' +
+      (openJournalBtn ? ('<div>' + openJournalBtn + '</div>') : '') +
+      '</div></div>';
+  }).join('');
+
+  // Bind document openers (docs resolved per event)
+  list.forEach((e, idx) => {
+    const row = el.querySelector('[data-audit-idx="' + idx + '"]');
+    const docs = resolveSupportingDocs(e);
+    bindAuditDocButtons(row, docs);
+  });
+  el.querySelectorAll('[data-audit-open-journal]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      openJournalActivityModal(btn.getAttribute('data-audit-open-journal'));
+    });
+  });
 }
 
 
@@ -19136,6 +19288,18 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
     toast('Could not post bill to ledger — ' + (err.message || 'error'));
     return;
   }
+  try {
+    appendBooksAudit(
+      'bill.created',
+      'bill',
+      bill.id,
+      'Bill · ' + (bill.supplier || 'Supplier') + ' · ' + (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
+        ((bill.documents || []).length ? (' · ' + bill.documents.length + ' file(s)') : ''),
+      null,
+      { id: bill.id, supplier: bill.supplier, amount: bill.amount, currency: bill.currency, documents: bill.documents || [] },
+      { documents: bill.documents || [], documentCount: (bill.documents || []).length }
+    );
+  } catch (_) {}
   save();
   try { queueBooksCloudSync(); } catch (_) {}
   closeBillModal();
@@ -19180,7 +19344,10 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
   let docs = [];
   try { docs = await readSupportingDocsFromInput('cashDocs'); } catch (_) {}
   const id = crypto.randomUUID();
-  db.cashEntries.push({ id, type, category, amount, currency, date, note, source: 'manual' });
+  db.cashEntries.push({ id, type, category, amount, currency, date, note, source: 'manual', documents: (typeof docs !== 'undefined' ? docs : []), bankAccountId: (typeof bankAccountId !== 'undefined' ? bankAccountId : null), offsetAccountId: (typeof offsetAccountId !== 'undefined' ? offsetAccountId : null) });
+  try {
+    appendBooksAudit('cash.manual', 'cash', id, (type === 'out' ? 'Cash out' : 'Cash in') + ' · ' + note + ((typeof docs !== 'undefined' && docs.length) ? (' · ' + docs.length + ' file(s)') : ''), null, { id, type, amount, currency, documents: (typeof docs !== 'undefined' ? docs : []) }, { documents: (typeof docs !== 'undefined' ? docs : []) });
+  } catch (_) {}
   const amt = toRep(amount, currency);
   if (type === 'out') {
     const expenseAccount = EXPENSE_ACCOUNT_BY_CATEGORY[category] || '5700';
