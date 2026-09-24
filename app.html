@@ -59,12 +59,52 @@
   --space-6: 24px;
   --space-8: 32px;
 
+  /* Layout shell */
+  --side-width: 240px;
+  --side-width-compact: 72px;
+  --main-pad-x: clamp(20px, 4vw, 56px);
+  --main-pad-y: 32px;
+  --content-max: 1100px;
+  --bottom-nav-height: 64px;
+
+  /* Touch targets */
+  --touch-min: 44px;
+  --touch-min-sm: 40px;
+  --touch-min-lg: 48px;
+  --touch-nav: 52px;
+
+  /*
+   * Responsive breakpoints (single source of truth for docs + JS).
+   * CSS @media still needs literal px (custom props are not valid in
+   * media queries in most browsers). Keep these in sync with matchMedia
+   * helpers and the @media blocks below.
+   *   xs  ≤ --bp-xs   extra-narrow phone
+   *   sm  ≤ --bp-sm   phone (bottom nav, cards)
+   *   md  ≤ --bp-md   tablet (icon sidebar)
+   *   lg  ≤ --bp-lg   small laptop
+   *   pos ≤ --bp-pos  POS cart drawer split (pos.html)
+   */
+  --bp-xs: 400px;
+  --bp-sm: 640px;
+  --bp-md: 900px;
+  --bp-lg: 1100px;
+  --bp-pos: 860px;
+
+  /* Container query thresholds (docs + future; @container uses literals) */
+  --cq-card: 360px;
+  --cq-card-wide: 720px;
+  --cq-books: 640px;
+  --cq-toolbar: 480px;
+
   /* Motion */
   --ease: 0.15s ease;
   --ease-out: 0.22s ease;
 
   /* Safe area */
+  --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 
   color-scheme: light;
 }
@@ -140,7 +180,7 @@ input:focus:not(:focus-visible) {
 
 /* Sidebar (desktop) */
 .side {
-  width: 240px;
+  width: var(--side-width);
   background: var(--panel);
   border-right: 1px solid var(--line);
   padding: 28px 16px;
@@ -355,6 +395,7 @@ input:focus:not(:focus-visible) {
    ========================================================= */
 .button {
   padding: 11px 18px;
+  min-height: var(--touch-min-sm);
   border-radius: var(--radius-full);
   border: 1px solid var(--line);
   background: var(--panel);
@@ -363,6 +404,13 @@ input:focus:not(:focus-visible) {
   transition: background var(--ease), border-color var(--ease), box-shadow var(--ease), color var(--ease);
   box-shadow: var(--shadow);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 .button:hover {
   background: var(--panel-2);
@@ -388,7 +436,8 @@ input:focus:not(:focus-visible) {
 }
 .button.text:hover { background: var(--blue-soft); }
 .button.small {
-  padding: 7px 12px;
+  padding: 8px 12px;
+  min-height: 36px;
   font-size: 12px;
   font-weight: 600;
   border-radius: var(--radius-full);
@@ -612,7 +661,7 @@ input:focus:not(:focus-visible) {
 
 /* Icon-only sidebar (tablet) */
 .side.compact {
-  width: 72px;
+  width: var(--side-width-compact);
   padding: 20px 8px;
 }
 .side.compact .logo {
@@ -671,15 +720,6 @@ input:focus:not(:focus-visible) {
 }
 
 
-#dashCards.cards-three {
-  grid-template-columns: repeat(3, 1fr);
-}
-@media (max-width: 900px) {
-  #dashCards.cards-three { grid-template-columns: 1fr 1fr; }
-}
-@media (max-width: 640px) {
-  #dashCards.cards-three { grid-template-columns: 1fr 1fr; }
-}
 .dash-currency-note {
   font-size: 11px;
   color: var(--muted);
@@ -689,10 +729,44 @@ input:focus:not(:focus-visible) {
   content: none;
 }
 
+/* Containment on views so descendants (e.g. .cards) can use @container.
+   An element cannot query its own size — parent must be the container. */
+.view {
+  container-type: inline-size;
+  container-name: view;
+}
+
+/* Metric / insight grids — columns from nearest container width */
 .cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: 1fr;
   gap: 14px;
+}
+@container (min-width: 360px) {
+  .cards { grid-template-columns: 1fr 1fr; }
+}
+@container (min-width: 720px) {
+  .cards { grid-template-columns: repeat(4, 1fr); }
+}
+#dashCards.cards-three {
+  grid-template-columns: 1fr;
+}
+@container (min-width: 360px) {
+  #dashCards.cards-three { grid-template-columns: 1fr 1fr; }
+}
+@container (min-width: 560px) {
+  #dashCards.cards-three { grid-template-columns: repeat(3, 1fr); }
+}
+@supports not (container-type: inline-size) {
+  .cards { grid-template-columns: repeat(4, 1fr); }
+  #dashCards.cards-three { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 1100px) {
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    #dashCards.cards-three { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 400px) {
+    .cards { grid-template-columns: 1fr; }
+  }
 }
 .card {
   background: var(--panel);
@@ -1871,7 +1945,7 @@ input:focus:not(:focus-visible) {
 
 /* —— Large tablet / small laptop —— */
 @media (max-width: 1100px) {
-  .cards { grid-template-columns: repeat(2, 1fr); }
+  /* .cards columns: driven by @container — see DESIGN TOKENS / cards block */
   .form-layout {
     grid-template-columns: 1fr;
     gap: 16px;
@@ -1895,7 +1969,7 @@ input:focus:not(:focus-visible) {
 /* —— Tablet —— */
 @media (max-width: 900px) {
   .side {
-    width: 72px;
+    width: var(--side-width-compact);
     padding: 20px 8px;
   }
   .side .logo {
@@ -1966,7 +2040,7 @@ input:focus:not(:focus-visible) {
   }
 
   .cards {
-    grid-template-columns: 1fr 1fr;
+    /* columns via @container */
     gap: 10px;
   }
   .card { padding: 14px; }
@@ -2045,7 +2119,7 @@ input:focus:not(:focus-visible) {
 
 /* —— Narrow phone —— */
 @media (max-width: 400px) {
-  .cards { grid-template-columns: 1fr; }
+  /* .cards columns via @container */
   .card b { font-size: 20px; }
   .line,
   .line-header {
@@ -2116,7 +2190,56 @@ input:focus:not(:focus-visible) {
 /* =========================================================
    BOOKS — cleaner IA chrome
    ========================================================= */
-.books-shell { max-width: 1100px; }
+.books-shell {
+  max-width: var(--content-max, 1100px);
+  container-type: inline-size;
+  container-name: books;
+}
+
+/* Books chrome — density from shell width, not only viewport */
+@container books (max-width: 640px) {
+  .books-nav,
+  .books-subnav.books-tabs,
+  #booksTabs {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    gap: 6px;
+    padding: 6px 4px 10px;
+    scrollbar-width: none;
+  }
+  .books-nav::-webkit-scrollbar,
+  #booksTabs::-webkit-scrollbar {
+    display: none;
+  }
+  .books-nav [data-books-page],
+  #booksTabs [data-books-tab] {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+    white-space: nowrap;
+    min-height: var(--touch-min-sm, 40px);
+  }
+  .books-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .books-toolbar .buttons {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .books-toolbar .buttons .button {
+    flex: 1 1 auto;
+  }
+}
+@container books (max-width: 480px) {
+  .books-nav [data-books-page] {
+    padding: 10px 12px !important;
+    font-size: 13px;
+  }
+}
 .books-nav {
   display: flex;
   flex-wrap: wrap;
@@ -2270,6 +2393,235 @@ input:focus:not(:focus-visible) {
 .searchable-select-item { padding: 8px 12px; cursor: pointer; font-size: 13px; }
 .searchable-select-item:hover, .searchable-select-item.active { background: var(--blue-soft); color: var(--blue-soft-text); }
 .searchable-select-group { padding: 6px 12px; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; }
+
+
+/* —— Mobile UX pass: modals, toast, more menu —— */
+@media (max-width: 640px) {
+  .modalback {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .modalback .modal {
+    max-width: 100% !important;
+    width: 100%;
+    max-height: min(92vh, 900px);
+    border-radius: 16px 16px 0 0;
+    padding: 20px 16px calc(20px + var(--safe-bottom));
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: calc(72px + var(--safe-bottom));
+    right: auto;
+    max-width: none;
+    text-align: center;
+  }
+  .main {
+    padding-bottom: calc(96px + var(--safe-bottom, 0px));
+  }
+  .button {
+    min-height: 44px;
+    padding: 12px 16px;
+  }
+  .button.small {
+    min-height: 40px;
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+  .button.text {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+  .nav button,
+  .nav a.nav-link-pos {
+    min-height: 44px;
+    padding: 12px 14px;
+  }
+  .bottom-nav button {
+    min-height: 52px;
+    padding: 8px 4px 10px;
+  }
+  .bottom-nav button span {
+    font-size: 22px;
+  }
+  .mobile-card-actions .button {
+    min-height: 40px;
+    padding: 10px 14px;
+  }
+  .mobile-card {
+    padding: 14px;
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px; /* prevents iOS zoom on focus */
+    padding: 10px 12px;
+  }
+  textarea {
+    min-height: 88px;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+  }
+  .table .button.small,
+  .actions .button {
+    min-height: 40px;
+    min-width: 40px;
+  }
+  .more-sheet-grid button,
+  .more-sheet-grid a {
+    min-height: 76px;
+    padding: 16px 14px;
+  }
+  .account-card {
+    min-height: 48px;
+  }
+  .editor-sticky-bar .button {
+    min-height: 44px;
+  }
+  .field label {
+    padding-bottom: 4px;
+  }
+  /* Icon-only hit areas */
+  [data-close],
+  .modal .buttons .button {
+    min-height: 44px;
+  }
+}
+
+/* Comfortable targets on tablet too */
+@media (max-width: 900px) {
+  .button.small {
+    min-height: 38px;
+  }
+  .nav button,
+  .nav a.nav-link-pos {
+    min-height: 44px;
+  }
+}
+
+.more-sheet-back {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 70;
+  align-items: flex-end;
+  justify-content: center;
+}
+.more-sheet-back.show { display: flex; }
+.more-sheet {
+  width: 100%;
+  max-width: 480px;
+  background: var(--panel);
+  border-radius: 16px 16px 0 0;
+  border: 1px solid var(--line);
+  padding: 10px 12px calc(16px + var(--safe-bottom));
+  box-shadow: 0 -12px 40px rgba(15,23,42,0.18);
+}
+.more-sheet-handle {
+  width: 40px;
+  height: 4px;
+  border-radius: 99px;
+  background: var(--line-strong);
+  margin: 4px auto 14px;
+}
+.more-sheet-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 8px 8px 6px;
+}
+.more-sheet-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.more-sheet-grid button,
+.more-sheet-grid a {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 13px;
+  text-decoration: none;
+  text-align: left;
+  min-height: 72px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.more-sheet-grid button span,
+.more-sheet-grid a span {
+  font-size: 20px;
+  line-height: 1;
+}
+.more-sheet-grid button:active,
+.more-sheet-grid a:active {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+
+/* Books — horizontal tab strip on phone */
+@media (max-width: 640px) {
+  .books-nav,
+  .books-subnav.books-tabs,
+  #booksTabs {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    gap: 6px;
+    padding: 6px 4px 10px;
+    margin-left: -4px;
+    margin-right: -4px;
+    scrollbar-width: none;
+  }
+  .books-nav::-webkit-scrollbar,
+  .books-subnav.books-tabs::-webkit-scrollbar,
+  #booksTabs::-webkit-scrollbar {
+    display: none;
+  }
+  .books-nav [data-books-page],
+  #booksTabs [data-books-tab],
+  .books-subnav [data-books-tab] {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+    min-height: 40px;
+    white-space: nowrap;
+  }
+  .books-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .books-toolbar-meta {
+    width: 100%;
+  }
+  .books-toolbar .buttons {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .books-toolbar .buttons .button {
+    flex: 1 1 auto;
+  }
+}
 
 </style>
 </head>
@@ -2739,7 +3091,7 @@ input:focus:not(:focus-visible) {
     </section>
 
 
-    <section class="view" id="books">
+    <section class="view books-shell" id="books">
       <div class="section-head">
         <div>
           <h2>Books</h2>
@@ -3547,8 +3899,31 @@ input:focus:not(:focus-visible) {
   <button data-view="invoices"><span>▤</span>Invoices</button>
   <button data-view="clients"><span>♙</span>Clients</button>
   <button data-view="profile"><span>⚙</span>Profile</button>
-  <button data-view="plan"><span>◆</span>Plan</button>
+  <button type="button" id="btnMoreNav" aria-label="More"><span>⋯</span>More</button>
 </nav>
+
+<div class="more-sheet-back" id="moreSheetBack" aria-hidden="true">
+  <div class="more-sheet" role="dialog" aria-label="More">
+    <div class="more-sheet-handle"></div>
+    <div class="more-sheet-title">Sales</div>
+    <div class="more-sheet-grid">
+      <button type="button" data-more-view="receipts"><span>◈</span>Receipts</button>
+      <button type="button" data-more-view="recurring"><span>↻</span>Recurring</button>
+    </div>
+    <div class="more-sheet-title">Stock &amp; shops</div>
+    <div class="more-sheet-grid">
+      <button type="button" data-more-view="products"><span>■</span>Products</button>
+      <button type="button" data-more-view="purchases"><span>□</span>Purchases</button>
+      <button type="button" data-more-view="transfers"><span>⇄</span>Transfers</button>
+      <a href="pos.html"><span>▣</span>POS</a>
+    </div>
+    <div class="more-sheet-title">Books &amp; account</div>
+    <div class="more-sheet-grid">
+      <button type="button" data-more-view="books"><span>◎</span>Books</button>
+      <button type="button" data-more-view="plan"><span>◆</span>Plan</button>
+    </div>
+  </div>
+</div>
 
 
 <div class="modalback" id="supplierModal">
@@ -6658,8 +7033,27 @@ function status(i) {
 }
 
 
+function readBp(name, fallback) {
+  try {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const n = parseFloat(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  } catch (_) {}
+  return fallback;
+}
+function bpXs() { return readBp('--bp-xs', 400); }
+function bpSm() { return readBp('--bp-sm', 640); }
+function bpMd() { return readBp('--bp-md', 900); }
+function bpLg() { return readBp('--bp-lg', 1100); }
+function bpPos() { return readBp('--bp-pos', 860); }
 function isPhoneLayout() {
-  return !!(window.matchMedia && window.matchMedia('(max-width: 640px)').matches);
+  return !!(window.matchMedia && window.matchMedia('(max-width: ' + bpSm() + 'px)').matches);
+}
+function isTabletLayout() {
+  return !!(window.matchMedia && window.matchMedia('(max-width: ' + bpMd() + 'px)').matches);
+}
+function isNarrowLayout() {
+  return isTabletLayout();
 }
 
 function closePreviewSheet() {
@@ -6742,6 +7136,7 @@ function updateHeaderActions(view) {
 }
 
 function switchTo(v) {
+  try { closeMoreSheet(); } catch (_) {}
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('active', x.id === v));
   document.querySelectorAll('.nav button, .bottom-nav button').forEach(x => {
     x.classList.toggle('active', x.dataset.view === v);
@@ -10554,22 +10949,57 @@ function renderProductsList() {
       </div></td>
     </tr>`;
   });
-  el.innerHTML = `<table class="table desktop-table">
-    <thead><tr><th>Product</th><th>Price / cost</th><th>Stock</th><th>Expiry</th><th>Actions</th></tr></thead>
-    <tbody>${rows.join('')}</tbody>
-  </table>
-  <div class="mobile-list" role="list">${list.map(p => {
-    const stock = Number(p.stock_qty) || 0;
-    return `<div class="mobile-card">
-      <div class="mobile-card-title">${p.name}</div>
-      <div class="mobile-card-sub">${formatPosMoney(p.price)} · Stock <b>${stock}</b>${p.expiry_date ? ' · Exp ' + p.expiry_date : ''}</div>
+  const cards = list.map(p => {
+    const stock = locFilter === 'all' ? totalProductStock(p.id) : locationStockQty(p.id, locFilter);
+    const total = totalProductStock(p.id);
+    const low = Number(p.low_stock_at) || 0;
+    const cost = Number(p.cost) || 0;
+    const moves = (db.stockMovements || []).filter(m => m.product_id === p.id).length;
+    let stockLabel = '—';
+    let stockCls = '';
+    if (p.track_stock !== false) {
+      if (stock <= 0) { stockLabel = stock + ' · out'; stockCls = 'color:var(--red-text)'; }
+      else if (low > 0 && stock <= low) { stockLabel = stock + ' · low'; stockCls = 'color:orange'; }
+      else { stockLabel = String(stock); }
+    }
+    let expBits = '';
+    if (p.expiry_date) {
+      const expired = p.expiry_date < todayIso;
+      const soon = !expired && p.expiry_date <= new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      expBits = expired
+        ? `<span style="color:var(--red-text)">Exp ${p.expiry_date}</span>`
+        : soon
+          ? `<span style="color:orange">Exp ${p.expiry_date}</span>`
+          : `Exp ${p.expiry_date}`;
+    }
+    const inactive = p.active === false ? ' · inactive' : '';
+    const locHint = (locFilter !== 'all' && p.track_stock !== false && total !== stock)
+      ? ` · all sites ${total}` : '';
+    return `<div class="mobile-card" role="listitem">
+      <div class="mobile-card-top">
+        <div>
+          <div class="mobile-card-title">${p.name}${inactive}</div>
+          <div class="mobile-card-sub">${p.sku ? p.sku + ' · ' : ''}${formatPosMoney(p.price)} · cost ${formatPosMoney(cost)}</div>
+        </div>
+        <div style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums;${stockCls}">${stockLabel}</div>
+      </div>
+      <div class="mobile-card-meta">
+        <span>${moves} movement${moves === 1 ? '' : 's'}${locHint}</span>
+        ${expBits ? `<span>${expBits}</span>` : ''}
+      </div>
       <div class="mobile-card-actions">
         <button class="button small" type="button" data-edit-product="${p.id}">Edit</button>
         <button class="button small" type="button" data-adjust-stock="${p.id}">Adjust</button>
         <button class="button small" type="button" data-stock-history="${p.id}">History</button>
       </div>
     </div>`;
-  }).join('')}</div>`;
+  }).join('');
+
+  el.innerHTML = `<table class="table desktop-table">
+    <thead><tr><th>Product</th><th>Price / cost</th><th>Stock</th><th>Expiry</th><th>Actions</th></tr></thead>
+    <tbody>${rows.join('')}</tbody>
+  </table>
+  <div class="mobile-list" role="list">${cards}</div>`;
 }
 
 function openStockHistory(productId) {
@@ -12433,6 +12863,10 @@ function setBooksPage(page, tab) {
   document.querySelectorAll('[data-books-page]').forEach(btn => {
     btn.classList.toggle('primary', btn.getAttribute('data-books-page') === booksPage);
   });
+  try {
+    const activePageBtn = document.querySelector('.books-nav [data-books-page].primary');
+    activePageBtn?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  } catch (_) {}
   const conf = BOOKS_PAGES[booksPage];
   const tabsEl = document.getElementById('booksTabs');
   const activeTab = tab || conf.defaultTab;
@@ -12470,6 +12904,10 @@ function setBooksTab(tab) {
   document.querySelectorAll('#booksTabs [data-books-tab]').forEach(btn => {
     btn.classList.toggle('primary', btn.getAttribute('data-books-tab') === booksTab);
   });
+  try {
+    const activeTabBtn = document.querySelector('#booksTabs [data-books-tab].primary');
+    activeTabBtn?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  } catch (_) {}
   const panels = {
     overview: 'booksPanelOverview',
     pnl: 'booksPanelPnl',
@@ -20789,6 +21227,43 @@ async function maybeAcceptInviteFromUrl() {
     return false;
   }
 }
+
+
+function openMoreSheet() {
+  const el = document.getElementById('moreSheetBack');
+  if (!el) return;
+  el.classList.add('show');
+  el.setAttribute('aria-hidden', 'false');
+}
+function closeMoreSheet() {
+  const el = document.getElementById('moreSheetBack');
+  if (!el) return;
+  el.classList.remove('show');
+  el.setAttribute('aria-hidden', 'true');
+}
+(function wireMoreSheet() {
+  document.getElementById('btnMoreNav')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openMoreSheet();
+  });
+  const back = document.getElementById('moreSheetBack');
+  if (back) {
+    back.addEventListener('click', (e) => {
+      if (e.target === back) closeMoreSheet();
+    });
+    back.querySelectorAll('[data-more-view]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const v = btn.getAttribute('data-more-view');
+        closeMoreSheet();
+        if (v && typeof switchTo === 'function') switchTo(v);
+      });
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeMoreSheet();
+  });
+})();
 
 /* Init */
 try { initSearchableSelects(document); } catch (_) {}
