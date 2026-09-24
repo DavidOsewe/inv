@@ -2623,6 +2623,120 @@ input:focus:not(:focus-visible) {
   }
 }
 
+
+/* Team chat */
+.chat-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--panel);
+  min-height: min(70vh, 640px);
+}
+.chat-sidebar {
+  border-right: 1px solid var(--line);
+  background: var(--panel-2);
+  padding: 10px 8px;
+}
+.chat-sidebar-head {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 4px 8px 8px;
+}
+.chat-channel-list { display: flex; flex-direction: column; gap: 2px; }
+.chat-channel-btn {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+.chat-channel-btn:hover { background: var(--panel); }
+.chat-channel-btn.active {
+  background: var(--blue-soft);
+  color: var(--blue-soft-text);
+}
+.chat-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.chat-room-head {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+.chat-messages {
+  flex: 1;
+  overflow: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  -webkit-overflow-scrolling: touch;
+}
+.chat-msg {
+  max-width: 720px;
+}
+.chat-msg-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.chat-msg-body {
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-msg.mine .chat-msg-meta { color: var(--blue); }
+.chat-compose {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+.chat-compose input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+@media (max-width: 640px) {
+  .chat-layout {
+    grid-template-columns: 1fr;
+    min-height: 60vh;
+  }
+  .chat-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .chat-channel-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -2649,6 +2763,7 @@ input:focus:not(:focus-visible) {
       <button data-view="books"><span>◎</span> Books</button>
 
       <div class="nav-section">Account</div>
+      <button data-view="chat"><span>💬</span> Chat</button>
       <button data-view="profile"><span>⚙</span> Profile</button>
       <button data-view="plan"><span>◆</span> Plan</button>
     </nav>
@@ -3362,6 +3477,38 @@ input:focus:not(:focus-visible) {
       </div>
     </section>
 
+
+    <section class="view" id="chat">
+      <div class="section-head">
+        <div>
+          <h2>Team chat</h2>
+          <div class="client-count" id="chatSubtitle">Org channels — start with #general</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="button" type="button" id="chatRefreshBtn">Refresh</button>
+        </div>
+      </div>
+      <div class="chat-layout" id="chatLayout">
+        <aside class="chat-sidebar" id="chatSidebar">
+          <div class="chat-sidebar-head">Channels</div>
+          <div id="chatChannelList" class="chat-channel-list"></div>
+          <p class="section-sub" style="margin:10px 8px 0;font-size:11px">DMs come next. Phase 1 is #general only.</p>
+        </aside>
+        <div class="chat-main">
+          <div class="chat-room-head">
+            <b id="chatRoomTitle">#general</b>
+            <span class="client-meta" id="chatRoomTopic"></span>
+          </div>
+          <div id="chatMessages" class="chat-messages" role="log" aria-live="polite"></div>
+          <form id="chatCompose" class="chat-compose" autocomplete="off">
+            <input type="text" id="chatInput" placeholder="Message #general…" maxlength="4000" />
+            <button class="button primary" type="submit" id="chatSendBtn">Send</button>
+          </form>
+          <p id="chatStatus" class="section-sub" style="margin:6px 0 0"></p>
+        </div>
+      </div>
+    </section>
+
     <section class="view" id="plan">
       <div class="section-head">
         <div>
@@ -3926,6 +4073,7 @@ input:focus:not(:focus-visible) {
     <div class="more-sheet-title">Books &amp; account</div>
     <div class="more-sheet-grid">
       <button type="button" data-more-view="books"><span>◎</span>Books</button>
+      <button type="button" data-more-view="chat"><span>💬</span>Chat</button>
       <button type="button" data-more-view="plan"><span>◆</span>Plan</button>
     </div>
   </div>
@@ -7191,6 +7339,7 @@ function switchTo(v) {
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
     plan: ['Plan & billing', 'Manage your plan, usage and feature access.'],
+    chat: ['Team chat', 'Org channels — coordinate without leaving invoicedey.'],
     editor: ['Invoice editor', 'Create a clear invoice your client can pay.']
   }[v] || ['invoicedey', ''];
   $('#heading').textContent = h[0];
@@ -7212,6 +7361,7 @@ function switchTo(v) {
   if (v === 'dashboard') dashboard();
   if (v === 'books') booksView();
   if (v === 'products') productsView();
+  if (v === 'chat') chatView();
   if (v === 'purchases') purchasesView();
   if (v === 'transfers') transfersView();
   if (v === 'pos') posView();
@@ -21794,6 +21944,211 @@ function closeMoreSheet() {
   }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeMoreSheet();
+  });
+})();
+
+
+/* ========== Team chat (V1: #general) ========== */
+let chatState = {
+  channelId: null,
+  channelName: 'general',
+  channels: [],
+  messages: [],
+  loading: false
+};
+
+function chatSetStatus(msg) {
+  const el = document.getElementById('chatStatus');
+  if (el) el.textContent = msg || '';
+}
+
+async function chatEnsureClient() {
+  if (!cloud.client) {
+    try { cloud.client = await getSupabase(); } catch (_) {}
+  }
+  if (!cloud.user && cloud.client) {
+    try {
+      const { data } = await cloud.client.auth.getUser();
+      if (data?.user) cloud.user = data.user;
+    } catch (_) {}
+  }
+  if (!cloud.organizationId && cloud.client) {
+    try {
+      if (typeof ensureCloudOrganization === 'function') {
+        await ensureCloudOrganization();
+      }
+    } catch (_) {}
+  }
+  if (!cloud.organizationId && cloud.client) {
+    try {
+      const { data } = await cloud.client.from('organization_members').select('organization_id').limit(5);
+      if (data && data[0]) cloud.organizationId = data[0].organization_id;
+    } catch (_) {}
+  }
+  return !!(cloud.client && cloud.organizationId && cloud.user);
+}
+
+async function chatEnsureGeneral() {
+  const ok = await chatEnsureClient();
+  if (!ok) throw new Error('Sign in and open an organisation to use chat');
+  const { data, error } = await cloud.client.rpc('ensure_org_general_channel', {
+    p_org_id: cloud.organizationId
+  });
+  if (error) throw error;
+  return data;
+}
+
+async function chatLoadChannels() {
+  const ok = await chatEnsureClient();
+  if (!ok) throw new Error('Sign in required');
+  await chatEnsureGeneral();
+  const { data, error } = await cloud.client
+    .from('chat_channels')
+    .select('id, name, slug, type, topic, is_archived, created_at')
+    .eq('organization_id', cloud.organizationId)
+    .eq('is_archived', false)
+    .eq('type', 'channel')
+    .order('name');
+  if (error) throw error;
+  chatState.channels = data || [];
+  if (!chatState.channelId && chatState.channels.length) {
+    const gen = chatState.channels.find(c => c.slug === 'general') || chatState.channels[0];
+    chatState.channelId = gen.id;
+    chatState.channelName = gen.name || gen.slug;
+  }
+  renderChatChannels();
+}
+
+function renderChatChannels() {
+  const el = document.getElementById('chatChannelList');
+  if (!el) return;
+  if (!chatState.channels.length) {
+    el.innerHTML = '<p class="section-sub" style="padding:8px">No channels yet</p>';
+    return;
+  }
+  el.innerHTML = chatState.channels.map(c =>
+    '<button type="button" class="chat-channel-btn' + (c.id === chatState.channelId ? ' active' : '') +
+    '" data-chat-channel="' + c.id + '">#' + String(c.name || c.slug).replace(/</g, '') + '</button>'
+  ).join('');
+  el.querySelectorAll('[data-chat-channel]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      chatState.channelId = btn.getAttribute('data-chat-channel');
+      const ch = chatState.channels.find(c => c.id === chatState.channelId);
+      chatState.channelName = ch ? (ch.name || ch.slug) : 'channel';
+      renderChatChannels();
+      chatLoadMessages().catch(e => chatSetStatus(e.message || String(e)));
+    });
+  });
+  const title = document.getElementById('chatRoomTitle');
+  const topic = document.getElementById('chatRoomTopic');
+  const ch = chatState.channels.find(c => c.id === chatState.channelId);
+  if (title) title.textContent = '#' + (ch ? (ch.name || ch.slug) : chatState.channelName);
+  if (topic) topic.textContent = ch && ch.topic ? ch.topic : '';
+}
+
+async function chatLoadMessages() {
+  if (!chatState.channelId) return;
+  const ok = await chatEnsureClient();
+  if (!ok) return;
+  chatSetStatus('Loading…');
+  const { data, error } = await cloud.client
+    .from('chat_messages')
+    .select('id, body, user_id, created_at, deleted_at, attachments')
+    .eq('channel_id', chatState.channelId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: true })
+    .limit(200);
+  if (error) throw error;
+  chatState.messages = data || [];
+  renderChatMessages();
+  chatSetStatus(chatState.messages.length ? '' : 'No messages yet — say hello to the team.');
+}
+
+function renderChatMessages() {
+  const el = document.getElementById('chatMessages');
+  if (!el) return;
+  const myId = cloud.user?.id || null;
+  el.innerHTML = chatState.messages.map(m => {
+    const mine = myId && m.user_id === myId;
+    const when = String(m.created_at || '').replace('T', ' ').slice(0, 16);
+    const who = mine ? 'You' : ('Member · ' + String(m.user_id || '').slice(0, 8));
+    return '<div class="chat-msg' + (mine ? ' mine' : '') + '">' +
+      '<div class="chat-msg-meta">' + who + ' · ' + when + '</div>' +
+      '<div class="chat-msg-body">' + String(m.body || '').replace(/</g, '&lt;') + '</div>' +
+      '</div>';
+  }).join('');
+  try { el.scrollTop = el.scrollHeight; } catch (_) {}
+}
+
+async function chatSendMessage(text) {
+  const body = String(text || '').trim();
+  if (!body) return;
+  if (!chatState.channelId) await chatLoadChannels();
+  if (!chatState.channelId) throw new Error('No channel selected');
+  const ok = await chatEnsureClient();
+  if (!ok) throw new Error('Sign in required');
+  const uid = cloud.user?.id;
+  if (!uid) {
+    // try session
+    try {
+      const { data } = await cloud.client.auth.getUser();
+      if (data?.user) {
+        cloud.user = data.user;
+      }
+    } catch (_) {}
+  }
+  const userId = cloud.user?.id;
+  if (!userId) throw new Error('Sign in required');
+  const { error } = await cloud.client.from('chat_messages').insert({
+    organization_id: cloud.organizationId,
+    channel_id: chatState.channelId,
+    user_id: userId,
+    body: body.slice(0, 4000),
+    attachments: []
+  });
+  if (error) throw error;
+  await chatLoadMessages();
+}
+
+async function chatView() {
+  chatSetStatus('Connecting…');
+  try {
+    if (!cloud.user && cloud.client) {
+      try {
+        const { data } = await cloud.client.auth.getUser();
+        if (data?.user) cloud.user = data.user;
+      } catch (_) {}
+    }
+    await chatLoadChannels();
+    await chatLoadMessages();
+  } catch (e) {
+    console.warn('chatView', e);
+    chatSetStatus(e.message || String(e));
+    const el = document.getElementById('chatMessages');
+    if (el) {
+      el.innerHTML = '<div class="empty" style="padding:24px"><h3>Chat unavailable</h3><p>' +
+        String(e.message || e).replace(/</g, '') +
+        '</p><p class="section-sub">Run chat_v1.sql in Supabase, then sign in again.</p></div>';
+    }
+  }
+}
+
+(function wireChatUi() {
+  document.getElementById('chatRefreshBtn')?.addEventListener('click', () => {
+    chatView().catch(() => {});
+  });
+  document.getElementById('chatCompose')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('chatInput');
+    const text = input?.value || '';
+    try {
+      await chatSendMessage(text);
+      if (input) input.value = '';
+      chatSetStatus('');
+    } catch (err) {
+      chatSetStatus(err.message || String(err));
+      toast(err.message || 'Could not send');
+    }
   });
 })();
 
