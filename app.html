@@ -3482,7 +3482,7 @@ input:focus:not(:focus-visible) {
       <div class="section-head">
         <div>
           <h2>Team chat</h2>
-          <div class="client-count" id="chatSubtitle">Org channels — #general plus custom rooms</div>
+          <div class="client-count" id="chatSubtitle">Channels and direct messages for your team</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="button" type="button" id="chatRefreshBtn">Refresh</button>
@@ -3494,7 +3494,9 @@ input:focus:not(:focus-visible) {
           <div class="chat-sidebar-head">Channels</div>
           <div id="chatChannelList" class="chat-channel-list"></div>
           <button type="button" class="button small" id="chatNewChannelSideBtn" style="width:100%;margin-top:8px">+ New channel</button>
-          <p class="section-sub" style="margin:10px 8px 0;font-size:11px">DMs come in Phase C.</p>
+          <div class="chat-sidebar-head" style="margin-top:14px">Direct messages</div>
+          <div id="chatDmList" class="chat-channel-list"></div>
+          <button type="button" class="button small" id="chatNewDmBtn" style="width:100%;margin-top:8px">+ Message teammate</button>
         </aside>
         <div class="chat-main">
           <div class="chat-room-head">
@@ -4082,6 +4084,25 @@ input:focus:not(:focus-visible) {
 </div>
 
 
+
+
+<div class="modalback" id="chatDmModal">
+  <div class="modal" style="max-width:420px">
+    <h2>Message a teammate</h2>
+    <p class="section-sub">Start a private conversation with someone in this organisation.</p>
+    <div class="field">
+      <label>Teammate</label>
+      <select id="chatDmMemberSelect">
+        <option value="">Loading…</option>
+      </select>
+    </div>
+    <p id="chatDmModalHint" class="section-sub" style="margin:0"></p>
+    <div class="buttons" style="justify-content:flex-end;margin-top:16px;gap:10px">
+      <button type="button" class="button" id="chatDmModalCancel" onclick="closeChatDmModal(); return false;">Cancel</button>
+      <button type="button" class="button primary" id="chatDmModalSave" onclick="submitChatDmModal(); return false;">Open chat</button>
+    </div>
+  </div>
+</div>
 
 <div class="modalback" id="chatChannelModal">
   <div class="modal" style="max-width:420px">
@@ -7362,7 +7383,7 @@ function switchTo(v) {
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
     plan: ['Plan & billing', 'Manage your plan, usage and feature access.'],
-    chat: ['Team chat', 'Channels for your organisation — #general and custom rooms.'],
+    chat: ['Team chat', 'Channels and DMs for your organisation.'],
     editor: ['Invoice editor', 'Create a clear invoice your client can pay.']
   }[v] || ['invoicedey', ''];
   $('#heading').textContent = h[0];
@@ -21975,7 +21996,10 @@ function closeMoreSheet() {
 let chatState = {
   channelId: null,
   channelName: 'general',
+  channelType: 'channel',
   channels: [],
+  dms: [],
+  members: [],
   messages: [],
   loading: false
 };
@@ -22021,6 +22045,44 @@ async function chatEnsureGeneral() {
   return data;
 }
 
+async function chatLoadMembers() {
+  const ok = await chatEnsureClient();
+  if (!ok) return [];
+  try {
+    const { data, error } = await cloud.client.rpc('list_organization_team', {
+      p_organization_id: cloud.organizationId
+    });
+    if (!error && data) {
+      let payload = data;
+      if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload); } catch (_) {}
+      }
+      const list = Array.isArray(payload)
+        ? payload
+        : (payload.members || payload.Members || []);
+      chatState.members = (list || []).filter(m => m && (m.user_id || m.userId));
+      chatState.members = chatState.members.map(m => ({
+        user_id: m.user_id || m.userId,
+        role: m.role || 'member',
+        email: m.email || null
+      }));
+      return chatState.members;
+    }
+  } catch (e) {
+    console.warn('chatLoadMembers rpc', e);
+  }
+  try {
+    const { data } = await cloud.client
+      .from('organization_members')
+      .select('user_id, role')
+      .eq('organization_id', cloud.organizationId);
+    chatState.members = (data || []).map(m => ({ user_id: m.user_id, role: m.role, email: null }));
+  } catch (_) {
+    chatState.members = [];
+  }
+  return chatState.members;
+}
+
 async function chatLoadChannels() {
   const ok = await chatEnsureClient();
   if (!ok) throw new Error('Sign in required');
@@ -22030,16 +22092,21 @@ async function chatLoadChannels() {
     .select('id, name, slug, type, topic, is_archived, created_at')
     .eq('organization_id', cloud.organizationId)
     .eq('is_archived', false)
-    .eq('type', 'channel')
     .order('name');
   if (error) throw error;
-  chatState.channels = data || [];
-  if (!chatState.channelId && chatState.channels.length) {
+  const all = data || [];
+  chatState.channels = all.filter(c => c.type === 'channel' || !c.type);
+  chatState.dms = all.filter(c => c.type === 'dm');
+  if (!chatState.channelId) {
     const gen = chatState.channels.find(c => c.slug === 'general') || chatState.channels[0];
-    chatState.channelId = gen.id;
-    chatState.channelName = gen.name || gen.slug;
+    if (gen) {
+      chatState.channelId = gen.id;
+      chatState.channelName = gen.name || gen.slug;
+      chatState.channelType = 'channel';
+    }
   }
   renderChatChannels();
+  renderChatDms();
 }
 
 function renderChatChannels() {
@@ -22058,20 +22125,58 @@ function renderChatChannels() {
       chatState.channelId = btn.getAttribute('data-chat-channel');
       const ch = chatState.channels.find(c => c.id === chatState.channelId);
       chatState.channelName = ch ? (ch.name || ch.slug) : 'channel';
+      chatState.channelType = 'channel';
       renderChatChannels();
+      renderChatDms();
       chatLoadMessages().catch(e => chatSetStatus(e.message || String(e)));
     });
   });
   const title = document.getElementById('chatRoomTitle');
   const topic = document.getElementById('chatRoomTopic');
   const ch = chatState.channels.find(c => c.id === chatState.channelId);
-  if (title) title.textContent = '#' + (ch ? (ch.name || ch.slug) : chatState.channelName);
-  if (topic) topic.textContent = ch && ch.topic ? ch.topic : '';
+  const active = [...chatState.channels, ...chatState.dms].find(c => c.id === chatState.channelId);
+  if (title) {
+    if (active && active.type === 'dm') title.textContent = '@' + (active.name || 'direct');
+    else title.textContent = '#' + (ch ? (ch.name || ch.slug) : chatState.channelName);
+  }
+  if (topic) {
+    topic.textContent = active && active.type === 'dm'
+      ? 'Direct message'
+      : (ch && ch.topic ? ch.topic : '');
+  }
   const input = document.getElementById('chatInput');
   if (input) {
-    const nm = ch ? (ch.name || ch.slug) : chatState.channelName;
-    input.placeholder = 'Message #' + nm + '…';
+    if (active && active.type === 'dm') {
+      input.placeholder = 'Message @' + (active.name || 'teammate') + '…';
+    } else {
+      const nm = ch ? (ch.name || ch.slug) : chatState.channelName;
+      input.placeholder = 'Message #' + nm + '…';
+    }
   }
+}
+
+function renderChatDms() {
+  const el = document.getElementById('chatDmList');
+  if (!el) return;
+  if (!chatState.dms.length) {
+    el.innerHTML = '<p class="section-sub" style="padding:8px;font-size:12px">No DMs yet</p>';
+    return;
+  }
+  el.innerHTML = chatState.dms.map(c =>
+    '<button type="button" class="chat-channel-btn' + (c.id === chatState.channelId ? ' active' : '') +
+    '" data-chat-dm="' + c.id + '">@' + String(c.name || 'direct').replace(/</g, '') + '</button>'
+  ).join('');
+  el.querySelectorAll('[data-chat-dm]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      chatState.channelId = btn.getAttribute('data-chat-dm');
+      const dm = chatState.dms.find(c => c.id === chatState.channelId);
+      chatState.channelName = dm ? (dm.name || 'direct') : 'direct';
+      chatState.channelType = 'dm';
+      renderChatChannels();
+      renderChatDms();
+      chatLoadMessages().catch(e => chatSetStatus(e.message || String(e)));
+    });
+  });
 }
 
 async function chatLoadMessages() {
@@ -22261,6 +22366,81 @@ async function chatCreateChannel(rawName, topicText) {
   return ch;
 }
 
+
+function openChatDmModal() {
+  const m = document.getElementById('chatDmModal');
+  const hint = document.getElementById('chatDmModalHint');
+  if (hint) hint.textContent = '';
+  chatLoadMembers().then(() => {
+    const sel = document.getElementById('chatDmMemberSelect');
+    if (!sel) return;
+    const me = cloud.user?.id;
+    const others = (chatState.members || []).filter(m => m.user_id && m.user_id !== me);
+    if (!others.length) {
+      sel.innerHTML = '<option value="">No other teammates yet — invite someone in Profile</option>';
+    } else {
+      sel.innerHTML = '<option value="">Select teammate…</option>' +
+        others.map(m => {
+          const label = (m.email || ('Member ' + String(m.user_id).slice(0, 8))) +
+            (m.role ? (' · ' + m.role) : '');
+          return '<option value="' + m.user_id + '">' + String(label).replace(/</g, '') + '</option>';
+        }).join('');
+    }
+  }).catch(e => {
+    if (hint) hint.textContent = e.message || String(e);
+  });
+  if (m) {
+    m.classList.add('show');
+    try { m.style.display = 'grid'; m.style.zIndex = '90'; } catch (_) {}
+  }
+  try { closeMoreSheet(); } catch (_) {}
+}
+
+function closeChatDmModal() {
+  const m = document.getElementById('chatDmModal');
+  if (m) {
+    m.classList.remove('show');
+    try { m.style.display = ''; m.style.zIndex = ''; } catch (_) {}
+  }
+}
+
+async function submitChatDmModal() {
+  const otherId = document.getElementById('chatDmMemberSelect')?.value || '';
+  const hint = document.getElementById('chatDmModalHint');
+  const btn = document.getElementById('chatDmModalSave');
+  if (!otherId) {
+    if (hint) hint.textContent = 'Pick a teammate';
+    return;
+  }
+  if (btn) btn.disabled = true;
+  try {
+    const ok = await chatEnsureClient();
+    if (!ok) throw new Error('Sign in required');
+    const { data: chId, error } = await cloud.client.rpc('ensure_dm_channel', {
+      p_org_id: cloud.organizationId,
+      p_other_user_id: otherId
+    });
+    if (error) throw error;
+    if (!chId) throw new Error('Could not open DM');
+    chatState.channelId = chId;
+    chatState.channelType = 'dm';
+    await chatLoadChannels();
+    const dm = chatState.dms.find(c => c.id === chId);
+    chatState.channelName = dm ? (dm.name || 'direct') : 'direct';
+    renderChatChannels();
+    renderChatDms();
+    await chatLoadMessages();
+    closeChatDmModal();
+    toast('Opened direct message');
+  } catch (err) {
+    const msg = err?.message || String(err);
+    if (hint) hint.textContent = msg;
+    try { toast(msg); } catch (_) {}
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function chatView() {
   chatSetStatus('Connecting…');
   try {
@@ -22272,6 +22452,7 @@ async function chatView() {
     }
     await chatLoadChannels();
     await chatLoadMessages();
+    try { await chatLoadMembers(); } catch (_) {}
   } catch (e) {
     console.warn('chatView', e);
     chatSetStatus(e.message || String(e));
@@ -22286,7 +22467,7 @@ async function chatView() {
 
 
 document.addEventListener('click', (e) => {
-  const t = e.target && e.target.closest && e.target.closest('#chatChannelModalSave, #chatChannelModalCancel, #chatNewChannelBtn, #chatNewChannelSideBtn');
+  const t = e.target && e.target.closest && e.target.closest('#chatChannelModalSave, #chatChannelModalCancel, #chatNewChannelBtn, #chatNewChannelSideBtn, #chatNewDmBtn, #chatDmModalSave, #chatDmModalCancel');
   if (!t) return;
   if (t.id === 'chatChannelModalCancel') {
     e.preventDefault();
@@ -22300,6 +22481,18 @@ document.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     openChatChannelModal();
+  } else if (t.id === 'chatNewDmBtn') {
+    e.preventDefault();
+    e.stopPropagation();
+    openChatDmModal();
+  } else if (t.id === 'chatDmModalCancel') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeChatDmModal();
+  } else if (t.id === 'chatDmModalSave') {
+    e.preventDefault();
+    e.stopPropagation();
+    submitChatDmModal();
   }
 }, true);
 
@@ -22317,6 +22510,25 @@ document.addEventListener('click', (e) => {
     e.stopPropagation();
     openChatChannelModal();
   });
+  document.getElementById('chatNewDmBtn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openChatDmModal();
+  });
+  document.getElementById('chatDmModalCancel')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeChatDmModal();
+  });
+  document.getElementById('chatDmModalSave')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    submitChatDmModal();
+  });
+  document.getElementById('chatDmModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'chatDmModal') closeChatDmModal();
+  });
+
   document.getElementById('chatChannelModalCancel')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
