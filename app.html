@@ -21719,7 +21719,7 @@ async function loadTeamPanel() {
         }
         const rows = unique.map(inv => {
           const email = inv.email || 'Invite';
-          const link = window.location.origin + '/app.html?invite=' + encodeURIComponent(inv.token || '');
+          const link = window.location.origin + '/?invite=' + encodeURIComponent(inv.token || '');
           const invId = inv.id || '';
           return `<div class="team-row">
             <div class="team-row-main">
@@ -21768,7 +21768,7 @@ document.getElementById('teamInviteBtn')?.addEventListener('click', async () => 
     const row = Array.isArray(data) ? data[0] : data;
     const token = row?.token;
     if (token) {
-      const link = window.location.origin + '/app.html?invite=' + encodeURIComponent(token);
+      const link = window.location.origin + '/?invite=' + encodeURIComponent(token);
       try { await navigator.clipboard.writeText(link); } catch {}
       toast('Invite created — link copied');
     } else {
