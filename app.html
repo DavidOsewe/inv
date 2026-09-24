@@ -4373,6 +4373,18 @@ input:focus:not(:focus-visible) {
 </div>
 
 
+<div class="modalback" id="docViewerModal" style="z-index:90">
+  <div class="modal" style="max-width:min(960px,96vw);width:100%;max-height:92vh;display:flex;flex-direction:column;padding:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;flex-shrink:0">
+      <h2 id="docViewerTitle" style="margin:0;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Document</h2>
+      <div style="display:flex;gap:8px;flex-shrink:0">
+        <a class="button small" id="docViewerDownload" download>Download</a>
+        <button type="button" class="button" id="docViewerClose">Close</button>
+      </div>
+    </div>
+    <div id="docViewerBody" style="flex:1;min-height:60vh;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel-2)"></div>
+  </div>
+</div>
 <div class="modalback" id="journalActivityModal" style="z-index:85">
   <div class="modal" style="max-width:640px">
     <h2 id="journalActivityTitle">Journal entry</h2>
@@ -13558,40 +13570,121 @@ function supportingDocsHtml(docs, compact) {
     items + '</div>';
 }
 
+function dataUrlToBlob(dataUrl) {
+  try {
+    const parts = String(dataUrl).split(',');
+    const header = parts[0] || '';
+    const b64 = parts.slice(1).join(',');
+    const mimeMatch = header.match(/data:([^;]+)/);
+    const mime = (mimeMatch && mimeMatch[1]) || 'application/octet-stream';
+    const binary = atob(b64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  } catch (e) {
+    console.warn('dataUrlToBlob', e);
+    return null;
+  }
+}
+
+let _docViewerObjectUrl = null;
+function closeDocViewer() {
+  try {
+    if (_docViewerObjectUrl) {
+      URL.revokeObjectURL(_docViewerObjectUrl);
+      _docViewerObjectUrl = null;
+    }
+  } catch (_) {}
+  const body = document.getElementById('docViewerBody');
+  if (body) body.innerHTML = '';
+  if (typeof hideModal === 'function') hideModal('docViewerModal');
+  else document.getElementById('docViewerModal')?.classList.remove('show');
+}
+
 function openSupportingDocument(doc) {
   if (!doc || !doc.dataUrl) {
     toast('Document not available');
     return;
   }
-  const type = String(doc.type || '');
+  let type = String(doc.type || '').toLowerCase();
+  const name = String(doc.name || 'document');
+  // Infer type from data URL or filename if missing
+  if (!type || type === 'application/octet-stream') {
+    const m = String(doc.dataUrl).match(/^data:([^;,]+)/);
+    if (m) type = m[1].toLowerCase();
+  }
+  if (!type || type === 'application/octet-stream') {
+    if (/\.pdf$/i.test(name)) type = 'application/pdf';
+    else if (/\.(png|jpe?g|gif|webp)$/i.test(name)) type = 'image/' + (name.split('.').pop() || 'png').toLowerCase();
+  }
+
+  const blob = dataUrlToBlob(doc.dataUrl);
+  if (!blob) {
+    toast('Could not read file data');
+    return;
+  }
+
   try {
-    if (type.startsWith('image/')) {
-      const w = window.open('', '_blank');
-      if (w) {
-        w.document.write('<title>' + String(doc.name || 'Image').replace(/</g, '') +
-          '</title><body style="margin:0;background:#111;display:grid;place-items:center;min-height:100vh">' +
-          '<img src="' + doc.dataUrl + '" alt="" style="max-width:100%;max-height:100vh;object-fit:contain"/></body>');
-        w.document.close();
-      } else {
-        // popup blocked — download
-        const a = document.createElement('a');
-        a.href = doc.dataUrl;
-        a.download = doc.name || 'document';
-        a.click();
-      }
-      return;
+    if (_docViewerObjectUrl) {
+      URL.revokeObjectURL(_docViewerObjectUrl);
+      _docViewerObjectUrl = null;
     }
-    // PDF or other: open / download
+  } catch (_) {}
+
+  const objectUrl = URL.createObjectURL(blob);
+  _docViewerObjectUrl = objectUrl;
+
+  const modal = document.getElementById('docViewerModal');
+  const body = document.getElementById('docViewerBody');
+  const title = document.getElementById('docViewerTitle');
+  const dl = document.getElementById('docViewerDownload');
+  if (title) title.textContent = name;
+  if (dl) {
+    dl.href = objectUrl;
+    dl.download = name;
+    dl.style.display = '';
+  }
+
+  if (body) {
+    body.innerHTML = '';
+    if (type.startsWith('image/')) {
+      const img = document.createElement('img');
+      img.src = objectUrl;
+      img.alt = name;
+      img.style.cssText = 'display:block;max-width:100%;max-height:75vh;margin:0 auto;object-fit:contain';
+      body.appendChild(img);
+    } else if (type === 'application/pdf' || type.includes('pdf')) {
+      // Blob URL in iframe works in Chrome/Edge/Firefox; data: PDF often renders blank
+      const iframe = document.createElement('iframe');
+      iframe.src = objectUrl;
+      iframe.title = name;
+      iframe.style.cssText = 'width:100%;height:min(75vh,720px);border:0;background:#fff';
+      body.appendChild(iframe);
+    } else {
+      body.innerHTML =
+        '<div style="padding:28px;text-align:center">' +
+        '<p style="margin:0 0 12px;color:var(--muted)">Preview not available for this file type.</p>' +
+        '<a class="button primary" href="' + objectUrl + '" download="' + name.replace(/"/g, '') + '">Download ' + name.replace(/</g, '') + '</a>' +
+        '</div>';
+    }
+  }
+
+  if (modal) {
+    if (typeof showModal === 'function') showModal('docViewerModal');
+    else {
+      modal.classList.add('show');
+      modal.style.display = 'grid';
+    }
+  } else {
+    // Fallback: trigger download
     const a = document.createElement('a');
-    a.href = doc.dataUrl;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    if (!type.includes('pdf')) a.download = doc.name || 'document';
+    a.href = objectUrl;
+    a.download = name;
     document.body.appendChild(a);
     a.click();
     a.remove();
-  } catch (e) {
-    toast('Could not open file');
+    toast('Download started');
   }
 }
 
@@ -19041,6 +19134,12 @@ document.getElementById('booksLedgerBackReports')?.addEventListener('click', () 
   try { renderBooksTrial(); } catch {}
 });
 document.getElementById('journalActivityClose')?.addEventListener('click', () => hideModal('journalActivityModal'));
+
+document.getElementById('docViewerClose')?.addEventListener('click', closeDocViewer);
+document.getElementById('docViewerModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'docViewerModal') closeDocViewer();
+});
+
 document.getElementById('journalActivityModal')?.addEventListener('click', (e) => {
   if (e.target.id === 'journalActivityModal') document.getElementById('journalActivityModal')?.classList.remove('show');
 });
