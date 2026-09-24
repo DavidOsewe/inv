@@ -3766,6 +3766,12 @@ input:focus:not(:focus-visible) {
                 <input id="payDate" type="date">
               </div>
               <div class="field">
+<label>Deposit to (cash &amp; equivalents)</label>
+                <select id="payDepositAccount" class="searchable" data-searchable="1">
+                  <option value="1000">1000 · Cash</option>
+                </select>
+              </div>
+              <div class="field">
                 <label>Method</label>
                 <select id="payMethod">
                   <option value="Bank transfer">Bank transfer</option>
@@ -4143,6 +4149,16 @@ input:focus:not(:focus-visible) {
     <div class="field"><label>Category</label>
       <select id="cashCategory"></select>
     </div>
+    <div class="field"><label>Bank / cash account (debit or credit cash)</label>
+      <select id="cashBankAccount" class="searchable" data-searchable="1"></select>
+    </div>
+    <div class="field"><label>Offset ledger (income or expense)</label>
+      <select id="cashOffsetAccount" class="searchable" data-searchable="1"></select>
+    </div>
+    <div class="field"><label>Supporting documents</label>
+      <input id="cashDocs" type="file" multiple accept="image/*,.pdf,.png,.jpg,.jpeg">
+      <div id="cashDocsList" class="client-meta" style="margin-top:6px"></div>
+    </div>
     <div class="field"><label>Amount</label><input id="cashAmount" type="number" min="0" step="0.01" placeholder="0"></div>
     <div class="two">
       <div class="field"><label>Currency</label><input id="cashCurrency" maxlength="3" placeholder="NGN"></div>
@@ -4342,6 +4358,10 @@ input:focus:not(:focus-visible) {
     <p class="section-sub">Debits must equal credits. Use for opening balances, adjustments, and non-invoice activity.</p>
     <div class="field"><label>Date</label><input id="jeDate" type="date"></div>
     <div class="field"><label>Memo</label><input id="jeMemo" placeholder="e.g. Opening balances, correction"></div>
+    <div class="field"><label>Supporting documents</label>
+      <input id="jeDocs" type="file" multiple accept="image/*,.pdf,.png,.jpg,.jpeg">
+      <div id="jeDocsList" class="client-meta" style="margin-top:6px"></div>
+    </div>
     <div id="jeLines"></div>
     <button type="button" class="button small" id="jeAddLine">+ Line</button>
     <p id="jeBalanceHint" class="section-sub" style="margin-top:8px"></p>
@@ -4405,7 +4425,11 @@ input:focus:not(:focus-visible) {
     <h2>Supplier bill</h2>
     <p class="section-sub">Accrue expense + accounts payable. Pay later to clear the liability.</p>
     <div class="field"><label>Supplier</label><input id="billSupplier" placeholder="e.g. MTN, landlord, distributor"></div>
-    <div class="field"><label>Category</label><select id="billCategory"></select></div>
+    <div class="field"><label>Category / expense ledger</label><select id="billCategory" class="searchable" data-searchable="1"></select></div>
+    <div class="field"><label>Supporting documents</label>
+      <input id="billDocs" type="file" multiple accept="image/*,.pdf,.png,.jpg,.jpeg">
+      <div id="billDocsList" class="client-meta" style="margin-top:6px"></div>
+    </div>
     <div class="field"><label>Amount (incl. tax if any)</label><input id="billAmount" type="number" min="0" step="0.01"></div>
     <div class="two">
       <div class="field"><label>Tax amount (optional)</label><input id="billTax" type="number" min="0" step="0.01" placeholder="0"></div>
@@ -7266,10 +7290,9 @@ function renderInvoiceRows(arr, options = {}) {
           <td class="${due.cls}">${due.text}</td>
           <td><span class="badge ${st.toLowerCase()}">${st}</span></td>
           <td class="right"><b>${money(tot, i.currency)}</b>${amtExtra}${repNote}</td>
-          ${showActions ? `<td class="actions" onclick="event.stopPropagation()">
+          ${showActions ? `<td class="actions">
             ${bal > 0.001 ? `<button class="button small" data-remind-wa="${i.id}">Remind</button>` : ''}
-            ${bal > 0.001 ? `<button class="button small" data-remind-wa="${i.id}">Remind</button>` : ''}
-            ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
+            ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Record payment</button>` : ''}
             ${paid > 0 ? `<button class="button small" data-receipt="${i.id}" title="${hasFeature('payment_receipts') ? 'Download receipt' : 'Receipts require Starter'}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
             <button class="button small danger" data-delete-invoice="${i.id}">Delete</button>
           </td>` : ''}
@@ -7290,7 +7313,7 @@ function renderInvoiceRows(arr, options = {}) {
         : paid > 0
           ? 'Bal ' + money(bal, i.currency)
           : '';
-      const actions = showActions ? `<div class="mobile-card-actions" onclick="event.stopPropagation()">
+      const actions = showActions ? `<div class="mobile-card-actions">
           ${bal > 0.001 ? `<button class="button small" data-remind-wa="${i.id}">Remind</button>` : ''}
           ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
           ${paid > 0 ? `<button class="button small" data-receipt="${i.id}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
@@ -12336,6 +12359,73 @@ function coaName(id) {
   return (getCoa().find(a => a.id === id) || {}).name || id;
 }
 
+
+function readSupportingDocsFromInput(inputId) {
+  const input = document.getElementById(inputId);
+  const listEl = document.getElementById(inputId + 'List') || document.getElementById(inputId.replace(/Docs$/, 'DocsList'));
+  if (!input || !input.files || !input.files.length) return Promise.resolve([]);
+  const files = Array.from(input.files).slice(0, 5);
+  return Promise.all(files.map(f => new Promise((resolve) => {
+    if (f.size > 1.5 * 1024 * 1024) {
+      resolve({ name: f.name, type: f.type, size: f.size, note: 'skipped (over 1.5MB)' });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve({
+      name: f.name,
+      type: f.type || 'application/octet-stream',
+      size: f.size,
+      dataUrl: reader.result,
+      at: new Date().toISOString()
+    });
+    reader.onerror = () => resolve({ name: f.name, type: f.type, size: f.size, note: 'read failed' });
+    reader.readAsDataURL(f);
+  }))).then(docs => {
+    if (listEl) {
+      listEl.innerHTML = docs.map(d =>
+        '• ' + String(d.name).replace(/</g,'') + (d.note ? ' (' + d.note + ')' : '')
+      ).join('<br>') || '';
+    }
+    return docs.filter(d => d.dataUrl);
+  });
+}
+function wireDocsPreview(inputId, listId) {
+  const input = document.getElementById(inputId);
+  const listEl = document.getElementById(listId);
+  if (!input || input._docsWired) return;
+  input._docsWired = true;
+  input.addEventListener('change', () => {
+    if (!listEl) return;
+    const files = Array.from(input.files || []);
+    listEl.innerHTML = files.length
+      ? files.map(f => '• ' + f.name + ' (' + Math.round(f.size/1024) + ' KB)').join('<br>')
+      : '';
+  });
+}
+function fillCashLedgerSelects() {
+  const bank = document.getElementById('cashBankAccount');
+  const offset = document.getElementById('cashOffsetAccount');
+  if (!bank && !offset) return;
+  const coa = (typeof getCoa === 'function' ? getCoa() : []) || [];
+  const cashList = coa.filter(a => typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a));
+  const banks = cashList.length ? cashList : coa.filter(a => a.type === 'asset');
+  const offsets = coa.filter(a => a.type === 'expense' || a.type === 'income' || a.type === 'liability' || a.type === 'equity');
+  const all = coa.length ? coa : [{ id: '1000', name: 'Cash' }, { id: '5000', name: 'Expenses' }];
+  if (bank) {
+    bank.innerHTML = (banks.length ? banks : all).map(a =>
+      '<option value="' + a.id + '">' + a.id + ' · ' + String(a.name||'').replace(/</g,'') + '</option>'
+    ).join('');
+  }
+  if (offset) {
+    const list = offsets.length ? offsets : all;
+    offset.innerHTML = list.map(a =>
+      '<option value="' + a.id + '">' + a.id + ' · ' + String(a.name||'').replace(/</g,'') + '</option>'
+    ).join('');
+  }
+  try { wireDocsPreview('cashDocs', 'cashDocsList'); } catch (_) {}
+  try { initSearchableSelects(document.getElementById('cashModal')); } catch (_) {}
+}
+
 function coaOptionsHtml(selected) {
   return getCoa().map(a =>
     `<option value="${a.id}" ${a.id === selected ? 'selected' : ''}>${a.id} · ${a.name}</option>`
@@ -12396,7 +12486,7 @@ function appendBooksAudit(action, entityType, entityId, summary, before, after, 
   return ev;
 }
 
-function postJournal({ date, memo, source, sourceKey, lines, currency, reversedFrom, reverseOf }) {
+function postJournal({ date, memo, source, sourceKey, lines, currency, reversedFrom, reverseOf, documents }) {
   ensureBooksDb();
   if (sourceKey && db.journals.some(j => j.sourceKey === sourceKey)) return null;
   const rep = db.profile.reporting || 'USD';
@@ -12442,6 +12532,7 @@ function postJournal({ date, memo, source, sourceKey, lines, currency, reversedF
     sourceKey: sourceKey || null,
     currency: cur,
     lines: normalized,
+    documents: Array.isArray(documents) ? documents : [],
     createdAt: new Date().toISOString(),
     createdBy: actor.userId,
     createdByEmail: actor.email,
@@ -12518,6 +12609,10 @@ function journalActivity(journalId) {
 function recordCashFromInvoicePayment(inv, payment) {
   ensureBooksDb();
   const key = 'pay:' + (payment.id || (payment.date + ':' + payment.amount));
+  const depositId = payment.depositAccountId
+    || (document.getElementById('payDepositAccount') && document.getElementById('payDepositAccount').value)
+    || defaultCashAccountId()
+    || '1000';
   if (!db.cashEntries.some(e => e.sourceKey === key)) {
     db.cashEntries.push({
       id: crypto.randomUUID(),
@@ -12529,10 +12624,11 @@ function recordCashFromInvoicePayment(inv, payment) {
       note: 'Invoice ' + (inv.number || '') + (payment.note ? ' · ' + payment.note : ''),
       source: 'invoice_payment',
       sourceKey: key,
-      invoiceId: inv.id
+      invoiceId: inv.id,
+      accountId: depositId
     });
   }
-  // Accrual: payment clears AR into cash
+  // Payment clears AR into selected cash / cash-equivalent
   const amt = toRep(payment.amount, inv.currency);
   postJournal({
     date: payment.date || today,
@@ -12541,7 +12637,7 @@ function recordCashFromInvoicePayment(inv, payment) {
     sourceKey: 'j:' + key,
     currency: db.profile.reporting || 'USD',
     lines: [
-      { accountId: '1000', debit: amt, credit: 0 },
+      { accountId: depositId, debit: amt, credit: 0 },
       { accountId: '1100', debit: 0, credit: amt }
     ]
   });
@@ -12851,7 +12947,7 @@ function runBooksAction(kind) {
   else if (kind === 'transfer') openTransferModal();
   else if (kind === 'recurring-journal' || kind === 'recurringj') {
     setBooksPage('recurring', 'recurringj');
-    setTimeout(() => openRecurringJournalModal(), 60);
+    setTimeout(() => openRecurringJournalModal(), 120);
   }
   else if (kind === 'payment') {
     try { switchTo('invoices'); toast('Open an invoice to record a payment'); } catch {}
@@ -13508,6 +13604,7 @@ function paySupplierBill(billId, opts) {
 
 function openBillModal() {
   ensureBooksDb();
+  try { wireDocsPreview('billDocs', 'billDocsList'); } catch (_) {}
   const m = document.getElementById('billModal');
   if (!m) {
     toast('Bill form missing — hard-refresh');
@@ -13603,7 +13700,55 @@ function renderBooksPayables() {
   html += '<button type="button" class="button primary" id="booksAddBillBtn">+ Supplier bill</button></div>';
 
   if (open.length) {
-    html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Open payables</div>';
+    
+  // Supplier concentration
+  const bySup = {};
+  open.forEach(b => {
+    const name = String(b.supplier || 'Unknown supplier');
+    if (!bySup[name]) bySup[name] = { name, count: 0, total: 0, oldest: null };
+    bySup[name].count++;
+    bySup[name].total += (typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0);
+    const d = b.due || b.date || '';
+    if (!bySup[name].oldest || (d && d < bySup[name].oldest)) bySup[name].oldest = d;
+  });
+  const supRows = Object.values(bySup).sort((a, b) => b.total - a.total);
+  if (supRows.length) {
+    html += '<div style="margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">';
+    html += '<div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">By supplier</div>';
+    html += supRows.slice(0, 8).map(r =>
+      '<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px">' +
+      '<div><b>' + String(r.name).replace(/</g,'') + '</b>' +
+      '<div class="client-meta">' + r.count + ' open · oldest ' + (r.oldest || '—') + '</div></div>' +
+      '<b style="font-variant-numeric:tabular-nums">' + (typeof money === 'function' ? money(r.total, rep) : r.total) + '</b></div>'
+    ).join('');
+    html += '</div>';
+  }
+  // Aging buckets
+  const todayIso = (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
+  const aging = { current: 0, d30: 0, d60: 0, d90: 0 };
+  open.forEach(b => {
+    const due = b.due || b.date || todayIso;
+    const days = Math.floor((new Date(todayIso + 'T12:00:00') - new Date(due + 'T12:00:00')) / 86400000);
+    const amt = (typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0);
+    if (days <= 0) aging.current += amt;
+    else if (days <= 30) aging.d30 += amt;
+    else if (days <= 60) aging.d60 += amt;
+    else aging.d90 += amt;
+  });
+  html += '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:14px">';
+  [
+    ['Not due', aging.current],
+    ['1–30d', aging.d30],
+    ['31–60d', aging.d60],
+    ['60d+', aging.d90]
+  ].forEach(([lab, val]) => {
+    html += '<div style="padding:10px;border:1px solid var(--line);border-radius:10px;text-align:center">' +
+      '<div style="font-size:10px;color:var(--muted);text-transform:uppercase">' + lab + '</div>' +
+      '<div style="font-weight:800;font-size:13px;font-variant-numeric:tabular-nums">' + (typeof money === 'function' ? money(val, rep) : val) + '</div></div>';
+  });
+  html += '</div>';
+
+  html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Open payables</div>';
     html += open.map(b => {
       const due = b.due || b.date || '';
       let overdue = false;
@@ -13631,7 +13776,7 @@ function renderBooksPayables() {
     html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin:16px 0 6px">Recently paid</div>';
     html += paid.map(b =>
       '<div style="display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">' +
-      '<span>' + String(b.supplier || 'Supplier').replace(/</g, '') + ' · paid ' + (b.paidAt || '—') + '</span>' +
+      '<span>' + String(b.supplier || 'Supplier').replace(/</g, '') + ((b.documents||[]).length ? ' · ' + b.documents.length + ' file(s)' : '') + ' · paid ' + (b.paidAt || '—') + '</span>' +
       '<span style="color:var(--muted)">' + (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) + '</span></div>'
     ).join('');
   }
@@ -14275,6 +14420,36 @@ function renderBooksAttention() {
 }
 
 
+
+function cashAndEquivalentAccounts() {
+  try {
+    return (getCoa() || []).filter(a => a && (typeof isCashEquivalentAccount === 'function' ? isCashEquivalentAccount(a) : false));
+  } catch (_) {
+    return [];
+  }
+}
+function defaultCashAccountId() {
+  const list = cashAndEquivalentAccounts();
+  if (!list.length) return '1000';
+  const preferred = list.find(a => a.id === '1000') || list.find(a => /cash/i.test(a.name || '')) || list[0];
+  return preferred.id;
+}
+function fillPayDepositAccountSelect(selectedId) {
+  const sel = document.getElementById('payDepositAccount');
+  if (!sel) return;
+  const list = cashAndEquivalentAccounts();
+  const cur = selectedId || sel.value || defaultCashAccountId();
+  if (!list.length) {
+    sel.innerHTML = '<option value="1000">1000 · Cash</option>';
+    return;
+  }
+  sel.innerHTML = list.map(a =>
+    '<option value="' + a.id + '">' + a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>'
+  ).join('');
+  if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  try { if (typeof initSearchableSelects === 'function') initSearchableSelects(sel.parentElement || document); } catch (_) {}
+}
+
 function isCashEquivalentAccount(a) {
   if (!a || a.type !== 'asset') return false;
   if (a.fsLine === 'cash_and_equivalents' || a.cfSection === 'cash') return true;
@@ -14455,6 +14630,7 @@ function openCashModal() {
   const m = document.getElementById('cashModal');
   if (!m) return;
   document.getElementById('cashType').value = 'out';
+  try { fillCashLedgerSelects(); } catch (_) {}
   fillCashCategoryOptions('out');
   document.getElementById('cashAmount').value = '';
   document.getElementById('cashCurrency').value = (db.profile.reporting || 'NGN');
@@ -15862,11 +16038,23 @@ function rjUpdateHint() {
 function openRecurringJournalModal(editId) {
   try {
     ensureBooksDb();
+    try { toggleBooksCreateMenu(false); } catch (_) {}
+    try {
+      document.querySelectorAll('.modalback.show').forEach(m => {
+        if (m.id !== 'recurringJournalModal') {
+          m.classList.remove('show');
+          m.style.display = '';
+        }
+      });
+    } catch (_) {}
     const modal = document.getElementById('recurringJournalModal');
     if (!modal) {
       toast('Recurring journal UI missing — hard-refresh the app');
       return;
     }
+    // Reset stuck inline styles from a previous open
+    modal.style.display = '';
+    modal.classList.remove('show');
     const sch = editId ? (db.recurringJournals || []).find(s => s.id === editId) : null;
     const editEl = document.getElementById('rjEditId');
     if (editEl) editEl.value = sch ? sch.id : '';
@@ -16404,7 +16592,7 @@ function handleBooksCreate(kind) {
   else if (kind === 'transfer') openTransferModal();
   else if (kind === 'recurring-journal' || kind === 'recurringj') {
     setBooksPage('recurring', 'recurringj');
-    setTimeout(() => openRecurringJournalModal(), 60);
+    setTimeout(() => openRecurringJournalModal(), 120);
   }
 }
 
@@ -18596,6 +18784,7 @@ function renderBankTransactions() {
 
 function openJournalModal() {
   const m = document.getElementById('journalModal');
+  try { wireDocsPreview('jeDocs', 'jeDocsList'); } catch (_) {}
   if (!m) return;
   document.getElementById('jeDate').value = today;
   document.getElementById('jeMemo').value = '';
@@ -18857,7 +19046,9 @@ document.getElementById('reconClearTicks')?.addEventListener('click', () => {
 
 document.getElementById('jeCancel')?.addEventListener('click', closeJournalModal);
 document.getElementById('jeAddLine')?.addEventListener('click', () => { jeLineCount++; jeRenderLines(); });
-document.getElementById('jeSave')?.addEventListener('click', () => {
+document.getElementById('jeSave')?.addEventListener('click', async () => {
+  let jeDocs = [];
+  try { jeDocs = await readSupportingDocsFromInput('jeDocs'); } catch (_) {}
   const lines = [];
   document.querySelectorAll('#jeLines [data-je-row]').forEach(row => {
     const accountId = row.querySelector('.je-account')?.value;
@@ -18874,7 +19065,8 @@ document.getElementById('jeSave')?.addEventListener('click', () => {
     memo: (document.getElementById('jeMemo')?.value || '').trim() || 'Manual journal',
     source: 'manual_journal',
     sourceKey: 'j:manual:' + crypto.randomUUID(),
-    lines
+    lines,
+    documents: (typeof jeDocs !== 'undefined' ? jeDocs : [])
   });
   if (!entry) { toast('Could not post journal'); return; }
   save();
@@ -18915,10 +19107,12 @@ document.getElementById('accSave')?.addEventListener('click', () => {
 document.getElementById('btnAddCashEntry')?.addEventListener('click', openCashModal);
 document.getElementById('btnAddBill')?.addEventListener('click', openBillModal);
 document.getElementById('billCancel')?.addEventListener('click', closeBillModal);
-document.getElementById('billSave')?.addEventListener('click', () => {
+document.getElementById('billSave')?.addEventListener('click', async () => {
   ensureBooksDb();
   const amount = Number(document.getElementById('billAmount')?.value || 0);
   if (!(amount > 0)) { toast('Enter bill amount'); return; }
+  let docs = [];
+  try { docs = await readSupportingDocsFromInput('billDocs'); } catch (_) {}
   const bill = {
     id: crypto.randomUUID(),
     supplier: (document.getElementById('billSupplier')?.value || '').trim() || 'Supplier',
@@ -18929,7 +19123,8 @@ document.getElementById('billSave')?.addEventListener('click', () => {
     date: document.getElementById('billDate')?.value || today,
     due: document.getElementById('billDue')?.value || today,
     note: (document.getElementById('billNote')?.value || '').trim(),
-    status: 'open'
+    status: 'open',
+    documents: docs
   };
   db.bills = db.bills || [];
   db.bills.push(bill);
@@ -18971,7 +19166,7 @@ document.getElementById('booksPages')?.addEventListener('click', (e) => {
   if (!btn) return;
   setBooksPage(btn.getAttribute('data-books-page'));
 });
-document.getElementById('cashSave')?.addEventListener('click', () => {
+document.getElementById('cashSave')?.addEventListener('click', async () => {
   ensureBooksDb();
   const amount = Number(document.getElementById('cashAmount')?.value || 0);
   if (!(amount > 0)) { toast('Enter an amount'); return; }
@@ -18980,6 +19175,10 @@ document.getElementById('cashSave')?.addEventListener('click', () => {
   const currency = String(document.getElementById('cashCurrency')?.value || db.profile.reporting || 'USD').toUpperCase();
   const date = document.getElementById('cashDate')?.value || today;
   const note = (document.getElementById('cashNote')?.value || '').trim() || 'Manual entry';
+  const bankAccountId = document.getElementById('cashBankAccount')?.value || defaultCashAccountId() || '1000';
+  const offsetAccountId = document.getElementById('cashOffsetAccount')?.value || '';
+  let docs = [];
+  try { docs = await readSupportingDocsFromInput('cashDocs'); } catch (_) {}
   const id = crypto.randomUUID();
   db.cashEntries.push({ id, type, category, amount, currency, date, note, source: 'manual' });
   const amt = toRep(amount, currency);
@@ -19062,10 +19261,13 @@ document.addEventListener('click', e => {
   if (v) switchTo(v.dataset.view);
 
   const o = e.target.closest('[data-open]');
-  if (o) {
-    edit = structuredClone(db.invoices.find(i => i.id === o.dataset.open));
-    edit.lines = (edit.lines || []).map(l => ({ unit: 'hours', ...l }));
-    editor();
+  if (o && !e.target.closest('button, a, select, input, label, .actions, .mobile-card-actions')) {
+    const invRow = db.invoices.find(i => i.id === o.dataset.open);
+    if (invRow) {
+      edit = structuredClone(invRow);
+      edit.lines = (edit.lines || []).map(l => ({ unit: 'hours', ...l }));
+      editor();
+    }
   }
 
   const r = e.target.closest('[data-r]');
@@ -19077,16 +19279,23 @@ document.addEventListener('click', e => {
 
   const markPaid = e.target.closest('[data-mark-paid]');
   if (markPaid) {
+    e.preventDefault();
+    e.stopPropagation();
     const inv = db.invoices.find(i => i.id === markPaid.dataset.markPaid);
     if (inv) {
       ensurePayments(inv);
       const bal = balanceDue(inv);
       if (bal > 0.001) {
+        const depositId = (typeof defaultCashAccountId === 'function' ? defaultCashAccountId() : null)
+          || (document.getElementById('payDepositAccount')?.value)
+          || '1000';
         inv.payments.push({
           id: crypto.randomUUID(),
           amount: Math.round(bal * 100) / 100,
-          date: today,
-          note: 'Paid in full'
+          date: (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10)),
+          note: 'Paid in full',
+          method: 'Payment',
+          depositAccountId: depositId
         });
       }
       if (inv.status === 'Draft') inv.status = 'Sent';
@@ -19095,23 +19304,27 @@ document.addEventListener('click', e => {
       if (lastPay) recordCashFromInvoicePayment(inv, lastPay);
       save();
       toast(inv.paid ? 'Invoice paid in full.' : 'Payment recorded.');
-      invoices();
-      if ($('#dashboard').classList.contains('active')) dashboard();
+      try { invoices(); } catch (_) {}
+      try { if ($('#dashboard')?.classList.contains('active')) dashboard(); } catch (_) {}
     }
+    return;
   }
 
   const delInv = e.target.closest('[data-delete-invoice]');
   if (delInv) {
+    e.preventDefault();
+    e.stopPropagation();
     const inv = db.invoices.find(i => i.id === delInv.dataset.deleteInvoice);
     if (inv) {
       confirmAction('Delete invoice', `Are you sure you want to delete ${inv.number}? This cannot be undone.`, () => {
         db.invoices = db.invoices.filter(i => i.id !== inv.id);
         save();
         toast('Invoice deleted.');
-        invoices();
-        if ($('#dashboard').classList.contains('active')) dashboard();
+        try { invoices(); } catch (_) {}
+        try { if ($('#dashboard')?.classList.contains('active')) dashboard(); } catch (_) {}
       });
     }
+    return;
   }
 
   const editClient = e.target.closest('[data-edit-client]');
@@ -20474,6 +20687,7 @@ function printReceipt(invoiceId, paymentId) {
 
 
 function renderPayments() {
+  try { fillPayDepositAccountSelect(); } catch (_) {}
   if (!edit) return;
   ensurePayments(edit);
   syncPaidFlag(edit);
@@ -20543,8 +20757,10 @@ function addPaymentToEdit(amount, date, note, method) {
     toast('Payment is higher than balance (' + money(bal, edit.currency) + ').');
   }
   amt = Math.round(amt * 100) / 100;
+  const depositAccountId = (document.getElementById('payDepositAccount')?.value) || defaultCashAccountId() || '1000';
   edit.payments.push({
     id: crypto.randomUUID(),
+    depositAccountId,
     amount: amt,
     date: date || today,
     method: (method || 'Bank transfer').trim() || 'Bank transfer',
