@@ -3020,6 +3020,7 @@ input:focus:not(:focus-visible) {
         <div>
           <h2>Stock transfers</h2>
           <div class="client-count" id="transferCount">Move stock between warehouses and outlets</div>
+          <p class="section-sub" id="transferFlowHint" style="margin:6px 0 0;max-width:520px">Create a transfer → manager approves (if required) → destination receives the goods.</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="button primary" type="button" id="btnNewTransfer" data-role-gate="transfers.create">+ Transfer</button>
@@ -3029,15 +3030,16 @@ input:focus:not(:focus-visible) {
         <div class="search-bar" style="margin:0;flex:1;max-width:360px">
           <input type="search" id="transferSearch" placeholder="Search transfer number…">
         </div>
-        <select id="transferStatusFilter" class="button small" style="min-width:130px">
-          <option value="all">All statuses</option>
-          <option value="draft">Draft</option>
-          <option value="pending_approval">Pending approval</option>
-          <option value="in_transit">In transit</option>
-          <option value="received">Received</option>
-          <option value="cancelled">Cancelled</option>
+        <select id="transferStatusFilter" class="button small" style="min-width:160px">
+          <option value="all">All transfers</option>
+          <option value="pending_approval">Waiting for manager</option>
+          <option value="in_transit">On the way</option>
+          <option value="received">Complete</option>
+          <option value="draft">Not sent yet</option>
+          <option value="cancelled">Stopped</option>
         </select>
       </div>
+      <div id="transferNeedsAttention" style="margin:0 0 12px"></div>
       <div id="transferList"></div>
       <div class="insight" style="margin-top:24px">
         <h3 style="font-size:15px;margin:0 0 8px">Approval log</h3>
@@ -3130,21 +3132,25 @@ input:focus:not(:focus-visible) {
     <div class="modalback" id="stockTransferModal">
       <div class="modal" style="max-width:560px">
         <h2>New stock transfer</h2>
-        <p class="section-sub">Move products from one location to another.</p>
+        <p class="section-sub">Move products from one store or warehouse to another.</p>
+        <div id="transferApprovalHint" class="insight" style="margin:0 0 12px;padding:10px 12px;font-size:13px;display:none"></div>
         <div class="two">
           <div class="field"><label>From *</label><select id="transferFrom"></select></div>
           <div class="field"><label>To *</label><select id="transferTo"></select></div>
         </div>
-        <div class="field"><label>Note</label><input id="transferNote" placeholder="Optional"></div>
-        <div style="margin:12px 0 8px;font-weight:700;font-size:13px">Lines</div>
+        <div class="field"><label>Note</label><input id="transferNote" placeholder="e.g. Restock Ikeja for weekend"></div>
+        <div style="margin:12px 0 8px;font-weight:700;font-size:13px">Products to move</div>
         <div id="transferLinesEditor"></div>
         <button class="button small" type="button" id="transferAddLine" style="margin-top:8px">+ Add line</button>
         <div class="field" style="margin-top:12px">
-          <label>When saving</label>
+          <label>How should stock move?</label>
           <select id="transferShipMode">
-            <option value="quick">Quick transfer (arrive immediately)</option>
-            <option value="transit">Ship only (in transit — receive later)</option>
+            <option value="quick">Move now (complete in one step)</option>
+            <option value="transit">Send now, receive later at the other store</option>
           </select>
+          <p class="section-sub" id="transferShipModeHint" style="margin:6px 0 0">
+            Use “receive later” when a driver or another staff will confirm arrival.
+          </p>
         </div>
         <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
           <button class="button" type="button" id="stockTransferModalCancel">Cancel</button>
@@ -9432,8 +9438,40 @@ function openStockTransferModal() {
   document.getElementById('transferNote').value = '';
   document.getElementById('transferShipMode').value = 'quick';
   document.getElementById('transferLinesEditor').innerHTML = transferLineEditorHtml([]);
+  try { updateTransferModalHints(); } catch (_) {}
   document.getElementById('stockTransferModal').classList.add('show');
   try { initSearchableSelects(document.getElementById('stockTransferModal')); } catch (_) {}
+}
+
+function updateTransferModalHints() {
+  const appr = document.getElementById('transferApprovalHint');
+  const shipHint = document.getElementById('transferShipModeHint');
+  const mode = document.getElementById('transferShipMode')?.value || 'quick';
+  const needsAppr = typeof approvalsEnabledTransfers === 'function' && approvalsEnabledTransfers();
+  if (appr) {
+    if (needsAppr) {
+      appr.style.display = '';
+      appr.innerHTML = '<b>Approval required.</b> After you save, a manager must approve before stock leaves the source store.';
+    } else {
+      appr.style.display = 'none';
+      appr.innerHTML = '';
+    }
+  }
+  if (shipHint) {
+    if (mode === 'quick') {
+      shipHint.textContent = needsAppr
+        ? 'After approval, stock moves to the destination in one step.'
+        : 'Stock leaves the source and arrives at the destination immediately.';
+    } else {
+      shipHint.textContent = needsAppr
+        ? 'After approval, stock leaves the source. The other store taps Receive when goods arrive.'
+        : 'Stock leaves the source now. The other store taps Receive when goods arrive.';
+    }
+  }
+  const saveBtn = document.getElementById('stockTransferModalSave');
+  if (saveBtn) {
+    saveBtn.textContent = needsAppr ? 'Submit for approval' : 'Save transfer';
+  }
 }
 
 function closeStockTransferModal() {
@@ -9798,7 +9836,7 @@ async function approveStockTransfer(transferId, note) {
   try { await pushStockTransferToCloud(tr); } catch (e) { console.warn(e); }
   logStockAudit('approve', 'stock_transfer', tr.id, 'Approved ' + (tr.transfer_number || ''), { status: tr.status, note: tr.approval_note || null });
   persistDb();
-  toast('Transfer approved');
+  toast('Approved — stock is moving');
   try { closeTransferDetailModal && closeTransferDetailModal(); } catch (_) {}
   try { document.getElementById('transferDetailModal')?.classList.remove('show'); } catch (_) {}
   transfersView();
@@ -9819,7 +9857,7 @@ function rejectStockTransfer(transferId, note) {
   try { pushStockTransferToCloud(tr); } catch (e) { console.warn(e); }
   logStockAudit('reject', 'stock_transfer', tr.id, 'Rejected ' + (tr.transfer_number || '') + ': ' + n, { note: n });
   persistDb();
-  toast('Transfer rejected');
+  toast('Rejected — transfer stopped');
   try { document.getElementById('transferDetailModal')?.classList.remove('show'); } catch (_) {}
   transfersView();
 }
@@ -9881,6 +9919,7 @@ function transfersView() {
   ensurePosDb();
   try { refreshCloudMemberRole(); } catch (_) {}
   try { applyRoleGates(); } catch (_) {}
+  renderTransferNeedsAttention();
   renderTransfersList();
   renderInventoryAuditList();
   try { renderApprovalAuditList('approvalAuditList'); } catch (_) {}
@@ -9895,6 +9934,68 @@ function transfersView() {
   } catch (_) {}
 }
 
+
+function transferNeedsAttentionCounts() {
+  ensurePosDb();
+  const list = db.stockTransfers || [];
+  const pending = list.filter(t => t.status === 'pending_approval').length;
+  const toReceive = list.filter(t => t.status === 'in_transit').length;
+  const canAp = typeof canApproveApprovals === 'function' ? canApproveApprovals() : true;
+  return { pending, toReceive, canAp };
+}
+
+function renderTransferNeedsAttention() {
+  const el = document.getElementById('transferNeedsAttention');
+  if (!el) return;
+  const { pending, toReceive, canAp } = transferNeedsAttentionCounts();
+  if (!pending && !toReceive) {
+    el.innerHTML = '';
+    return;
+  }
+  const chips = [];
+  if (pending) {
+    chips.push(
+      `<button type="button" class="button small" data-transfer-filter="pending_approval" style="border-color:#fcd34d;background:#fffbeb">` +
+      (canAp ? ('Approve (' + pending + ')') : ('Waiting for manager (' + pending + ')')) +
+      `</button>`
+    );
+  }
+  if (toReceive) {
+    chips.push(
+      `<button type="button" class="button small" data-transfer-filter="in_transit" style="border-color:#fdba74;background:#fff7ed">` +
+      'Receive (' + toReceive + ')' +
+      `</button>`
+    );
+  }
+  el.innerHTML =
+    `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">` +
+    `<span class="client-meta" style="font-weight:700">Needs attention</span>` +
+    chips.join('') +
+    `</div>`;
+}
+
+function transferStatusLabel(status) {
+  const map = {
+    draft: 'Not sent yet',
+    pending_approval: 'Waiting for manager',
+    in_transit: 'On the way',
+    received: 'Complete',
+    cancelled: 'Stopped'
+  };
+  return map[String(status || '')] || String(status || '').replace(/_/g, ' ');
+}
+
+function transferStatusHint(status) {
+  const map = {
+    draft: 'Still a draft — not moving stock yet.',
+    pending_approval: 'Stock stays at the source until a manager approves.',
+    in_transit: 'Left the source store — destination should receive when it arrives.',
+    received: 'Stock is at the destination.',
+    cancelled: 'This move was cancelled or rejected.'
+  };
+  return map[String(status || '')] || '';
+}
+
 function transferStatusBadge(status) {
   const s = String(status || '');
   const colors = {
@@ -9905,7 +10006,9 @@ function transferStatusBadge(status) {
     cancelled: 'background:#f3f4f6;color:#6b7280'
   };
   const style = colors[s] || 'background:#f3f4f6;color:#374151';
-  return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;${style}">${s.replace(/_/g, ' ')}</span>`;
+  const label = transferStatusLabel(s);
+  const hint = transferStatusHint(s);
+  return `<span title="${hint.replace(/"/g, '&quot;')}" style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;${style}">${label}</span>`;
 }
 function purchaseStatusBadge(status) {
   const s = String(status || '');
@@ -10427,7 +10530,7 @@ function openTransferDetailModal(transferId) {
       if (body) {
         body.insertAdjacentHTML('afterbegin',
           '<div style="padding:10px 12px;margin-bottom:12px;border-radius:10px;background:#fffbeb;border:1px solid #fcd34d;font-size:13px">' +
-          '<b>Pending approval</b> — stock is not moved until approved.' +
+          '<b>Waiting for manager</b> — stock is still at the source store until approved.' +
           (t.approval_note ? '<div class="client-meta">Note: ' + String(t.approval_note).replace(/</g,'') + '</div>' : '') +
           '</div>');
       }
@@ -10477,10 +10580,16 @@ function renderTransfersList() {
   }
   if (!el) return;
   if (!db.stockTransfers.length) {
+    const apprOn = typeof approvalsEnabledTransfers === 'function' && approvalsEnabledTransfers();
     el.innerHTML = `<div class="empty"><div class="empty-icon">⇄</div>
       <h3>No transfers yet</h3>
-      <p>Move stock from warehouse to outlet, or between stores.</p>
-      <button class="button primary" type="button" id="emptyNewTransfer">+ Transfer</button></div>`;
+      <p style="max-width:360px;margin:0 auto 14px">Move stock between warehouses and outlets in three simple steps.</p>
+      <div style="text-align:left;max-width:340px;margin:0 auto 16px;font-size:13px;line-height:1.45">
+        <div style="display:flex;gap:10px;margin-bottom:10px"><span style="font-weight:800;color:var(--blue)">1</span><span><b>Create</b> — pick from/to stores and products</span></div>
+        <div style="display:flex;gap:10px;margin-bottom:10px"><span style="font-weight:800;color:var(--blue)">2</span><span><b>${apprOn ? 'Approve' : 'Move'}</b> — ${apprOn ? 'manager confirms before stock leaves' : 'stock leaves the source store'}</span></div>
+        <div style="display:flex;gap:10px"><span style="font-weight:800;color:var(--blue)">3</span><span><b>Receive</b> — destination confirms arrival (unless you chose “move now”)</span></div>
+      </div>
+      <button class="button primary" type="button" id="emptyNewTransfer">+ Create first transfer</button></div>`;
     document.getElementById('emptyNewTransfer')?.addEventListener('click', openStockTransferModal);
     return;
   }
@@ -20843,6 +20952,19 @@ document.getElementById('transferReceiveConfirm')?.addEventListener('click', () 
 });
 document.getElementById('transferSearch')?.addEventListener('input', () => renderTransfersList());
 document.getElementById('transferStatusFilter')?.addEventListener('change', () => renderTransfersList());
+document.getElementById('transferNeedsAttention')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-transfer-filter]');
+  if (!btn) return;
+  const st = btn.getAttribute('data-transfer-filter');
+  const sel = document.getElementById('transferStatusFilter');
+  if (sel && st) {
+    sel.value = st;
+    renderTransfersList();
+  }
+});
+document.getElementById('transferShipMode')?.addEventListener('change', () => {
+  try { updateTransferModalHints(); } catch (_) {}
+});
 
 document.getElementById('locationsModalClose')?.addEventListener('click', () => {
   document.getElementById('locationsModal')?.classList.remove('show');
