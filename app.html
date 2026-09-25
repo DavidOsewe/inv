@@ -4308,7 +4308,16 @@ input:focus:not(:focus-visible) {
       <div class="field"><label>Expected date</label><input id="purchaseExpectedDate" type="date"></div>
     </div>
     <div class="field"><label>Note</label><input id="purchaseNote" placeholder="Optional"></div>
-    <div style="margin:12px 0 8px;font-weight:700;font-size:13px">Line items</div>
+    <div class="field"><label>Receive location (for stock & reorder calc)</label>
+      <select id="purchaseLocation"></select>
+    </div>
+    <div style="margin:12px 0 8px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-weight:700;font-size:13px">Line items</span>
+      <span style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="button small" type="button" id="purchaseAutofillLow" title="Products at or below low stock for this supplier">Autofill low stock</button>
+        <button class="button small" type="button" id="purchaseAutofillSupplier" title="All products with this primary supplier">Autofill supplier items</button>
+      </span>
+    </div>
     <div id="purchaseLinesEditor"></div>
     <button class="button small" type="button" id="purchaseAddLine" style="margin-top:8px">+ Add line</button>
     <div style="display:flex;justify-content:space-between;margin-top:14px;font-weight:800">
@@ -4367,6 +4376,10 @@ input:focus:not(:focus-visible) {
     <div class="two">
       <div class="field"><label>Starting / current stock</label><input id="productStock" type="number" step="any" placeholder="0"></div>
       <div class="field"><label>Low stock alert at</label><input id="productLowStock" type="number" min="0" step="any" placeholder="0"></div>
+    </div>
+    <div class="two">
+      <div class="field"><label>Optimal stock (reorder target)</label><input id="productOptimalStock" type="number" min="0" step="any" placeholder="e.g. 20"></div>
+      <div class="field"><label>Primary supplier</label><select id="productPrimarySupplier"><option value="">— None —</option></select></div>
     </div>
     <div class="field"><label>Expiry date</label><input id="productExpiry" type="date" placeholder="Optional"></div>
     <div class="field" style="display:flex;align-items:center;gap:8px">
@@ -8927,11 +8940,63 @@ function openPurchaseModal() {
   document.getElementById('purchaseOrderDate').value = new Date().toISOString().slice(0, 10);
   document.getElementById('purchaseExpectedDate').value = '';
   document.getElementById('purchaseNote').value = '';
+  const locSel = document.getElementById('purchaseLocation');
+  if (locSel) {
+    const locs = (db.locations || []).filter(l => l.active !== false);
+    locSel.innerHTML = locs.map(l => `<option value="${l.id}">${l.name}</option>`).join('') || '<option value="">—</option>';
+    const active = typeof getActiveLocation === 'function' ? getActiveLocation() : null;
+    if (active && [...locSel.options].some(o => o.value === active.id)) locSel.value = active.id;
+  }
   document.getElementById('purchaseLinesEditor').innerHTML = purchaseLineEditorHtml([]);
-  // set default product selects empty
   document.querySelectorAll('#purchaseLinesEditor [data-pl-product]').forEach(s => { s.value = ''; });
   refreshPurchaseModalTotal();
   document.getElementById('purchaseModal').classList.add('show');
+}
+
+/** Loyverse-style autofill: low stock or all primary-supplier items. */
+function autofillPurchaseLines(mode) {
+  ensurePosDb();
+  const supplierId = document.getElementById('purchaseSupplier')?.value || '';
+  const locId = document.getElementById('purchaseLocation')?.value || null;
+  if (!supplierId) { toast('Choose a supplier first'); return; }
+
+  let products = (db.products || []).filter(p => p.active !== false && p.track_stock !== false);
+  // Prefer primary supplier match; if none tagged, allow all for low-stock mode
+  const withSupplier = products.filter(p => p.primary_supplier_id === supplierId);
+  if (mode === 'supplier') {
+    products = withSupplier;
+    if (!products.length) {
+      toast('No products with this primary supplier — set Primary supplier on products');
+      return;
+    }
+  } else {
+    // low stock
+    const pool = withSupplier.length ? withSupplier : products;
+    products = pool.filter(p => {
+      const onHand = locId ? locationStockQty(p.id, locId) : (Number(p.stock_qty) || 0);
+      const low = Number(p.low_stock_at) || 0;
+      return onHand <= 0 || (low > 0 && onHand <= low);
+    });
+    if (!products.length) {
+      toast('No low-stock items for this supplier/location');
+      return;
+    }
+  }
+
+  const lines = products.map(p => {
+    let qty = suggestedReorderQty(p, locId);
+    if (!(qty > 0)) {
+      const low = Number(p.low_stock_at) || 0;
+      qty = Math.max(1, low > 0 ? low : 1);
+    }
+    const cost = Number(p.cost) || 0;
+    return { product_id: p.id, qty, unit_cost: cost };
+  });
+  document.getElementById('purchaseLinesEditor').innerHTML = purchaseLineEditorHtml(lines);
+  try { initSearchableSelects(document.getElementById('purchaseModal')); } catch (_) {}
+  refreshPurchaseModalTotal();
+  toast('Added ' + lines.length + ' line' + (lines.length === 1 ? '' : 's') +
+    (mode === 'low' ? ' (reorder qty = optimal − on hand − incoming)' : ''));
 }
 
 function closePurchaseModal() {
@@ -8957,6 +9022,7 @@ async function savePurchase(status) {
     order_date: document.getElementById('purchaseOrderDate').value || now.slice(0, 10),
     expected_date: document.getElementById('purchaseExpectedDate').value || null,
     note: (document.getElementById('purchaseNote').value || '').trim() || null,
+    location_id: document.getElementById('purchaseLocation')?.value || null,
     currency: posCurrency(),
     total,
     lines,
@@ -9074,10 +9140,14 @@ async function confirmReceiveGoods() {
 
     const p = db.products.find(x => x.id === line.product_id);
     if (p) {
-      if ((Number(line.unit_cost) || 0) > 0) p.cost = Number(line.unit_cost);
       const recvLocId = document.getElementById('receiveLocation')?.value
         || po.location_id
         || getActiveLocation()?.id;
+      const onHandBefore = recvLocId
+        ? locationStockQty(p.id, recvLocId)
+        : (Number(p.stock_qty) || 0);
+      applyWeightedAverageCost(p, qty, line.unit_cost, onHandBefore);
+      p.updated_at = now;
       if (recvLocId) {
         const { mov } = adjustLocationStock(p.id, recvLocId, qty, {
           reason: 'purchase',
@@ -9090,7 +9160,6 @@ async function confirmReceiveGoods() {
         } catch (e) { console.warn(e); }
       } else {
         p.stock_qty = (Number(p.stock_qty) || 0) + qty;
-        p.updated_at = now;
         try { pushProductToCloud(p); } catch (e) { console.warn(e); }
       }
     }
@@ -9431,14 +9500,25 @@ async function allocateTransferNumber() {
 function transferLineEditorHtml(lines) {
   ensurePosDb();
   const products = db.products.filter(p => p.active !== false);
+  const fromId = document.getElementById('transferFrom')?.value || '';
+  const toId = document.getElementById('transferTo')?.value || '';
   if (!lines.length) lines = [{ product_id: '', qty: 1 }];
   return lines.map((l, i) => {
     const opts = products.map(p =>
       `<option value="${p.id}" ${p.id === l.product_id ? 'selected' : ''}>${p.name}</option>`
     ).join('');
+    let stockHint = '';
+    if (l.product_id) {
+      const fromQty = fromId ? locationStockQty(l.product_id, fromId) : '—';
+      const toQty = toId ? locationStockQty(l.product_id, toId) : '—';
+      stockHint = `<div class="client-meta" data-tr-stock-hint style="margin-top:4px">Source ${fromQty} · Dest ${toQty}</div>`;
+    } else {
+      stockHint = `<div class="client-meta" data-tr-stock-hint style="margin-top:4px">Source — · Dest —</div>`;
+    }
     return `<div class="transfer-line-row" data-idx="${i}" style="display:grid;grid-template-columns:1fr 90px 28px;gap:6px;margin-bottom:8px;align-items:end">
       <div class="field" style="margin:0"><label style="font-size:11px">Product</label>
         <select data-tr-product><option value="">Select…</option>${opts}</select>
+        ${stockHint}
       </div>
       <div class="field" style="margin:0"><label style="font-size:11px">Qty</label>
         <input type="number" min="0.0001" step="any" data-tr-qty value="${l.qty || 1}">
@@ -9446,6 +9526,20 @@ function transferLineEditorHtml(lines) {
       <button type="button" class="button small" data-tr-remove style="padding:8px">×</button>
     </div>`;
   }).join('');
+}
+
+function refreshTransferLineStockHints() {
+  const fromId = document.getElementById('transferFrom')?.value || '';
+  const toId = document.getElementById('transferTo')?.value || '';
+  document.querySelectorAll('#transferLinesEditor .transfer-line-row').forEach(row => {
+    const pid = row.querySelector('[data-tr-product]')?.value || '';
+    const hint = row.querySelector('[data-tr-stock-hint]');
+    if (!hint) return;
+    if (!pid) { hint.textContent = 'Source — · Dest —'; return; }
+    const fromQty = fromId ? locationStockQty(pid, fromId) : '—';
+    const toQty = toId ? locationStockQty(pid, toId) : '—';
+    hint.textContent = 'Source ' + fromQty + ' · Dest ' + toQty;
+  });
 }
 
 function readTransferLinesFromEditor() {
@@ -9488,6 +9582,7 @@ function openStockTransferModal() {
   try { updateTransferModalHints(); } catch (_) {}
   document.getElementById('stockTransferModal').classList.add('show');
   try { initSearchableSelects(document.getElementById('stockTransferModal')); } catch (_) {}
+  try { refreshTransferLineStockHints(); } catch (_) {}
 }
 
 function updateTransferModalHints() {
@@ -11429,6 +11524,17 @@ function openProductModal(product) {
   document.getElementById('productCost').value = product != null && product.cost != null ? product.cost : '';
   document.getElementById('productStock').value = product != null ? product.stock_qty : '0';
   document.getElementById('productLowStock').value = product != null && product.low_stock_at != null ? product.low_stock_at : '0';
+  document.getElementById('productOptimalStock').value = product != null && product.optimal_stock != null ? product.optimal_stock : '';
+  const supSel = document.getElementById('productPrimarySupplier');
+  if (supSel) {
+    ensurePosDb();
+    const cur = product?.primary_supplier_id || '';
+    supSel.innerHTML = '<option value="">— None —</option>' +
+      (db.suppliers || []).filter(x => x.active !== false).map(x =>
+        '<option value="' + x.id + '"' + (x.id === cur ? ' selected' : '') + '>' +
+        String(x.name || '').replace(/</g, '') + '</option>'
+      ).join('');
+  }
   document.getElementById('productExpiry').value = product?.expiry_date || '';
   document.getElementById('productTrackStock').checked = product ? product.track_stock !== false : true;
   document.getElementById('productActive').checked = product ? product.active !== false : true;
@@ -11451,6 +11557,9 @@ async function saveProductFromModal() {
   const cost = costRaw === '' ? 0 : Number(costRaw);
   const stock = Number(document.getElementById('productStock').value);
   const low = Number(document.getElementById('productLowStock').value) || 0;
+  const optRaw = document.getElementById('productOptimalStock')?.value;
+  const optimal_stock = optRaw === '' || optRaw == null ? null : (Number(optRaw) || 0);
+  const primary_supplier_id = (document.getElementById('productPrimarySupplier')?.value || '').trim() || null;
   const sku = (document.getElementById('productSku').value || '').trim() || null;
   const barcode = (document.getElementById('productBarcode').value || '').trim() || null;
   const track_stock = !!document.getElementById('productTrackStock').checked;
@@ -11463,7 +11572,7 @@ async function saveProductFromModal() {
     const p = db.products.find(x => x.id === id);
     if (!p) { toast('Product not found'); return; }
     const prevStock = Number(p.stock_qty) || 0;
-    Object.assign(p, { name, sku, barcode, price, cost: Number.isNaN(cost) ? 0 : cost, stock_qty: Number.isNaN(stock) ? prevStock : stock, low_stock_at: low, expiry_date, track_stock, active, currency, updated_at: now });
+    Object.assign(p, { name, sku, barcode, price, cost: Number.isNaN(cost) ? 0 : cost, stock_qty: Number.isNaN(stock) ? prevStock : stock, low_stock_at: low, optimal_stock, primary_supplier_id, expiry_date, track_stock, active, currency, updated_at: now });
     if (!Number.isNaN(stock) && stock !== prevStock) {
       db.stockMovements.push({
         id: crypto.randomUUID(),
@@ -11484,6 +11593,8 @@ async function saveProductFromModal() {
       cost: Number.isNaN(cost) ? 0 : cost,
       stock_qty: Number.isNaN(stock) ? 0 : stock,
       low_stock_at: low,
+      optimal_stock,
+      primary_supplier_id,
       expiry_date,
       track_stock, active, currency,
       created_at: now,
@@ -11822,6 +11933,8 @@ async function pushProductToCloud(product) {
     currency: product.currency || posCurrency(),
     stock_qty: product.stock_qty,
     low_stock_at: product.low_stock_at,
+    optimal_stock: product.optimal_stock != null ? product.optimal_stock : null,
+    primary_supplier_id: product.primary_supplier_id || null,
     track_stock: product.track_stock !== false,
     active: product.active !== false,
     updated_at: product.updated_at || new Date().toISOString()
@@ -11878,6 +11991,8 @@ async function pullProductsFromCloud() {
       currency: row.currency || posCurrency(),
       stock_qty: Number(row.stock_qty) || 0,
       low_stock_at: Number(row.low_stock_at) || 0,
+      optimal_stock: row.optimal_stock != null ? Number(row.optimal_stock) : (p.optimal_stock != null ? p.optimal_stock : null),
+      primary_supplier_id: row.primary_supplier_id || p.primary_supplier_id || null,
       expiry_date: row.expiry_date || p.expiry_date || null,
       track_stock: row.track_stock !== false,
       active: row.active !== false,
@@ -12049,6 +12164,59 @@ function renderDashboardLowStock() {
     if (f) f.value = outN ? 'out' : 'low';
     try { renderProductsList(); } catch (_) {}
   });
+}
+
+
+/** Weighted average cost after receiving qty at unitCost onto existing on-hand. */
+function applyWeightedAverageCost(product, qtyReceived, unitCost, onHandBefore) {
+  if (!product) return;
+  const addQty = Number(qtyReceived) || 0;
+  const addCost = Number(unitCost) || 0;
+  if (addQty <= 0) return;
+  const before = onHandBefore != null ? Number(onHandBefore) : (Number(product.stock_qty) || 0);
+  const oldCost = Number(product.cost) || 0;
+  if (before <= 0 || oldCost <= 0) {
+    product.cost = addCost > 0 ? addCost : oldCost;
+    return;
+  }
+  if (addCost <= 0) return; // keep existing cost if receive has no cost
+  const totalVal = before * oldCost + addQty * addCost;
+  const totalQty = before + addQty;
+  product.cost = totalQty > 0 ? Math.round((totalVal / totalQty) * 10000) / 10000 : addCost;
+}
+
+/** Open PO + in-transit transfer qty expected at a location for a product. */
+function getIncomingQty(productId, locationId) {
+  ensurePosDb();
+  let n = 0;
+  (db.purchases || []).forEach(po => {
+    if (!po || po.status === 'cancelled' || po.status === 'received' || po.status === 'draft') return;
+    // ordered, partial, pending_approval count as incoming when location matches (or no loc)
+    if (po.location_id && locationId && po.location_id !== locationId) return;
+    (po.lines || []).forEach(l => {
+      if (l.product_id !== productId) return;
+      const left = Math.max(0, (Number(l.qty) || 0) - (Number(l.received_qty) || 0));
+      n += left;
+    });
+  });
+  (db.stockTransfers || []).forEach(tr => {
+    if (!tr || tr.status !== 'in_transit') return;
+    if (locationId && tr.to_location_id !== locationId) return;
+    (tr.lines || []).forEach(l => {
+      if (l.product_id !== productId) return;
+      n += Math.max(0, (Number(l.qty_sent) || 0) - (Number(l.qty_received) || 0));
+    });
+  });
+  return n;
+}
+
+/** Suggested reorder qty: optimal - on hand - incoming (min 0). */
+function suggestedReorderQty(product, locationId) {
+  const optimal = Number(product.optimal_stock);
+  if (!(optimal > 0)) return 0;
+  const onHand = locationId ? locationStockQty(product.id, locationId) : (Number(product.stock_qty) || 0);
+  const incoming = getIncomingQty(product.id, locationId || null);
+  return Math.max(0, optimal - onHand - incoming);
 }
 
 /** Low / out stock rows per location (tracked products only). */
@@ -21315,6 +21483,8 @@ document.getElementById('btnNewPurchase')?.addEventListener('click', openPurchas
 document.getElementById('purchaseModalCancel')?.addEventListener('click', closePurchaseModal);
 document.getElementById('purchaseSaveDraft')?.addEventListener('click', () => { savePurchase('draft').catch(e => toast(e.message || 'Save failed')); });
 document.getElementById('purchaseSaveOrdered')?.addEventListener('click', () => { savePurchase('ordered').catch(e => toast(e.message || 'Save failed')); });
+document.getElementById('purchaseAutofillLow')?.addEventListener('click', () => autofillPurchaseLines('low'));
+document.getElementById('purchaseAutofillSupplier')?.addEventListener('click', () => autofillPurchaseLines('supplier'));
 document.getElementById('purchaseAddLine')?.addEventListener('click', () => {
   const wrap = document.getElementById('purchaseLinesEditor');
   if (!wrap) return;
@@ -21406,6 +21576,11 @@ document.getElementById('stockTransferModalCancel')?.addEventListener('click', c
 document.getElementById('stockTransferModalSave')?.addEventListener('click', () => {
   saveStockTransfer().catch(e => toast(e.message || 'Transfer failed'));
 });
+document.getElementById('transferFrom')?.addEventListener('change', () => refreshTransferLineStockHints());
+document.getElementById('transferTo')?.addEventListener('change', () => refreshTransferLineStockHints());
+document.getElementById('transferLinesEditor')?.addEventListener('change', (e) => {
+  if (e.target.closest('[data-tr-product]')) refreshTransferLineStockHints();
+});
 document.getElementById('transferAddLine')?.addEventListener('click', () => {
   const wrap = document.getElementById('transferLinesEditor');
   if (!wrap) return;
@@ -21413,6 +21588,7 @@ document.getElementById('transferAddLine')?.addEventListener('click', () => {
   cur.push({ product_id: '', qty_sent: 1 });
   wrap.innerHTML = transferLineEditorHtml(cur.map(l => ({ product_id: l.product_id, qty: l.qty_sent || 1 })));
   try { initSearchableSelects(wrap); } catch (_) {}
+  try { refreshTransferLineStockHints(); } catch (_) {}
 });
 document.getElementById('transferLinesEditor')?.addEventListener('click', (e) => {
   if (e.target.closest('[data-tr-remove]')) {
