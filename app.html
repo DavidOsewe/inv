@@ -2834,7 +2834,7 @@ input:focus:not(:focus-visible) {
       <button data-view="clients"><span>♙</span> Clients</button>
 
       <div class="nav-section">Stock &amp; shops</div>
-      <button data-view="products"><span>■</span> Products</button>
+      <button data-view="products"><span>■</span> Products <span class="nav-badge" id="productsNavBadge" hidden></span></button>
       <button data-view="purchases"><span>□</span> Purchases</button>
       <button data-view="transfers"><span>⇄</span> Transfers</button>
       <a class="nav-link-pos" href="/pos.html"><span>▣</span> POS</a>
@@ -2921,6 +2921,7 @@ input:focus:not(:focus-visible) {
         </div>
       </div>
       <div id="nextAction" class="next-action" style="display:none"></div>
+      <div id="dashboardLowStock" class="insight" style="display:none;margin:14px 0"></div>
       <div class="section-head">
         <h2>Recent invoices</h2>
         <button class="button text" data-view="invoices">View all →</button>
@@ -2965,6 +2966,7 @@ input:focus:not(:focus-visible) {
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="button" type="button" id="btnManageLocations">Locations</button>
+          <button class="button" type="button" id="btnStockCount">Count stock</button>
           <a class="button" href="/pos.html" id="btnOpenPosFromProducts">Open POS</a>
           <button class="button primary" type="button" id="addProduct">+ Add product</button>
         </div>
@@ -3941,6 +3943,10 @@ input:focus:not(:focus-visible) {
             <input type="checkbox" data-p="requirePurchaseApproval" id="requirePurchaseApproval">
             <span>Require approval for purchase orders</span>
           </label>
+          <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
+            <input type="checkbox" data-p="lowStockAlertsEnabled" id="lowStockAlertsEnabled">
+            <span>Automated low-stock alerts (toast + badge when stock hits threshold)</span>
+          </label>
         </div>
 
         <button class="button primary" id="saveProfile">Save profile</button>
@@ -4192,7 +4198,7 @@ input:focus:not(:focus-visible) {
     </div>
     <div class="more-sheet-title">Stock &amp; shops</div>
     <div class="more-sheet-grid">
-      <button type="button" data-more-view="products"><span>■</span>Products</button>
+      <button type="button" data-more-view="products"><span>■</span>Products <span class="nav-badge" id="productsMoreBadge" hidden></span></button>
       <button type="button" data-more-view="purchases"><span>□</span>Purchases</button>
       <button type="button" data-more-view="transfers"><span>⇄</span>Transfers</button>
       <a href="/pos.html"><span>▣</span>POS</a>
@@ -4406,6 +4412,45 @@ input:focus:not(:focus-visible) {
     <div class="buttons" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
       <button class="button" type="button" id="stockAdjustCancel">Cancel</button>
       <button class="button primary" type="button" id="stockAdjustSave">Save</button>
+    </div>
+  </div>
+</div>
+
+
+<div class="modalback" id="stockCountModal">
+  <div class="modal" style="max-width:640px">
+    <h2>Stock count</h2>
+    <p class="section-sub">Count what is on the shelf, then post differences to update the system.</p>
+    <div id="stockCountSetup">
+      <div class="field"><label>Location to count *</label>
+        <select id="stockCountLocation"></select>
+      </div>
+      <div class="field"><label>Note (optional)</label>
+        <input id="stockCountNote" placeholder="e.g. Weekly cycle count">
+      </div>
+      <p class="section-sub" style="margin:8px 0 0">Only products that track stock are listed. Leave a count blank to skip that item.</p>
+      <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="button" type="button" id="stockCountCancel">Cancel</button>
+        <button class="button primary" type="button" id="stockCountStart">Start counting</button>
+      </div>
+    </div>
+    <div id="stockCountWork" hidden>
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <div>
+          <b id="stockCountLocLabel">—</b>
+          <div class="client-meta" id="stockCountProgress">—</div>
+        </div>
+        <div class="search-bar" style="margin:0;flex:1;max-width:220px">
+          <input type="search" id="stockCountSearch" placeholder="Filter products…" autocomplete="off">
+        </div>
+      </div>
+      <div id="stockCountLines" style="max-height:min(50vh,420px);overflow:auto;border:1px solid var(--line);border-radius:12px;padding:8px 10px"></div>
+      <div id="stockCountSummary" class="insight" style="margin-top:12px;padding:10px 12px;font-size:13px"></div>
+      <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="button" type="button" id="stockCountBack">Back</button>
+        <button class="button" type="button" id="stockCountCancel2">Cancel</button>
+        <button class="button primary" type="button" id="stockCountPost">Post adjustments</button>
+      </div>
     </div>
   </div>
 </div>
@@ -6239,6 +6284,7 @@ function normalizeDbProfile() {
   if (!Array.isArray(db.stockMovements)) db.stockMovements = [];
   if (!Array.isArray(db.posSales)) db.posSales = [];
   if (!Array.isArray(db.posCart)) db.posCart = [];
+  if (!db.lowStockNotified || typeof db.lowStockNotified !== 'object') db.lowStockNotified = {};
   if (!db.posNextSaleNumber || db.posNextSaleNumber < 1) db.posNextSaleNumber = 1;
   if (!Array.isArray(db.suppliers)) db.suppliers = [];
   if (!Array.isArray(db.purchases)) db.purchases = [];
@@ -9112,6 +9158,7 @@ async function confirmReceiveGoods() {
   } catch (e) {}
 
   persistDb();
+  try { runLowStockAlertEngine({ silent: true, reason: 'purchase_receive' }); } catch (_) {}
   closeReceiveModal();
   toast(allDone ? 'Fully received' : 'Partial receive saved');
   purchasesView();
@@ -9713,6 +9760,7 @@ async function confirmTransferReceive() {
     );
   } catch (e) {}
   persistDb();
+  try { runLowStockAlertEngine({ silent: true, reason: 'transfer_receive' }); } catch (_) {}
   closeTransferReceiveModal();
   toast(allDone ? 'Transfer received' : 'Partial receive saved');
   transfersView();
@@ -9836,6 +9884,7 @@ async function approveStockTransfer(transferId, note) {
   try { await pushStockTransferToCloud(tr); } catch (e) { console.warn(e); }
   logStockAudit('approve', 'stock_transfer', tr.id, 'Approved ' + (tr.transfer_number || ''), { status: tr.status, note: tr.approval_note || null });
   persistDb();
+  try { runLowStockAlertEngine({ reason: 'transfer_approve' }); } catch (_) {}
   toast('Approved — stock is moving');
   try { closeTransferDetailModal && closeTransferDetailModal(); } catch (_) {}
   try { document.getElementById('transferDetailModal')?.classList.remove('show'); } catch (_) {}
@@ -11510,9 +11559,254 @@ async function saveStockAdjust() {
       { location_id: loc.id, change });
   } catch (e) {}
   persistDb();
+  try { runLowStockAlertEngine({ reason: 'adjustment' }); } catch (_) {}
   closeStockAdjustModal();
   toast('Stock updated');
   productsView();
+}
+
+
+/* ---------- Simple stock-count session ---------- */
+let _stockCountSession = null;
+
+function canRunStockCount() {
+  try {
+    if (typeof can === 'function' && (can('inventory.manage') || can('pos.sell'))) return true;
+  } catch (_) {}
+  return true;
+}
+
+function openStockCountModal() {
+  ensurePosDb();
+  if (!canRunStockCount()) {
+    toast('You do not have permission to count stock');
+    return;
+  }
+  if (!db.locations.filter(l => l.active !== false).length) {
+    toast('Add a location first');
+    openLocationsModal();
+    return;
+  }
+  const tracked = (db.products || []).filter(p => p.active !== false && p.track_stock !== false);
+  if (!tracked.length) {
+    toast('Add products that track stock first');
+    return;
+  }
+  _stockCountSession = null;
+  document.getElementById('stockCountSetup').hidden = false;
+  document.getElementById('stockCountWork').hidden = true;
+  document.getElementById('stockCountNote').value = '';
+  document.getElementById('stockCountSearch').value = '';
+  const locs = db.locations.filter(l => l.active !== false);
+  const role = typeof currentOrgRole === 'function' ? currentOrgRole() : '';
+  const myDef = typeof getMyDefaultLocationId === 'function' ? getMyDefaultLocationId() : null;
+  const locked = role === 'member' && myDef;
+  let list = locs;
+  if (locked) list = locs.filter(l => l.id === myDef);
+  const sel = document.getElementById('stockCountLocation');
+  sel.innerHTML = list.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
+  const active = typeof getActiveLocation === 'function' ? getActiveLocation() : null;
+  if (active && [...sel.options].some(o => o.value === active.id)) sel.value = active.id;
+  else if (myDef && [...sel.options].some(o => o.value === myDef)) sel.value = myDef;
+  sel.disabled = !!locked;
+  document.getElementById('stockCountModal').classList.add('show');
+}
+
+function closeStockCountModal() {
+  document.getElementById('stockCountModal')?.classList.remove('show');
+  _stockCountSession = null;
+}
+
+function startStockCountSession() {
+  ensurePosDb();
+  const locId = document.getElementById('stockCountLocation').value;
+  const loc = db.locations.find(l => l.id === locId);
+  if (!loc) { toast('Choose a location'); return; }
+  const note = (document.getElementById('stockCountNote').value || '').trim() || null;
+  const products = (db.products || [])
+    .filter(p => p.active !== false && p.track_stock !== false)
+    .slice()
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  _stockCountSession = {
+    locationId: loc.id,
+    locationName: loc.name,
+    note,
+    startedAt: new Date().toISOString(),
+    lines: products.map(p => ({
+      product_id: p.id,
+      name: p.name,
+      sku: p.sku || '',
+      system_qty: locationStockQty(p.id, loc.id),
+      counted_qty: null // null = skipped
+    }))
+  };
+  document.getElementById('stockCountSetup').hidden = true;
+  document.getElementById('stockCountWork').hidden = false;
+  document.getElementById('stockCountLocLabel').textContent = 'Counting: ' + loc.name;
+  renderStockCountLines();
+}
+
+function renderStockCountLines() {
+  const session = _stockCountSession;
+  const el = document.getElementById('stockCountLines');
+  const sumEl = document.getElementById('stockCountSummary');
+  const prog = document.getElementById('stockCountProgress');
+  if (!session || !el) return;
+  const q = (document.getElementById('stockCountSearch')?.value || '').trim().toLowerCase();
+  let lines = session.lines;
+  if (q) {
+    lines = lines.filter(l =>
+      String(l.name || '').toLowerCase().includes(q) ||
+      String(l.sku || '').toLowerCase().includes(q)
+    );
+  }
+  const counted = session.lines.filter(l => l.counted_qty != null && l.counted_qty !== '').length;
+  if (prog) prog.textContent = counted + ' of ' + session.lines.length + ' counted';
+
+  el.innerHTML = lines.map(l => {
+    const sys = Number(l.system_qty) || 0;
+    const raw = l.counted_qty;
+    const has = raw != null && raw !== '';
+    const cnt = has ? Number(raw) : null;
+    let varHtml = '<span class="client-meta">—</span>';
+    if (has && !Number.isNaN(cnt)) {
+      const d = cnt - sys;
+      if (d === 0) varHtml = '<span style="color:var(--green-text,#065f46);font-weight:700">Match</span>';
+      else if (d > 0) varHtml = '<span style="color:var(--green-text,#065f46);font-weight:700">+' + d + '</span>';
+      else varHtml = '<span style="color:var(--red-text);font-weight:700">' + d + '</span>';
+    }
+    return `<div class="stock-count-row" data-pid="${l.product_id}" style="display:grid;grid-template-columns:1fr 72px 88px 64px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">
+      <div style="min-width:0">
+        <b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${String(l.name || '').replace(/</g,'')}</b>
+        <span class="client-meta">${l.sku ? String(l.sku).replace(/</g,'') + ' · ' : ''}System ${sys}</span>
+      </div>
+      <div class="client-meta" style="text-align:right;font-variant-numeric:tabular-nums">${sys}</div>
+      <div>
+        <input type="number" step="any" min="0" inputmode="decimal" data-count-qty="${l.product_id}"
+          value="${has ? String(raw) : ''}" placeholder="Count"
+          style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--line);font:inherit">
+      </div>
+      <div style="text-align:right">${varHtml}</div>
+    </div>`;
+  }).join('') || '<p class="section-sub">No products match.</p>';
+
+  // summary
+  let diffs = 0, match = 0, skipped = 0;
+  session.lines.forEach(l => {
+    if (l.counted_qty == null || l.counted_qty === '') { skipped++; return; }
+    const cnt = Number(l.counted_qty);
+    if (Number.isNaN(cnt)) { skipped++; return; }
+    const d = cnt - (Number(l.system_qty) || 0);
+    if (d === 0) match++;
+    else diffs++;
+  });
+  if (sumEl) {
+    sumEl.innerHTML = `<b>Summary</b> · ${match} match · <b>${diffs} to adjust</b> · ${skipped} skipped` +
+      (session.note ? `<div class="client-meta">Note: ${String(session.note).replace(/</g,'')}</div>` : '');
+  }
+}
+
+function onStockCountQtyInput(productId, value) {
+  if (!_stockCountSession) return;
+  const line = _stockCountSession.lines.find(l => l.product_id === productId);
+  if (!line) return;
+  const v = String(value).trim();
+  if (v === '') line.counted_qty = null;
+  else line.counted_qty = v;
+
+  // Update variance cell only (keep focus)
+  const row = document.querySelector('.stock-count-row[data-pid="' + productId + '"]');
+  if (row) {
+    const varEl = row.lastElementChild;
+    const sys = Number(line.system_qty) || 0;
+    if (line.counted_qty == null || line.counted_qty === '') {
+      if (varEl) varEl.innerHTML = '<span class="client-meta">—</span>';
+    } else {
+      const cnt = Number(line.counted_qty);
+      if (Number.isNaN(cnt)) {
+        if (varEl) varEl.innerHTML = '<span class="client-meta">—</span>';
+      } else {
+        const d = cnt - sys;
+        if (varEl) {
+          if (d === 0) varEl.innerHTML = '<span style="color:var(--green-text,#065f46);font-weight:700">Match</span>';
+          else if (d > 0) varEl.innerHTML = '<span style="color:var(--green-text,#065f46);font-weight:700">+' + d + '</span>';
+          else varEl.innerHTML = '<span style="color:var(--red-text);font-weight:700">' + d + '</span>';
+        }
+      }
+    }
+  }
+  // Summary only
+  const session = _stockCountSession;
+  const prog = document.getElementById('stockCountProgress');
+  const sumEl = document.getElementById('stockCountSummary');
+  const counted = session.lines.filter(l => l.counted_qty != null && l.counted_qty !== '').length;
+  if (prog) prog.textContent = counted + ' of ' + session.lines.length + ' counted';
+  let diffs = 0, match = 0, skipped = 0;
+  session.lines.forEach(l => {
+    if (l.counted_qty == null || l.counted_qty === '') { skipped++; return; }
+    const cnt = Number(l.counted_qty);
+    if (Number.isNaN(cnt)) { skipped++; return; }
+    if (cnt - (Number(l.system_qty) || 0) === 0) match++;
+    else diffs++;
+  });
+  if (sumEl) {
+    sumEl.innerHTML = '<b>Summary</b> · ' + match + ' match · <b>' + diffs + ' to adjust</b> · ' + skipped + ' skipped' +
+      (session.note ? '<div class="client-meta">Note: ' + String(session.note).replace(/</g,'') + '</div>' : '');
+  }
+}
+
+async function postStockCountSession() {
+  ensurePosDb();
+  const session = _stockCountSession;
+  if (!session) return;
+  const loc = db.locations.find(l => l.id === session.locationId);
+  if (!loc) { toast('Location missing'); return; }
+
+  const changes = [];
+  session.lines.forEach(l => {
+    if (l.counted_qty == null || l.counted_qty === '') return;
+    const cnt = Number(l.counted_qty);
+    if (Number.isNaN(cnt) || cnt < 0) return;
+    const sys = Number(l.system_qty) || 0;
+    const delta = cnt - sys;
+    if (delta === 0) return;
+    changes.push({ line: l, delta, cnt });
+  });
+
+  if (!changes.length) {
+    toast('No differences to post — counts match system (or nothing counted)');
+    return;
+  }
+
+  const noteBase = session.note ? ('Count: ' + session.note) : 'Stock count';
+  let posted = 0;
+  for (const ch of changes) {
+    const p = db.products.find(x => x.id === ch.line.product_id);
+    if (!p) continue;
+    const { mov } = adjustLocationStock(ch.line.product_id, loc.id, ch.delta, {
+      reason: 'stock_count',
+      reference: 'COUNT',
+      note: noteBase + ' · counted ' + ch.cnt
+    });
+    try {
+      if (p) await pushProductToCloud(p);
+      await pushLocationStockToCloud(ch.line.product_id, loc.id);
+      await pushStockMovementToCloud(mov);
+    } catch (e) { console.warn(e); }
+    posted++;
+  }
+
+  try {
+    appendInventoryAudit('stock.count', 'inventory', loc.id,
+      'Stock count @ ' + (loc.name || '') + ' · ' + posted + ' adjustment' + (posted === 1 ? '' : 's'),
+      { location_id: loc.id, adjustments: posted, note: session.note });
+  } catch (_) {}
+
+  persistDb();
+  try { runLowStockAlertEngine({ reason: 'stock_count' }); } catch (_) {}
+  closeStockCountModal();
+  toast('Posted ' + posted + ' count adjustment' + (posted === 1 ? '' : 's') + ' at ' + (loc.name || 'location'));
+  try { productsView(); } catch (_) {}
 }
 
 async function pushProductToCloud(product) {
@@ -11603,6 +11897,158 @@ function getWarehouseLocations() {
 function getOutletLocations() {
   ensurePosDb();
   return db.locations.filter(l => l.active !== false && l.location_type !== 'warehouse');
+}
+
+
+function lowStockAlertsEnabled() {
+  // Default ON unless explicitly disabled
+  if (!db.profile) return true;
+  if (db.profile.lowStockAlertsEnabled === false) return false;
+  return true;
+}
+
+function lowStockAlertKey(a) {
+  return (a.product && a.product.id) + '@' + (a.location && a.location.id) + ':' + a.level;
+}
+
+function getLowStockNotifiedSet() {
+  try {
+    if (!db.lowStockNotified) db.lowStockNotified = {};
+    return db.lowStockNotified;
+  } catch (_) {
+    return {};
+  }
+}
+
+/** Update Products nav badges with count of low/out lines. */
+function updateLowStockNavBadge() {
+  try {
+    ensurePosDb();
+    const role = String((typeof currentOrgRole === 'function' && currentOrgRole()) || db.myOrgRole || '').toLowerCase();
+    const myDef = typeof getMyDefaultLocationId === 'function' ? getMyDefaultLocationId() : null;
+    const scoped = role === 'member' && myDef ? myDef : null;
+    const n = getLowStockAlerts(scoped ? { locationId: scoped } : {}).length;
+    ['productsNavBadge', 'productsMoreBadge'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (n > 0) {
+        el.hidden = false;
+        el.textContent = n > 99 ? '99+' : String(n);
+      } else {
+        el.hidden = true;
+        el.textContent = '';
+      }
+    });
+  } catch (_) {}
+}
+
+/**
+ * Automated low-stock alerts:
+ * - Refresh Products badge
+ * - Toast when items *newly* become low/out (deduped per session key)
+ * - Refresh Products "Needs attention" panel if visible
+ */
+function runLowStockAlertEngine(opts) {
+  opts = opts || {};
+  try { ensurePosDb(); } catch (_) { return []; }
+  const role = String((typeof currentOrgRole === 'function' && currentOrgRole()) || db.myOrgRole || '').toLowerCase();
+  const myDef = typeof getMyDefaultLocationId === 'function' ? getMyDefaultLocationId() : null;
+  const scoped = role === 'member' && myDef ? myDef : null;
+  const alerts = getLowStockAlerts(scoped ? { locationId: scoped } : {});
+
+  try { updateLowStockNavBadge(); } catch (_) {}
+  try {
+    if (document.getElementById('products')?.classList.contains('active')) {
+      renderInventoryNeedsAttention();
+    }
+  } catch (_) {}
+  try { renderDashboardLowStock(); } catch (_) {}
+
+  if (!lowStockAlertsEnabled() || opts.silent) return alerts;
+
+  const notified = getLowStockNotifiedSet();
+  const fresh = [];
+  alerts.forEach(a => {
+    const key = lowStockAlertKey(a);
+    // Re-notify if level worsened out, or first time for this key
+    const prev = notified[key];
+    if (prev === a.level) return;
+    // If we already notified "out", don't re-toast "low" for same product@loc
+    const outKey = (a.product && a.product.id) + '@' + (a.location && a.location.id) + ':out';
+    if (a.level === 'low' && notified[outKey]) return;
+    notified[key] = a.level;
+    fresh.push(a);
+  });
+  // Drop keys that are healthy again so future dips re-alert
+  try {
+    const live = new Set(alerts.map(lowStockAlertKey));
+    Object.keys(notified).forEach(k => {
+      if (!live.has(k) && !k.endsWith(':out') && !k.endsWith(':low')) return;
+      // clear if no longer low/out for that product@loc
+      const base = k.replace(/:(low|out)$/, '');
+      const still = alerts.some(a => lowStockAlertKey(a).startsWith(base));
+      if (!still) delete notified[k];
+    });
+  } catch (_) {}
+
+  if (fresh.length && !opts.silent) {
+    const top = fresh.slice(0, 3);
+    const msg = top.map(a => {
+      const tag = a.level === 'out' ? 'OUT' : 'LOW';
+      return tag + ' ' + (a.product.name || 'Item') + ' @ ' + (a.location.name || 'store') + ' (' + a.qty + ')';
+    }).join(' · ');
+    const more = fresh.length > 3 ? ' · +' + (fresh.length - 3) + ' more' : '';
+    try { toast('Stock alert: ' + msg + more); } catch (_) {}
+  }
+  try { persistDb(); } catch (_) {}
+  return alerts;
+}
+
+function renderDashboardLowStock() {
+  const el = document.getElementById('dashboardLowStock');
+  if (!el) return;
+  if (!lowStockAlertsEnabled()) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  ensurePosDb();
+  const role = String((typeof currentOrgRole === 'function' && currentOrgRole()) || db.myOrgRole || '').toLowerCase();
+  const myDef = typeof getMyDefaultLocationId === 'function' ? getMyDefaultLocationId() : null;
+  const scoped = role === 'member' && myDef ? myDef : null;
+  const alerts = getLowStockAlerts(scoped ? { locationId: scoped } : {});
+  if (!alerts.length) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  const outN = alerts.filter(a => a.level === 'out').length;
+  const lowN = alerts.length - outN;
+  el.style.display = '';
+  el.innerHTML =
+    `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+      <div>
+        <b>Stock needs attention</b>
+        <div class="client-meta">${outN ? outN + ' out of stock' : ''}${outN && lowN ? ' · ' : ''}${lowN ? lowN + ' low' : ''}${scoped ? ' at your store' : ''}</div>
+      </div>
+      <button class="button small primary" type="button" id="dashGoLowStock">Review products</button>
+    </div>
+    <div style="margin-top:8px;font-size:13px">` +
+    alerts.slice(0, 4).map(a =>
+      `<div style="padding:4px 0;border-bottom:1px solid var(--line)">
+        <b style="color:${a.level === 'out' ? 'var(--red-text)' : '#c2410c'}">${a.level === 'out' ? 'Out' : 'Low'}</b>
+        · ${String(a.product.name || '').replace(/</g,'')} @ ${String(a.location.name || '').replace(/</g,'')}
+        <span class="client-meta"> · ${a.qty} left${a.threshold ? ' (alert ≤ ' + a.threshold + ')' : ''}</span>
+      </div>`
+    ).join('') +
+    (alerts.length > 4 ? `<div class="client-meta" style="margin-top:6px">+${alerts.length - 4} more</div>` : '') +
+    `</div>`;
+  document.getElementById('dashGoLowStock')?.addEventListener('click', () => {
+    switchTo('products');
+    const f = document.getElementById('productFilter');
+    if (f) f.value = outN ? 'out' : 'low';
+    try { renderProductsList(); } catch (_) {}
+  });
 }
 
 /** Low / out stock rows per location (tracked products only). */
@@ -11822,6 +12268,7 @@ function refreshInventoryOpsPanels() {
 
 function productsView() {
   ensurePosDb();
+  try { runLowStockAlertEngine({ silent: true }); } catch (_) {}
   fillProductLocationFilter();
   // Phase C: members default to their assigned location view
   try {
@@ -12944,6 +13391,8 @@ function profile() {
     const key = e.dataset.p;
     let val = db.profile[key];
     if (e.type === 'checkbox') {
+      // low-stock alerts default ON
+      if (key === 'lowStockAlertsEnabled' && val === undefined) val = true;
       e.checked = !!val;
       return;
     }
@@ -20908,6 +21357,30 @@ document.getElementById('stockHistoryClose')?.addEventListener('click', () => do
 document.getElementById('journalSearch')?.addEventListener('input', () => { try { renderBooksJournal(); } catch (_) {} });
 document.getElementById('stockAdjustCancel')?.addEventListener('click', closeStockAdjustModal);
 document.getElementById('stockAdjustSave')?.addEventListener('click', () => { saveStockAdjust().catch(e => toast(e.message || 'Save failed')); });
+document.getElementById('btnStockCount')?.addEventListener('click', () => openStockCountModal());
+document.getElementById('stockCountCancel')?.addEventListener('click', closeStockCountModal);
+document.getElementById('stockCountCancel2')?.addEventListener('click', closeStockCountModal);
+document.getElementById('stockCountBack')?.addEventListener('click', () => {
+  document.getElementById('stockCountWork').hidden = true;
+  document.getElementById('stockCountSetup').hidden = false;
+});
+document.getElementById('stockCountStart')?.addEventListener('click', () => startStockCountSession());
+document.getElementById('stockCountPost')?.addEventListener('click', () => {
+  postStockCountSession().catch(e => toast(e.message || 'Count post failed'));
+});
+document.getElementById('stockCountSearch')?.addEventListener('input', () => {
+  try { renderStockCountLines(); } catch (_) {}
+});
+document.getElementById('stockCountLines')?.addEventListener('input', (e) => {
+  const inp = e.target.closest('[data-count-qty]');
+  if (!inp) return;
+  onStockCountQtyInput(inp.getAttribute('data-count-qty'), inp.value);
+});
+document.getElementById('stockCountLines')?.addEventListener('change', (e) => {
+  const inp = e.target.closest('[data-count-qty]');
+  if (!inp) return;
+  onStockCountQtyInput(inp.getAttribute('data-count-qty'), inp.value);
+});
 document.getElementById('productSearch')?.addEventListener('input', () => renderProductsList());
 document.getElementById('productFilter')?.addEventListener('change', () => renderProductsList());
 document.getElementById('productLocationFilter')?.addEventListener('change', () => renderProductsList());
