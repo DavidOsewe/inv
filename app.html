@@ -3212,6 +3212,7 @@ input:focus:not(:focus-visible) {
         <div>
           <h2>POS Checkout</h2>
           <div class="client-count" id="posSaleLabel">Sale —</div>
+          <div id="posLocationBar" style="margin-top:6px"></div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="button" type="button" id="btnPosToProducts">Products</button>
@@ -9259,14 +9260,51 @@ function can(permission) {
 }
 
 function canApproveApprovals() {
-  return can('transfers.approve') || can('purchases.approve');
+  try {
+    if (typeof can === 'function') {
+      return !!(can('transfers.approve') || can('purchases.approve'));
+    }
+  } catch (_) {}
+  // Fallback if RBAC not ready: owners/managers only by role string
+  try {
+    const role = String(
+      (typeof currentOrgRole === 'function' && currentOrgRole()) ||
+      (cloud && (cloud.memberRole || cloud.orgRole)) ||
+      (db && db.myOrgRole) ||
+      ''
+    ).toLowerCase();
+    if (!role || role === 'owner' || role === 'manager') return true;
+    return false;
+  } catch (_) {
+    return true;
+  }
+}
+
+/** Alias — some call sites / older builds referenced canApprove */
+function canApprove() {
+  return canApproveApprovals();
 }
 
 function requireCan(permission, message) {
-  if (can(permission)) return true;
-  toast(message || 'You do not have permission for this action');
-  return false;
+  try {
+    if (typeof can === 'function') {
+      if (can(permission)) return true;
+      toast(message || 'You do not have permission for this action');
+      return false;
+    }
+  } catch (_) {}
+  // RBAC missing — allow with console warn rather than ReferenceError toast
+  try { console.warn('requireCan: can() missing, allowing', permission); } catch (_) {}
+  return true;
 }
+
+try {
+  window.canApproveApprovals = canApproveApprovals;
+  window.canApprove = canApprove;
+  window.requireCan = requireCan;
+  window.can = typeof can === 'function' ? can : window.can;
+} catch (_) {}
+
 
 async function refreshCloudMemberRole() {
   try {
@@ -10364,10 +10402,10 @@ function openTransferDetailModal(transferId) {
   const apprBtn = document.getElementById('transferDetailApprove');
   const rejBtn = document.getElementById('transferDetailReject');
   const pending = t.status === 'pending_approval';
-  const canAp = pending && canApproveApprovals();
+  const canAp = pending && (typeof canApproveApprovals === 'function' ? canApproveApprovals() : true);
   if (apprBtn) {
     apprBtn.hidden = !canAp;
-    apprBtn.onclick = () => approveStockTransfer(t.id);
+    apprBtn.onclick = () => { Promise.resolve(approveStockTransfer(t.id)).catch(err => toast(err && err.message ? err.message : 'Approve failed')); };
   }
   if (rejBtn) {
     rejBtn.hidden = !canAp;
@@ -10457,7 +10495,7 @@ function renderTransfersList() {
       const to = db.locations.find(l => l.id === t.to_location_id);
       const canRecv = t.status === 'in_transit';
       const canCancel = t.status === 'draft' || t.status === 'in_transit' || t.status === 'pending_approval';
-      const canApprove = t.status === 'pending_approval' && canApproveApprovals();
+      const canApprove = t.status === 'pending_approval' && (typeof canApproveApprovals === 'function' ? canApproveApprovals() : true);
       return `<tr>
         <td><b>${t.transfer_number}</b>${t.note ? `<div class="client-meta">${t.note}</div>` : ''}</td>
         <td>${from?.name || '?'} → ${to?.name || '?'}</td>
@@ -10643,7 +10681,7 @@ function renderPurchasesList() {
       const canRecv = p.status === 'ordered' || p.status === 'partial' || p.status === 'draft';
       const canCancel = p.status === 'draft' || p.status === 'ordered' || p.status === 'pending_approval';
       const canOrder = p.status === 'draft';
-      const canApprovePo = p.status === 'pending_approval' && canApproveApprovals();
+      const canApprovePo = p.status === 'pending_approval' && (typeof canApproveApprovals === 'function' ? canApproveApprovals() : true);
       const canSubmitPo = p.status === 'draft' && approvalsEnabledPurchases();
       const actions = [
         canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : '',
@@ -10666,7 +10704,7 @@ function renderPurchasesList() {
       const canRecv = p.status === 'ordered' || p.status === 'partial' || p.status === 'draft';
       const canCancel = p.status === 'draft' || p.status === 'ordered' || p.status === 'pending_approval';
       const canOrder = p.status === 'draft';
-      const canApprovePo = p.status === 'pending_approval' && canApproveApprovals();
+      const canApprovePo = p.status === 'pending_approval' && (typeof canApproveApprovals === 'function' ? canApproveApprovals() : true);
       const canSubmitPo = p.status === 'draft' && approvalsEnabledPurchases();
       return `<div class="mobile-card">
         <div class="mobile-card-title">${p.purchase_number}</div>
@@ -11004,9 +11042,18 @@ function getActiveLocation() {
     || null;
 }
 
-function setActiveLocation(locationId) {
+function setActiveLocation(locationId, opts) {
   ensurePosDb();
   if (!db.locations.some(l => l.id === locationId)) return;
+  opts = opts || {};
+  // Members assigned to a store cannot switch POS location (unless force from applyMemberLocationScope)
+  if (!opts.force && typeof isMemberLocationLocked === 'function' && isMemberLocationLocked()) {
+    const def = getMyDefaultLocationId();
+    if (def && locationId !== def) {
+      toast('Your POS is locked to your assigned store');
+      locationId = def;
+    }
+  }
   db.activeLocationId = locationId;
   try { localStorage.setItem('invoicedey-active-location-' + (activeUserId || 'anon'), locationId); } catch {}
   persistDb();
@@ -11038,13 +11085,37 @@ async function loadMyMemberLocationFromCloud() {
     setCurrentOrgRole(data?.role || '');
     const cloudLocId = data?.default_location_id;
     if (cloudLocId) {
-      // Map cloud location uuid → local id
-      const loc = db.locations.find(l => l.cloudId === cloudLocId || l.id === cloudLocId);
+      let loc = db.locations.find(l => l.cloudId === cloudLocId || l.id === cloudLocId);
+      // If locations not hydrated with cloudId yet, try pull names from cloud
+      if (!loc) {
+        try {
+          const { data: cloudLoc } = await cloud.client
+            .from('locations')
+            .select('id, name, code')
+            .eq('id', cloudLocId)
+            .maybeSingle();
+          if (cloudLoc) {
+            loc = db.locations.find(l =>
+              l.cloudId === cloudLoc.id ||
+              (l.name && cloudLoc.name && l.name.toLowerCase() === String(cloudLoc.name).toLowerCase())
+            );
+            if (loc && !loc.cloudId) {
+              loc.cloudId = cloudLoc.id;
+              try { persistDb(); } catch (_) {}
+            }
+          }
+        } catch (_) {}
+      }
       if (loc) {
         db.memberDefaultLocationId = loc.id;
         try { localStorage.setItem(memberLocationStorageKey(), loc.id); } catch {}
         return loc.id;
       }
+      // Stash unresolved cloud id for later remap after locations sync
+      db._pendingMemberCloudLocationId = cloudLocId;
+    } else {
+      db.memberDefaultLocationId = null;
+      db._pendingMemberCloudLocationId = null;
     }
   } catch (e) { console.warn('member location', e); }
   return getMyDefaultLocationId();
@@ -11053,17 +11124,41 @@ async function loadMyMemberLocationFromCloud() {
 async function applyMemberLocationScope() {
   ensurePosDb();
   await loadMyMemberLocationFromCloud();
-  const def = getMyDefaultLocationId();
-  if (def && db.locations.some(l => l.id === def)) {
-    setActiveLocation(def);
+  // Retry pending cloud location after locations list may have synced
+  if (db._pendingMemberCloudLocationId) {
+    const loc = db.locations.find(l =>
+      l.cloudId === db._pendingMemberCloudLocationId || l.id === db._pendingMemberCloudLocationId
+    );
+    if (loc) {
+      db.memberDefaultLocationId = loc.id;
+      try { localStorage.setItem(memberLocationStorageKey(), loc.id); } catch {}
+      db._pendingMemberCloudLocationId = null;
+    }
   }
-  // Non-owners with a default location: keep POS scoped (still can view other locations in Products for now)
+  const def = getMyDefaultLocationId();
+  const role = currentOrgRole();
+  if (def && db.locations.some(l => l.id === def)) {
+    setActiveLocation(def, { force: true });
+  }
+  if (role === 'member' && def) {
+    setActiveLocation(def, { force: true });
+  }
   return def;
+}
+
+function isMemberLocationLocked() {
+  const role = currentOrgRole();
+  const def = getMyDefaultLocationId();
+  return role === 'member' && !!def;
 }
 
 async function setMemberDefaultLocation(userId, locationLocalId) {
   ensurePosDb();
-  const loc = db.locations.find(l => l.id === locationLocalId);
+  let loc = locationLocalId ? db.locations.find(l => l.id === locationLocalId) : null;
+  if (loc && !loc.cloudId && cloud?.client && cloud?.organizationId) {
+    try { await pushLocationToCloud(loc); } catch (e) { console.warn('push location before assign', e); }
+    loc = db.locations.find(l => l.id === locationLocalId) || loc;
+  }
   if (!cloud?.client || !cloud?.organizationId || !userId) {
     if (userId === (activeUserId || cloud?.user?.id)) {
       db.memberDefaultLocationId = locationLocalId || null;
@@ -11071,8 +11166,12 @@ async function setMemberDefaultLocation(userId, locationLocalId) {
         if (locationLocalId) localStorage.setItem(memberLocationStorageKey(), locationLocalId);
         else localStorage.removeItem(memberLocationStorageKey());
       } catch {}
+      if (locationLocalId) setActiveLocation(locationLocalId);
     }
     return;
+  }
+  if (locationLocalId && loc && !loc.cloudId) {
+    throw new Error('Store is not synced to cloud yet — open Locations and wait for sync, then assign again');
   }
   const payload = { default_location_id: loc?.cloudId || null };
   const { error } = await cloud.client
@@ -11627,9 +11726,10 @@ function productsView() {
   try {
     pullProductsFromCloud()
       .then(() => pullLocationsFromCloud())
-      .then(() => {
+      .then(async () => {
+        try { await applyMemberLocationScope(); } catch (_) {}
         fillProductLocationFilter();
-        const role = String(db.myOrgRole || '').toLowerCase();
+        const role = String(db.myOrgRole || currentOrgRole() || '').toLowerCase();
         const myDef = getMyDefaultLocationId();
         const locF = document.getElementById('productLocationFilter');
         if (role === 'member' && myDef && locF && [...locF.options].some(o => o.value === myDef)) {
@@ -11671,10 +11771,10 @@ function renderLocationsList() {
   const el = document.getElementById('locationsList');
   if (!el) return;
   const myDef = getMyDefaultLocationId();
-  const role = String(db.myOrgRole || '').toLowerCase();
-  const locked = role === 'member' && myDef;
+  const role = String(db.myOrgRole || currentOrgRole() || '').toLowerCase();
+  const locked = typeof isMemberLocationLocked === 'function' ? isMemberLocationLocked() : (role === 'member' && myDef);
   const note = locked
-    ? `<p class="section-sub">Your POS is scoped to your assigned location. Ask an owner to change it under Plan → Team.</p>`
+    ? `<p class="section-sub">Your POS is locked to <b>${(db.locations.find(l => l.id === myDef) || {}).name || 'your assigned store'}</b>. Ask an owner to change it under Plan → Team.</p>`
     : (myDef ? `<p class="section-sub">Your assigned location is selected for POS by default.</p>` : '');
   el.innerHTML = note + (db.locations.map(l => {
     const active = db.activeLocationId === l.id;
@@ -11801,6 +11901,7 @@ async function pullLocationsFromCloud() {
   const def = db.locations.find(l => l.is_default) || db.locations[0];
   if (def && !db.activeLocationId) db.activeLocationId = def.id;
   persistDb();
+  try { await applyMemberLocationScope(); } catch (_) {}
 }
 
 async function pushLocationStockToCloud(productId, locationId) {
@@ -12097,10 +12198,39 @@ function renderPosCart() {
     </div>`).join('');
 }
 
-function posView() {
+async function posView() {
   ensurePosDb();
+  try { await applyMemberLocationScope(); } catch (_) {}
+  const loc = getActiveLocation();
+  const locked = typeof isMemberLocationLocked === 'function' && isMemberLocationLocked();
   const label = document.getElementById('posSaleLabel');
-  if (label) label.textContent = 'New sale · ' + posCurrency();
+  if (label) {
+    label.textContent = (loc ? loc.name + ' · ' : '') + 'New sale · ' + posCurrency() +
+      (locked ? ' · assigned store' : '');
+  }
+  const locBar = document.getElementById('posLocationBar');
+  if (locBar) {
+    if (locked) {
+      locBar.innerHTML = '<span class="client-meta">Selling from <b>' +
+        String(loc && loc.name || 'assigned store').replace(/</g, '') +
+        '</b> (assigned to you)</span>';
+    } else {
+      const locs = (db.locations || []).filter(l => l.active !== false);
+      locBar.innerHTML = '<label class="client-meta" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Store ' +
+        '<select id="posLocationSelect" class="button small" style="min-width:140px">' +
+        locs.map(l => '<option value="' + l.id + '"' +
+          (loc && loc.id === l.id ? ' selected' : '') + '>' +
+          String(l.name || '').replace(/</g, '') + '</option>').join('') +
+        '</select></label>';
+      const sel = document.getElementById('posLocationSelect');
+      if (sel) {
+        sel.onchange = () => {
+          setActiveLocation(sel.value);
+          posView();
+        };
+      }
+    }
+  }
   renderPosProductGrid();
   renderPosCart();
 }
@@ -12182,7 +12312,15 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
     cloudId: null
   };
 
+  if (typeof isMemberLocationLocked === 'function' && isMemberLocationLocked()) {
+    const def = getMyDefaultLocationId();
+    if (def) setActiveLocation(def, { force: true });
+  }
   const saleLoc = getActiveLocation();
+  if (!saleLoc) {
+    toast('No store selected — assign a location to this member or pick a store');
+    return;
+  }
   sale.location_id = saleLoc?.id || null;
   for (const line of lines) {
     const p = db.products.find(x => x.id === line.product_id);
@@ -20799,24 +20937,28 @@ document.addEventListener('click', (e) => {
   }
   const approvePo = e.target.closest('[data-approve-po]');
   if (approvePo) {
-    approvePurchaseOrder(approvePo.getAttribute('data-approve-po'));
+    Promise.resolve(approvePurchaseOrder(approvePo.getAttribute('data-approve-po')))
+      .catch(err => toast(err && err.message ? err.message : 'Approve failed'));
     return;
   }
   const rejectPo = e.target.closest('[data-reject-po]');
   if (rejectPo) {
     const note = window.prompt('Reason for rejection') || '';
-    rejectPurchaseOrder(rejectPo.getAttribute('data-reject-po'), note);
+    try { rejectPurchaseOrder(rejectPo.getAttribute('data-reject-po'), note); }
+    catch (err) { toast(err && err.message ? err.message : 'Reject failed'); }
     return;
   }
   const approveTr = e.target.closest('[data-approve-transfer]');
   if (approveTr) {
-    approveStockTransfer(approveTr.getAttribute('data-approve-transfer'));
+    Promise.resolve(approveStockTransfer(approveTr.getAttribute('data-approve-transfer')))
+      .catch(err => toast(err && err.message ? err.message : 'Approve failed'));
     return;
   }
   const rejectTr = e.target.closest('[data-reject-transfer]');
   if (rejectTr) {
     const note = window.prompt('Reason for rejection') || '';
-    rejectStockTransfer(rejectTr.getAttribute('data-reject-transfer'), note);
+    try { rejectStockTransfer(rejectTr.getAttribute('data-reject-transfer'), note); }
+    catch (err) { toast(err && err.message ? err.message : 'Reject failed'); }
     return;
   }
   const cancelPo = e.target.closest('[data-cancel-po]');
@@ -22411,7 +22553,7 @@ async function loadTeamPanel() {
           const cloudLoc = locByUser[m.user_id];
           const localLoc = locOpts.find(l => l.cloudId === cloudLoc || l.id === cloudLoc);
           let locSelect = '';
-          if (isOwner && locOpts.length) {
+          if ((isOwner || (typeof can === "function" && can("locations.manage"))) && locOpts.length) {
             const options = '<option value="">Any location</option>' + locOpts.map(l =>
               `<option value="${l.id}" ${localLoc && localLoc.id === l.id ? 'selected' : ''}>${l.name}</option>`
             ).join('');
