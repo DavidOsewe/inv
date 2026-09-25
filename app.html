@@ -2790,6 +2790,33 @@ input:focus:not(:focus-visible) {
   gap: 6px;
 }
 
+
+.team-role.is-manager {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+
+.role-gated-off {
+  opacity: 0.5 !important;
+  pointer-events: none !important;
+  cursor: not-allowed !important;
+}
+#orgRoleChip {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--blue-soft);
+  color: var(--blue-soft-text);
+}
+#orgRoleChip[data-role="owner"] { background: #dbeafe; color: #1e40af; }
+#orgRoleChip[data-role="manager"] { background: #ffedd5; color: #9a3412; }
+#orgRoleChip[data-role="member"] { background: #f3f4f6; color: #4b5563; }
+
 </style>
 </head>
 <body>
@@ -2995,7 +3022,7 @@ input:focus:not(:focus-visible) {
           <div class="client-count" id="transferCount">Move stock between warehouses and outlets</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="button primary" type="button" id="btnNewTransfer">+ Transfer</button>
+          <button class="button primary" type="button" id="btnNewTransfer" data-role-gate="transfers.create">+ Transfer</button>
         </div>
       </div>
       <div class="client-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -3005,6 +3032,7 @@ input:focus:not(:focus-visible) {
         <select id="transferStatusFilter" class="button small" style="min-width:130px">
           <option value="all">All statuses</option>
           <option value="draft">Draft</option>
+          <option value="pending_approval">Pending approval</option>
           <option value="in_transit">In transit</option>
           <option value="received">Received</option>
           <option value="cancelled">Cancelled</option>
@@ -3012,8 +3040,13 @@ input:focus:not(:focus-visible) {
       </div>
       <div id="transferList"></div>
       <div class="insight" style="margin-top:24px">
+        <h3 style="font-size:15px;margin:0 0 8px">Approval log</h3>
+        <p class="section-sub" style="margin:0 0 10px">Submits, approvals, and rejections for transfers (and purchases).</p>
+        <div id="approvalAuditList"></div>
+      </div>
+      <div class="insight" style="margin-top:16px">
         <h3 style="font-size:15px;margin:0 0 8px">Inventory activity</h3>
-        <p class="section-sub" style="margin:0 0 10px">Recent transfers, receives, and stock adjustments (local audit trail).</p>
+        <p class="section-sub" style="margin:0 0 10px">Recent transfers, receives, and stock adjustments.</p>
         <div id="inventoryAuditList"></div>
       </div>
     </section>
@@ -3025,8 +3058,11 @@ input:focus:not(:focus-visible) {
         <div id="transferDetailBody" style="max-height:360px;overflow:auto"></div>
         <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
           <button class="button" type="button" id="transferDetailClose">Close</button>
+          <button class="button" type="button" id="transferDetailDiscuss">Discuss in chat</button>
           <button class="button" type="button" id="transferDetailShare">Share</button>
           <button class="button" type="button" id="transferDetailPrint">Print</button>
+          <button class="button danger" type="button" id="transferDetailReject" hidden>Reject</button>
+          <button class="button primary" type="button" id="transferDetailApprove" hidden>Approve</button>
           <button class="button primary" type="button" id="transferDetailReceive" hidden>Receive</button>
         </div>
       </div>
@@ -3138,8 +3174,8 @@ input:focus:not(:focus-visible) {
           <div class="client-count" id="purchaseCount">Orders, receiving &amp; suppliers</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="button" type="button" id="btnAddSupplier">+ Supplier</button>
-          <button class="button primary" type="button" id="btnNewPurchase">+ Purchase order</button>
+          <button class="button" type="button" id="btnAddSupplier" data-role-gate="purchases.create">+ Supplier</button>
+          <button class="button primary" type="button" id="btnNewPurchase" data-role-gate="purchases.create">+ Purchase order</button>
         </div>
       </div>
       <div class="client-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -3149,6 +3185,7 @@ input:focus:not(:focus-visible) {
         <select id="purchaseStatusFilter" class="button small" style="min-width:130px">
           <option value="all">All statuses</option>
           <option value="draft">Draft</option>
+          <option value="pending_approval">Pending approval</option>
           <option value="ordered">Ordered</option>
           <option value="partial">Partial</option>
           <option value="received">Received</option>
@@ -3156,6 +3193,11 @@ input:focus:not(:focus-visible) {
         </select>
       </div>
       <div id="purchaseList" style="margin-bottom:24px"></div>
+      <div class="insight" style="margin-bottom:24px">
+        <h3 style="font-size:15px;margin:0 0 8px">Approval log</h3>
+        <p class="section-sub" style="margin:0 0 10px">Purchase order submits, approvals, and rejections.</p>
+        <div id="purchaseApprovalAuditList"></div>
+      </div>
       <div class="section-head" style="margin-top:8px">
         <div>
           <h2 style="font-size:16px">Suppliers</h2>
@@ -3272,12 +3314,12 @@ input:focus:not(:focus-visible) {
             <button class="button primary" type="button" id="btnBooksCreate">+ Create</button>
             <div id="booksCreateMenu" class="books-create-menu" hidden style="position:absolute;right:0;top:calc(100% + 6px);z-index:40;min-width:220px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-lg);padding:8px">
               <button type="button" class="button small" data-create="invoice" style="justify-content:flex-start;border:0;background:transparent">Invoice</button>
-              <button type="button" class="button small" data-create="payment" style="justify-content:flex-start;border:0;background:transparent">Receive payment</button>
-              <button type="button" class="button small" data-create="expense" style="justify-content:flex-start;border:0;background:transparent">Expense</button>
-              <button type="button" class="button small" data-create="bill" style="justify-content:flex-start;border:0;background:transparent">Supplier bill</button>
-              <button type="button" class="button small" data-create="journal" style="justify-content:flex-start;border:0;background:transparent">Journal entry</button>
-              <button type="button" class="button small" data-create="recurring-journal" style="justify-content:flex-start;border:0;background:transparent">Recurring journal</button>
-              <button type="button" class="button small" data-create="journal-csv" style="justify-content:flex-start;border:0;background:transparent">Bulk journals (CSV)</button>
+              <button type="button" class="button small" data-create="payment" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Receive payment</button>
+              <button type="button" class="button small" data-create="expense" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Expense</button>
+              <button type="button" class="button small" data-create="bill" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Supplier bill</button>
+              <button type="button" class="button small" data-create="journal" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Journal entry</button>
+              <button type="button" class="button small" data-create="recurring-journal" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Recurring journal</button>
+              <button type="button" class="button small" data-create="journal-csv" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Bulk journals (CSV)</button>
               <button type="button" class="button small" data-create="transfer" style="justify-content:flex-start;border:0;background:transparent">Bank transfer</button>
             </div>
           </div>
@@ -3369,8 +3411,8 @@ input:focus:not(:focus-visible) {
           <h3>Journal entries</h3>
           <p class="section-sub">Manual and system postings. Import balanced CSV lines or export the period for backup / re-import.</p>
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
-            <button type="button" class="button small primary" id="btnImportJournals">Import journals CSV</button>
-            <button type="button" class="button small" id="btnPostSampleJournals">Post sample journals</button>
+            <button type="button" class="button small primary" id="btnImportJournals" data-role-gate="books.write">Import journals CSV</button>
+            <button type="button" class="button small" id="btnPostSampleJournals" data-role-gate="books.write">Post sample journals</button>
             <button type="button" class="button small" id="btnExportJournals">Export journals CSV</button>
             <button type="button" class="button small" id="btnSampleJournalCsv">Download sample CSV</button>
             <input type="file" id="journalCsvFile" accept=".csv,text/csv,.txt" hidden>
@@ -3483,7 +3525,7 @@ input:focus:not(:focus-visible) {
           <h3>Recurring journals</h3>
           <p class="section-sub">Rent, subscriptions, retainers — post on a schedule when you open Books. Pause, edit, or run once from the list.</p>
           <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center">
-            <button type="button" class="button primary" id="btnAddRecurringJournal" data-open-recurring-journal>New schedule</button>
+            <button type="button" class="button primary" id="btnAddRecurringJournal" data-role-gate="books.write" data-open-recurring-journal>New schedule</button>
             <span id="booksRecurringJStats" class="section-sub"></span>
           </div>
           <div id="booksRecurringJList"></div>
@@ -3646,7 +3688,7 @@ input:focus:not(:focus-visible) {
         </div>
         <div id="teamPanel" style="display:none">
           <div id="teamMemberNote" class="team-member-note" hidden>
-            You’re a member of this business. You can work on shared invoices and clients. Billing stays with the owner.
+            Your role limits some actions. Members can sell and submit work; managers approve stock and purchases; only the owner manages team and billing.
           </div>
           <div id="teamInviteForm" class="team-invite-box" hidden>
             <div class="team-invite-row">
@@ -3657,14 +3699,16 @@ input:focus:not(:focus-visible) {
               <div class="field" style="width:130px;margin:0">
                 <label>Role</label>
                 <select id="teamInviteRole">
-                  <option value="member">Member</option>
+                  <option value="member">Member (cashier / staff)</option>
+                  <option value="manager">Manager (approvals + stock)</option>
+                  <option value="owner">Owner (full access)</option>
                 </select>
               </div>
               <div style="align-self:flex-end">
                 <button class="button primary" type="button" id="teamInviteBtn">Send invite</button>
               </div>
             </div>
-            <p class="team-help">We’ll create a link you can share. They must sign in with the invited email. Billing stays with you.</p>
+            <p class="team-help">We’ll create a link you can share. They must sign in with the invited email. Billing stays with you. Members sell & submit; managers approve; owners manage team & billing.</p>
           </div>
           <div id="teamMembersList" class="team-list"></div>
           <div id="teamInvitesList" class="team-list"></div>
@@ -3674,7 +3718,7 @@ input:focus:not(:focus-visible) {
 
     <section class="view" id="profile">
       <div class="form settings">
-        <h2>Business profile</h2>
+        <h2>Business profile <span id="orgRoleChip" hidden title="Your role in this organisation">—</span></h2>
         <p class="section-lead">
           Business country sets your plan pricing band. Reporting currency is for dashboard totals — each invoice can still use its own currency.
         </p>
@@ -3877,6 +3921,19 @@ input:focus:not(:focus-visible) {
             <button class="button" type="button" id="copyProfileReferral">Copy referral link</button>
           </div>
           <div class="referral-link-box" id="profileReferralUrl">Sign in to generate your referral link.</div>
+        </div>
+
+        <div class="field" style="margin-top:18px">
+          <label style="font-weight:700">Approvals</label>
+          <p class="section-sub" style="margin:4px 0 10px">Require a manager/owner to approve stock moves and purchase orders before they take effect.</p>
+          <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
+            <input type="checkbox" data-p="requireTransferApproval" id="requireTransferApproval">
+            <span>Require approval for stock transfers</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
+            <input type="checkbox" data-p="requirePurchaseApproval" id="requirePurchaseApproval">
+            <span>Require approval for purchase orders</span>
+          </label>
         </div>
 
         <button class="button primary" id="saveProfile">Save profile</button>
@@ -5308,6 +5365,11 @@ async function ensureCloudOrganization() {
     const teamMembership = rows.find(r => String(r.role || '').toLowerCase() === 'member');
     const chosen = match || teamMembership || rows[0];
     cloud.organizationId = chosen.organization_id;
+    try {
+      const mem = rows.find(r => r.organization_id === chosen.organization_id);
+      if (mem && mem.role) setCurrentOrgRole(mem.role);
+      else if (chosen.role) setCurrentOrgRole(chosen.role);
+    } catch (_) {}
     // Persist so later sessions stay on the shared org
     if (!preferred) setPreferredOrganizationId(cloud.organizationId);
     return cloud.organizationId;
@@ -5359,7 +5421,8 @@ async function syncOrganizationProfile(organizationId) {
       .eq('user_id', cloud.user.id)
       .limit(1);
     const role = String(memRows?.[0]?.role || '').toLowerCase();
-    if (role && role !== 'owner') return;
+    setCurrentOrgRole(role);
+    if (!can('profile.edit')) return;
 
     const { error } = await cloud.client.from('organizations').update({
       name: db.profile.name || 'My business',
@@ -6568,6 +6631,124 @@ function renderFeatureAccess() {
   });
 }
 
+
+function roleGateMessage(permission) {
+  const map = {
+    'team.manage': 'Only owners can manage the team',
+    'billing.manage': 'Only owners can manage billing',
+    'profile.edit': 'Only owners can edit the shared business profile',
+    'books.write': 'Managers and owners can change the books',
+    'books.view': 'You cannot open Books with this role',
+    'inventory.manage': 'Managers and owners manage inventory settings',
+    'transfers.create': 'You cannot create transfers with this role',
+    'transfers.approve': 'Only managers and owners can approve transfers',
+    'purchases.create': 'You cannot create purchases with this role',
+    'purchases.approve': 'Only managers and owners can approve purchases',
+    'locations.manage': 'Managers and owners manage locations',
+    'approvals.settings': 'Only the owner can change approval settings'
+  };
+  return map[permission] || 'You do not have permission for this action';
+}
+
+/** View → minimum permission (null = any signed-in member of org). */
+const VIEW_ROLE_REQUIREMENTS = {
+  plan: 'billing.manage',
+  books: 'books.view'
+};
+
+function applyRoleGates() {
+  const role = currentOrgRole();
+
+  // --- Explicit controls ---
+  ['requireTransferApproval', 'requirePurchaseApproval'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const allow = can('approvals.settings');
+    el.disabled = !allow;
+    el.title = allow ? '' : roleGateMessage('approvals.settings');
+  });
+
+  const inviteForm = document.getElementById('teamInviteForm');
+  if (inviteForm) inviteForm.hidden = !can('team.manage');
+  const teamOwnerOnly = document.getElementById('teamOwnerOnly');
+  if (teamOwnerOnly) teamOwnerOnly.hidden = !can('team.manage');
+
+  // --- data-role-gate: disable / dim ---
+  document.querySelectorAll('[data-role-gate]').forEach(el => {
+    const need = el.getAttribute('data-role-gate');
+    if (!need) return;
+    const ok = can(need);
+    el.classList.toggle('role-gated-off', !ok);
+    el.setAttribute('aria-disabled', ok ? 'false' : 'true');
+    if (ok) {
+      el.style.opacity = '';
+      el.style.pointerEvents = '';
+      el.removeAttribute('title');
+      try {
+        if (el.tagName === 'BUTTON' || el.tagName === 'INPUT' || el.tagName === 'SELECT') {
+          if (!el.dataset.roleKeepDisabled) el.disabled = false;
+        }
+      } catch (_) {}
+    } else {
+      el.style.opacity = '0.5';
+      el.style.pointerEvents = 'none';
+      el.title = roleGateMessage(need);
+      try {
+        if (el.tagName === 'BUTTON' || el.tagName === 'INPUT' || el.tagName === 'SELECT') {
+          el.disabled = true;
+        }
+      } catch (_) {}
+    }
+  });
+
+  // --- data-role-hide: fully hide ---
+  document.querySelectorAll('[data-role-hide]').forEach(el => {
+    const need = el.getAttribute('data-role-hide');
+    el.hidden = !can(need);
+  });
+
+  // --- Sidebar + bottom/more nav ---
+  const navRules = [
+    { view: 'plan', perm: 'billing.manage' },
+    { view: 'books', perm: 'books.view' }
+  ];
+  navRules.forEach(({ view, perm }) => {
+    document.querySelectorAll(
+      '.nav button[data-view="' + view + '"], .bottom-nav button[data-view="' + view + '"], .more-sheet-grid button[data-more-view="' + view + '"]'
+    ).forEach(btn => {
+      btn.style.display = can(perm) ? '' : 'none';
+      btn.hidden = !can(perm);
+    });
+  });
+
+  // Team block on profile: invite UI
+  document.querySelectorAll('[data-role-show="owner"]').forEach(el => {
+    el.hidden = role !== 'owner';
+  });
+  document.querySelectorAll('[data-role-show="manager"]').forEach(el => {
+    el.hidden = !(role === 'owner' || role === 'manager');
+  });
+
+  // Role chip in profile / account if present
+  const chip = document.getElementById('orgRoleChip');
+  if (chip) {
+    chip.textContent = role || '—';
+    chip.dataset.role = role || '';
+    chip.hidden = !cloud.user;
+  }
+}
+
+/** Block navigation to views the role cannot open. */
+function guardViewAccess(view) {
+  const need = VIEW_ROLE_REQUIREMENTS[view];
+  if (!need) return true;
+  if (can(need)) return true;
+  toast(roleGateMessage(need));
+  return false;
+}
+
+
+
 function applyFeatureGates() {
   const logoLabel = document.getElementById('logoUploadLabel');
   const logoInput = document.getElementById('logoFile');
@@ -7426,8 +7607,12 @@ function updateHeaderActions(view) {
 function switchTo(v) {
   try { closeMoreSheet(); } catch (_) {}
   try {
+    if (typeof guardViewAccess === 'function' && !guardViewAccess(v)) return;
+  } catch (_) {}
+  try {
     if (v !== 'chat' && typeof chatStopRealtime === 'function') chatStopRealtime();
   } catch (_) {}
+  try { applyRoleGates(); } catch (_) {}
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('active', x.id === v));
   document.querySelectorAll('.nav button, .bottom-nav button').forEach(x => {
     x.classList.toggle('active', x.dataset.view === v);
@@ -7475,6 +7660,7 @@ function switchTo(v) {
   if (v === 'receipts') receiptsView();
   if (v === 'recurring') recurringView();
   if (v === 'clients') clients();
+  try { applyRoleGates(); } catch (_) {}
   if (v === 'profile') profile();
   if (v === 'plan') planView();
 }
@@ -8712,7 +8898,9 @@ async function savePurchase(status) {
     id: crypto.randomUUID(),
     supplier_id,
     purchase_number,
-    status: status === 'ordered' ? 'ordered' : 'draft',
+    status: status === 'ordered'
+      ? (approvalsEnabledPurchases() ? 'pending_approval' : 'ordered')
+      : 'draft',
     order_date: document.getElementById('purchaseOrderDate').value || now.slice(0, 10),
     expected_date: document.getElementById('purchaseExpectedDate').value || null,
     note: (document.getElementById('purchaseNote').value || '').trim() || null,
@@ -8727,7 +8915,7 @@ async function savePurchase(status) {
   try { await pushPurchaseToCloud(po); } catch (e) { console.warn(e); }
   persistDb();
   closePurchaseModal();
-  toast(po.status === 'ordered' ? 'Purchase ordered' : 'Draft saved');
+  toast(po.status === 'pending_approval' ? 'Submitted for approval' : (po.status === 'ordered' ? 'Purchase ordered' : 'Draft saved'));
   purchasesView();
 }
 
@@ -8984,6 +9172,10 @@ function markPurchaseOrdered(purchaseId) {
   ensurePosDb();
   const po = db.purchases.find(p => p.id === purchaseId);
   if (!po || po.status !== 'draft') return;
+  if (typeof approvalsEnabledPurchases === 'function' && approvalsEnabledPurchases()) {
+    submitPurchaseForApproval(purchaseId);
+    return;
+  }
   po.status = 'ordered';
   po.updated_at = new Date().toISOString();
   try { updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
@@ -8992,6 +9184,144 @@ function markPurchaseOrdered(purchaseId) {
   purchasesView();
 }
 
+
+
+
+/* ---------- RBAC (R1/R2): org roles + can(permission) ---------- */
+const ORG_ROLES = ['owner', 'manager', 'member'];
+
+/** Normalized role for current user in active org. */
+function currentOrgRole() {
+  try {
+    const r = String(
+      (cloud && (cloud.memberRole || cloud.orgRole)) ||
+      (db && db.myOrgRole) ||
+      ''
+    ).toLowerCase().trim();
+    if (ORG_ROLES.includes(r)) return r;
+    // Local / signed out → full control on device
+    if (!cloud || !cloud.user) return 'owner';
+    // Signed in but role not loaded yet → least privilege until refreshCloudMemberRole
+    if (!r) return 'member';
+    return r;
+  } catch (_) {
+    return 'owner';
+  }
+}
+
+function setCurrentOrgRole(role) {
+  const r = String(role || '').toLowerCase().trim();
+  const normalized = ORG_ROLES.includes(r) ? r : (r ? 'member' : null);
+  try {
+    if (normalized) {
+      cloud.memberRole = normalized;
+      cloud.orgRole = normalized;
+      db.myOrgRole = normalized;
+    }
+  } catch (_) {}
+  return normalized;
+}
+
+/**
+ * Permission matrix (org role, not plan).
+ * Plan gates still use hasFeature().
+ */
+const ROLE_PERMISSIONS = {
+  owner: [
+    'team.manage', 'billing.manage', 'profile.edit',
+    'books.write', 'books.view',
+    'inventory.manage', 'transfers.create', 'transfers.approve',
+    'purchases.create', 'purchases.approve',
+    'pos.sell', 'invoices.write', 'locations.manage', 'approvals.settings'
+  ],
+  manager: [
+    'books.write', 'books.view',
+    'inventory.manage', 'transfers.create', 'transfers.approve',
+    'purchases.create', 'purchases.approve',
+    'pos.sell', 'invoices.write', 'locations.manage'
+  ],
+  member: [
+    'books.view',
+    'transfers.create', // submit; approve gated separately
+    'purchases.create',
+    'pos.sell', 'invoices.write'
+  ]
+};
+
+function can(permission) {
+  if (!permission) return true;
+  const role = currentOrgRole();
+  const list = ROLE_PERMISSIONS[role] || ROLE_PERMISSIONS.member;
+  if (list.includes(permission)) return true;
+  // Owner always wins unknown legacy checks
+  if (role === 'owner') return true;
+  return false;
+}
+
+function canApproveApprovals() {
+  return can('transfers.approve') || can('purchases.approve');
+}
+
+function requireCan(permission, message) {
+  if (can(permission)) return true;
+  toast(message || 'You do not have permission for this action');
+  return false;
+}
+
+async function refreshCloudMemberRole() {
+  try {
+    if (!cloud.client || !cloud.organizationId || !cloud.user) return currentOrgRole();
+    const { data } = await cloud.client
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', cloud.organizationId)
+      .eq('user_id', cloud.user.id)
+      .maybeSingle();
+    if (data && data.role) {
+      setCurrentOrgRole(data.role);
+    }
+  } catch (_) {}
+  return currentOrgRole();
+}
+
+/* ---------- Approvals (transfers + POs) ---------- */
+function approvalsEnabledTransfers() {
+  return !!(db.profile && db.profile.requireTransferApproval);
+}
+function approvalsEnabledPurchases() {
+  return !!(db.profile && db.profile.requirePurchaseApproval);
+}
+function logStockAudit(action, entityType, entityId, summary, meta) {
+  const enriched = Object.assign({}, meta || {}, {
+    approvalAction: /approve|reject|submit_approval/i.test(String(action || '')) ? action : (meta && meta.approvalAction) || null,
+    actorRole: (cloud && (cloud.memberRole || cloud.orgRole)) || null
+  });
+  try {
+    if (typeof appendInventoryAudit === 'function') {
+      appendInventoryAudit(action, entityType, entityId, summary, enriched);
+      return;
+    }
+  } catch (_) {}
+  try {
+    db.auditEvents = db.auditEvents || [];
+    db.auditEvents.push({
+      id: crypto.randomUUID(),
+      at: new Date().toISOString(),
+      action,
+      entityType,
+      entityId,
+      summary,
+      meta: enriched,
+      actorEmail: (cloud.user && cloud.user.email) || 'local'
+    });
+  } catch (_) {}
+}
+function pendingApprovalsCount() {
+  ensurePosDb();
+  const t = (db.stockTransfers || []).filter(x => x.status === 'pending_approval').length;
+  const p = (db.purchases || []).filter(x => x.status === 'pending_approval').length;
+  return t + p;
+}
 
 /* ---------- Stock transfers (Phase B) ---------- */
 async function allocateTransferNumber() {
@@ -9093,55 +9423,72 @@ async function saveStockTransfer() {
   const mode = document.getElementById('transferShipMode').value || 'quick';
   const transfer_number = await allocateTransferNumber();
   const now = new Date().toISOString();
+  const needsApproval = approvalsEnabledTransfers();
   const tr = {
     id: crypto.randomUUID(),
     transfer_number,
     from_location_id: fromId,
     to_location_id: toId,
-    status: mode === 'quick' ? 'received' : 'in_transit',
+    status: needsApproval ? 'pending_approval' : (mode === 'quick' ? 'received' : 'in_transit'),
+    ship_mode: mode,
     note: (document.getElementById('transferNote').value || '').trim() || null,
     lines,
-    shipped_at: now,
-    received_at: mode === 'quick' ? now : null,
+    shipped_at: needsApproval ? null : now,
+    received_at: (!needsApproval && mode === 'quick') ? now : null,
+    submitted_by: (cloud.user && cloud.user.id) || null,
+    submitted_at: needsApproval ? now : null,
     cloudId: null,
     created_at: now,
     updated_at: now
   };
 
-  // Ship: deduct from source
-  for (const line of lines) {
-    const { mov } = adjustLocationStock(line.product_id, fromId, -line.qty_sent, {
-      reason: 'transfer_out',
-      reference: transfer_number
-    });
-    mov.transfer_id = tr.id;
-    try {
-      const p = db.products.find(x => x.id === line.product_id);
-      if (p) await pushProductToCloud(p);
-      await pushLocationStockToCloud(line.product_id, fromId);
-      await pushStockMovementToCloud(mov);
-    } catch (e) { console.warn(e); }
-  }
-
-  if (mode === 'quick') {
+  if (!needsApproval) {
+    // Ship: deduct from source
     for (const line of lines) {
-      line.qty_received = line.qty_sent;
-      const { mov } = adjustLocationStock(line.product_id, toId, line.qty_sent, {
-        reason: 'transfer_in',
+      const { mov } = adjustLocationStock(line.product_id, fromId, -line.qty_sent, {
+        reason: 'transfer_out',
         reference: transfer_number
       });
       mov.transfer_id = tr.id;
       try {
         const p = db.products.find(x => x.id === line.product_id);
         if (p) await pushProductToCloud(p);
-        await pushLocationStockToCloud(line.product_id, toId);
+        await pushLocationStockToCloud(line.product_id, fromId);
         await pushStockMovementToCloud(mov);
       } catch (e) { console.warn(e); }
+    }
+
+    if (mode === 'quick') {
+      for (const line of lines) {
+        line.qty_received = line.qty_sent;
+        const { mov } = adjustLocationStock(line.product_id, toId, line.qty_sent, {
+          reason: 'transfer_in',
+          reference: transfer_number
+        });
+        mov.transfer_id = tr.id;
+        try {
+          const p = db.products.find(x => x.id === line.product_id);
+          if (p) await pushProductToCloud(p);
+          await pushLocationStockToCloud(line.product_id, toId);
+          await pushStockMovementToCloud(mov);
+        } catch (e) { console.warn(e); }
+      }
     }
   }
 
   db.stockTransfers.push(tr);
   try { await pushStockTransferToCloud(tr); } catch (e) { console.warn(e); }
+  try {
+    logStockAudit(
+      needsApproval ? 'submit_approval' : 'create',
+      'stock_transfer',
+      tr.id,
+      needsApproval
+        ? ('Transfer ' + transfer_number + ' submitted for approval')
+        : ('Transfer ' + transfer_number + ' created'),
+      { status: tr.status, ship_mode: mode }
+    );
+  } catch (_) {}
   try {
     const fromN = db.locations.find(l => l.id === fromId)?.name || 'from';
     const toN = db.locations.find(l => l.id === toId)?.name || 'to';
@@ -9166,7 +9513,7 @@ async function pushStockTransferToCloud(tr) {
   const from = db.locations.find(l => l.id === tr.from_location_id);
   const to = db.locations.find(l => l.id === tr.to_location_id);
   if (!from?.cloudId || !to?.cloudId) return;
-  const { data, error } = await cloud.client.from('stock_transfers').insert({
+  const payload = {
     organization_id: cloud.organizationId,
     local_id: tr.id,
     transfer_number: tr.transfer_number,
@@ -9175,8 +9522,21 @@ async function pushStockTransferToCloud(tr) {
     status: tr.status,
     note: tr.note,
     shipped_at: tr.shipped_at,
-    received_at: tr.received_at
-  }).select('id').single();
+    received_at: tr.received_at,
+    updated_at: tr.updated_at || new Date().toISOString()
+  };
+  try {
+    if (tr.approval_note !== undefined) payload.approval_note = tr.approval_note;
+    if (tr.approved_at) payload.approved_at = tr.approved_at;
+    if (tr.submitted_at) payload.submitted_at = tr.submitted_at;
+    if (tr.ship_mode) payload.ship_mode = tr.ship_mode;
+  } catch (_) {}
+  if (tr.cloudId) {
+    const { error } = await cloud.client.from('stock_transfers').update(payload).eq('id', tr.cloudId);
+    if (error) console.warn('transfer update', error.message || error);
+    return;
+  }
+  const { data, error } = await cloud.client.from('stock_transfers').insert(payload).select('id').single();
   if (error) throw error;
   tr.cloudId = data.id;
   const lineRows = (tr.lines || []).map(l => {
@@ -9332,10 +9692,160 @@ function cancelStockTransfer(transferId) {
   transfersView();
 }
 
+
+async function executeTransferShip(tr) {
+  const mode = tr.ship_mode || 'ship';
+  const fromId = tr.from_location_id;
+  const toId = tr.to_location_id;
+  const transfer_number = tr.transfer_number;
+  const now = new Date().toISOString();
+  for (const line of (tr.lines || [])) {
+    const onHand = locationStockQty(line.product_id, fromId);
+    if (onHand < line.qty_sent) {
+      throw new Error((line.product_name || 'Item') + ': only ' + onHand + ' available at source');
+    }
+  }
+  for (const line of (tr.lines || [])) {
+    const { mov } = adjustLocationStock(line.product_id, fromId, -line.qty_sent, {
+      reason: 'transfer_out',
+      reference: transfer_number
+    });
+    mov.transfer_id = tr.id;
+    try {
+      const p = db.products.find(x => x.id === line.product_id);
+      if (p) await pushProductToCloud(p);
+      await pushLocationStockToCloud(line.product_id, fromId);
+      await pushStockMovementToCloud(mov);
+    } catch (e) { console.warn(e); }
+  }
+  if (mode === 'quick') {
+    for (const line of (tr.lines || [])) {
+      line.qty_received = line.qty_sent;
+      const { mov } = adjustLocationStock(line.product_id, toId, line.qty_sent, {
+        reason: 'transfer_in',
+        reference: transfer_number
+      });
+      mov.transfer_id = tr.id;
+      try {
+        const p = db.products.find(x => x.id === line.product_id);
+        if (p) await pushProductToCloud(p);
+        await pushLocationStockToCloud(line.product_id, toId);
+        await pushStockMovementToCloud(mov);
+      } catch (e) { console.warn(e); }
+    }
+    tr.status = 'received';
+    tr.shipped_at = now;
+    tr.received_at = now;
+  } else {
+    tr.status = 'in_transit';
+    tr.shipped_at = now;
+  }
+  tr.updated_at = now;
+}
+
+async function approveStockTransfer(transferId, note) {
+  ensurePosDb();
+  if (!requireCan('transfers.approve', 'Only owners and managers can approve')) return;
+  const tr = db.stockTransfers.find(x => x.id === transferId);
+  if (!tr || tr.status !== 'pending_approval') { toast('Not pending approval'); return; }
+  try {
+    await executeTransferShip(tr);
+  } catch (e) {
+    toast(e.message || String(e));
+    return;
+  }
+  tr.approved_by = (cloud.user && cloud.user.id) || null;
+  tr.approved_at = new Date().toISOString();
+  tr.approval_note = (note || '').trim() || null;
+  try { await pushStockTransferToCloud(tr); } catch (e) { console.warn(e); }
+  logStockAudit('approve', 'stock_transfer', tr.id, 'Approved ' + (tr.transfer_number || ''), { status: tr.status, note: tr.approval_note || null });
+  persistDb();
+  toast('Transfer approved');
+  try { closeTransferDetailModal && closeTransferDetailModal(); } catch (_) {}
+  try { document.getElementById('transferDetailModal')?.classList.remove('show'); } catch (_) {}
+  transfersView();
+}
+
+function rejectStockTransfer(transferId, note) {
+  ensurePosDb();
+  if (!requireCan('transfers.approve', 'Only owners and managers can reject transfers')) return;
+  const tr = db.stockTransfers.find(x => x.id === transferId);
+  if (!tr || tr.status !== 'pending_approval') { toast('Not pending approval'); return; }
+  const n = (note || '').trim();
+  if (!n) { toast('Add a reject reason'); return; }
+  tr.status = 'cancelled';
+  tr.approval_note = n;
+  tr.approved_by = (cloud.user && cloud.user.id) || null;
+  tr.approved_at = new Date().toISOString();
+  tr.updated_at = new Date().toISOString();
+  try { pushStockTransferToCloud(tr); } catch (e) { console.warn(e); }
+  logStockAudit('reject', 'stock_transfer', tr.id, 'Rejected ' + (tr.transfer_number || '') + ': ' + n, { note: n });
+  persistDb();
+  toast('Transfer rejected');
+  try { document.getElementById('transferDetailModal')?.classList.remove('show'); } catch (_) {}
+  transfersView();
+}
+
+async function approvePurchaseOrder(purchaseId, note) {
+  ensurePosDb();
+  if (!requireCan('purchases.approve', 'Only owners and managers can approve purchases')) return;
+  const po = db.purchases.find(x => x.id === purchaseId);
+  if (!po || po.status !== 'pending_approval') { toast('Not pending approval'); return; }
+  po.status = 'ordered';
+  po.approved_by = (cloud.user && cloud.user.id) || null;
+  po.approved_at = new Date().toISOString();
+  po.approval_note = (note || '').trim() || null;
+  po.updated_at = new Date().toISOString();
+  try { await updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
+  try { await pushPurchaseToCloud(po); } catch (e) { console.warn(e); }
+  logStockAudit('approve', 'purchase', po.id, 'Approved PO ' + (po.purchase_number || ''), { note: po.approval_note || null });
+  persistDb();
+  toast('Purchase approved (ordered)');
+  purchasesView();
+}
+
+function rejectPurchaseOrder(purchaseId, note) {
+  ensurePosDb();
+  if (!requireCan('purchases.approve', 'Only owners and managers can reject purchases')) return;
+  const po = db.purchases.find(x => x.id === purchaseId);
+  if (!po || po.status !== 'pending_approval') { toast('Not pending approval'); return; }
+  const n = (note || '').trim();
+  if (!n) { toast('Add a reject reason'); return; }
+  po.status = 'draft';
+  po.approval_note = n;
+  po.approved_by = (cloud.user && cloud.user.id) || null;
+  po.approved_at = new Date().toISOString();
+  po.updated_at = new Date().toISOString();
+  try { updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
+  logStockAudit('reject', 'purchase', po.id, 'Rejected PO ' + (po.purchase_number || '') + ': ' + n, { note: n });
+  persistDb();
+  toast('Purchase returned to draft');
+  purchasesView();
+}
+
+function submitPurchaseForApproval(purchaseId) {
+  ensurePosDb();
+  const po = db.purchases.find(x => x.id === purchaseId);
+  if (!po || (po.status !== 'draft' && po.status !== 'pending_approval')) return;
+  po.status = 'pending_approval';
+  po.submitted_by = (cloud.user && cloud.user.id) || null;
+  po.submitted_at = new Date().toISOString();
+  po.updated_at = new Date().toISOString();
+  try { updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
+  logStockAudit('submit_approval', 'purchase', po.id, 'PO ' + (po.purchase_number || '') + ' submitted for approval', {});
+  persistDb();
+  toast('Submitted for approval');
+  purchasesView();
+}
+
+
 function transfersView() {
   ensurePosDb();
+  try { refreshCloudMemberRole(); } catch (_) {}
+  try { applyRoleGates(); } catch (_) {}
   renderTransfersList();
   renderInventoryAuditList();
+  try { renderApprovalAuditList('approvalAuditList'); } catch (_) {}
   // Surface replenish count in transfer subtitle
   try {
     const n = getReplenishSuggestions(50).length;
@@ -9352,11 +9862,25 @@ function transferStatusBadge(status) {
   const colors = {
     received: 'background:#d1fae5;color:#065f46',
     in_transit: 'background:#ffedd5;color:#9a3412',
+    pending_approval: 'background:#fef3c7;color:#92400e',
     draft: 'background:#e8f0fe;color:#1e40af',
     cancelled: 'background:#f3f4f6;color:#6b7280'
   };
   const style = colors[s] || 'background:#f3f4f6;color:#374151';
-  return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;${style}">${s.replace('_', ' ')}</span>`;
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;${style}">${s.replace(/_/g, ' ')}</span>`;
+}
+function purchaseStatusBadge(status) {
+  const s = String(status || '');
+  const colors = {
+    received: 'background:#d1fae5;color:#065f46',
+    partial: 'background:#ffedd5;color:#9a3412',
+    ordered: 'background:#e0e7ff;color:#3730a3',
+    pending_approval: 'background:#fef3c7;color:#92400e',
+    draft: 'background:#e8f0fe;color:#1e40af',
+    cancelled: 'background:#f3f4f6;color:#6b7280'
+  };
+  const style = colors[s] || 'background:#f3f4f6;color:#374151';
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;${style}">${s.replace(/_/g, ' ')}</span>`;
 }
 
 function transferLinesSummary(t) {
@@ -9796,15 +10320,18 @@ function openTransferDetailModal(transferId) {
   if (t.received_at) timeline.push('Received ' + String(t.received_at).replace('T', ' ').slice(0, 16));
   if (t.status === 'cancelled') timeline.push('Cancelled');
   const audits = (db.auditEvents || []).filter(e =>
-    e.entityType === 'stock_transfer' && e.entityId === t.id
+    (e.entityType === 'stock_transfer' && e.entityId === t.id) ||
+    (e.entityId === t.id && isApprovalAuditEvent(e))
   ).slice(-20).reverse();
   const auditHtml = audits.length
-    ? '<h3 style="font-size:13px;margin:16px 0 8px">Audit</h3>' + audits.map(e =>
-        `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--line)">
-          <div style="color:var(--muted)">${String(e.at || '').replace('T', ' ').slice(0, 16)} · ${e.actorEmail || 'local'}</div>
-          <b>${e.summary || e.action}</b>
-        </div>`
-      ).join('')
+    ? '<h3 style="font-size:13px;margin:16px 0 8px">Approval &amp; audit</h3>' + audits.map(e => {
+        const ap = isApprovalAuditEvent(e);
+        return `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--line)">
+          <div style="color:var(--muted)">${String(e.at || '').replace('T', ' ').slice(0, 16)} · ${String(e.actorEmail || 'local').replace(/</g,'')}${ap ? ' · approval' : ''}</div>
+          <b>${String(e.summary || e.action || '').replace(/</g,'')}</b>
+          ${e.meta && e.meta.note ? '<div class="client-meta">Note: ' + String(e.meta.note).replace(/</g,'') + '</div>' : ''}
+        </div>`;
+      }).join('')
     : '';
   const sig = t.signatures || {};
   const sigBlock = (role, label) => {
@@ -9834,6 +10361,40 @@ function openTransferDetailModal(transferId) {
       openTransferReceiveModal(t.id);
     };
   }
+  const apprBtn = document.getElementById('transferDetailApprove');
+  const rejBtn = document.getElementById('transferDetailReject');
+  const pending = t.status === 'pending_approval';
+  const canAp = pending && canApproveApprovals();
+  if (apprBtn) {
+    apprBtn.hidden = !canAp;
+    apprBtn.onclick = () => approveStockTransfer(t.id);
+  }
+  if (rejBtn) {
+    rejBtn.hidden = !canAp;
+    rejBtn.onclick = () => {
+      const note = window.prompt('Reason for rejection') || '';
+      rejectStockTransfer(t.id, note);
+    };
+  }
+  if (pending && t.approval_note) {
+    /* show note if any prior */
+  }
+  if (t.submitted_at || t.approval_note) {
+    const extra = document.createElement('div');
+    // append approval meta into body if present
+  }
+  try {
+    if (t.status === 'pending_approval') {
+      const body = document.getElementById('transferDetailBody');
+      if (body) {
+        body.insertAdjacentHTML('afterbegin',
+          '<div style="padding:10px 12px;margin-bottom:12px;border-radius:10px;background:#fffbeb;border:1px solid #fcd34d;font-size:13px">' +
+          '<b>Pending approval</b> — stock is not moved until approved.' +
+          (t.approval_note ? '<div class="client-meta">Note: ' + String(t.approval_note).replace(/</g,'') + '</div>' : '') +
+          '</div>');
+      }
+    }
+  } catch (_) {}
   const printBtn = document.getElementById('transferDetailPrint');
   if (printBtn) printBtn.onclick = () => openTransferPrintOptions(t.id);
   const shareBtn = document.getElementById('transferDetailShare');
@@ -9870,8 +10431,10 @@ function renderTransfersList() {
   const el = document.getElementById('transferList');
   const countEl = document.getElementById('transferCount');
   const inTransit = (db.stockTransfers || []).filter(t => t.status === 'in_transit').length;
+  const pendingAp = (db.stockTransfers || []).filter(t => t.status === 'pending_approval').length;
   if (countEl) {
     countEl.textContent = db.stockTransfers.length + ' transfer' + (db.stockTransfers.length === 1 ? '' : 's') +
+      (pendingAp ? ' · ' + pendingAp + ' pending approval' : '') +
       (inTransit ? ' · ' + inTransit + ' in transit' : '');
   }
   if (!el) return;
@@ -9893,7 +10456,8 @@ function renderTransfersList() {
       const from = db.locations.find(l => l.id === t.from_location_id);
       const to = db.locations.find(l => l.id === t.to_location_id);
       const canRecv = t.status === 'in_transit';
-      const canCancel = t.status === 'draft' || t.status === 'in_transit';
+      const canCancel = t.status === 'draft' || t.status === 'in_transit' || t.status === 'pending_approval';
+      const canApprove = t.status === 'pending_approval' && canApproveApprovals();
       return `<tr>
         <td><b>${t.transfer_number}</b>${t.note ? `<div class="client-meta">${t.note}</div>` : ''}</td>
         <td>${from?.name || '?'} → ${to?.name || '?'}</td>
@@ -9921,7 +10485,9 @@ function renderTransfersList() {
           <button class="button small" type="button" data-print-transfer="${t.id}">Print</button>
           <button class="button small" type="button" data-share-transfer="${t.id}">Share</button>
           ${canRecv ? `<button class="button small" type="button" data-recv-transfer="${t.id}">Receive</button>` : ''}
-          ${t.status === 'in_transit' || t.status === 'draft' ? `<button class="button small" type="button" data-cancel-transfer="${t.id}">Cancel</button>` : ''}
+          ${t.status === 'in_transit' || t.status === 'draft' || t.status === 'pending_approval' ? `<button class="button small" type="button" data-cancel-transfer="${t.id}">Cancel</button>` : ''}
+          ${canApprove ? `<button class="button small primary" type="button" data-approve-transfer="${t.id}">Approve</button>
+          <button class="button small danger" type="button" data-reject-transfer="${t.id}">Reject</button>` : ''}
         </div>
       </div>`;
     }).join('')}</div>`;
@@ -9936,39 +10502,109 @@ function appendInventoryAudit(action, entityType, entityId, summary, meta) {
   return null;
 }
 
+function isApprovalAuditEvent(e) {
+  if (!e) return false;
+  const a = String(e.action || '');
+  const sum = String(e.summary || '');
+  if (/approve|reject|submit_approval/i.test(a)) return true;
+  if (/submitted for approval|approved|rejected/i.test(sum)) return true;
+  if (e.meta && e.meta.approvalAction) return true;
+  return false;
+}
+
+function formatApprovalAuditRow(e) {
+  const action = String(e.action || '');
+  let badge = 'background:#e5e7eb;color:#374151';
+  let label = action || 'event';
+  if (/submit/i.test(action) || /submitted for approval/i.test(String(e.summary || ''))) {
+    badge = 'background:#fef3c7;color:#92400e';
+    label = 'Submitted';
+  } else if (/approve/i.test(action) || /^approved/i.test(String(e.summary || ''))) {
+    badge = 'background:#d1fae5;color:#065f46';
+    label = 'Approved';
+  } else if (/reject/i.test(action) || /rejected/i.test(String(e.summary || ''))) {
+    badge = 'background:#fee2e2;color:#991b1b';
+    label = 'Rejected';
+  }
+  const kind = e.entityType === 'purchase' || /PO |purchase/i.test(String(e.summary || ''))
+    ? 'Purchase'
+    : (e.entityType === 'stock_transfer' || /transfer/i.test(String(e.summary || '')) ? 'Transfer' : (e.entityType || ''));
+  const role = (e.meta && e.meta.actorRole) ? (' · ' + e.meta.actorRole) : '';
+  return `<div style="padding:10px 0;border-bottom:1px solid var(--line);font-size:13px">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;${badge}">${label}</span>
+        <b>${String(e.summary || e.action || '').replace(/</g, '')}</b>
+      </div>
+      <span class="client-meta">${String(e.at || '').replace('T', ' ').slice(0, 16)}</span>
+    </div>
+    <div class="client-meta">${String(e.actorEmail || 'local').replace(/</g, '')}${role} · ${kind}${e.entityId ? ' · ' + String(e.entityId).slice(0, 8) : ''}</div>
+  </div>`;
+}
+
+function renderApprovalAuditList(targetId, entityFilter) {
+  const el = document.getElementById(targetId || 'approvalAuditList');
+  if (!el) return;
+  let events = (db.auditEvents || []).filter(isApprovalAuditEvent);
+  if (entityFilter === 'purchase') {
+    events = events.filter(e =>
+      e.entityType === 'purchase' || /PO |purchase/i.test(String(e.summary || '') + String(e.action || ''))
+    );
+  } else if (entityFilter === 'transfer') {
+    events = events.filter(e =>
+      e.entityType === 'stock_transfer' || /transfer/i.test(String(e.summary || '') + String(e.action || ''))
+    );
+  }
+  events = events.slice(-50).reverse();
+  if (!events.length) {
+    el.innerHTML = '<p class="section-sub">No approval activity yet. Enable approvals in Profile, then submit a transfer or PO.</p>';
+    return;
+  }
+  el.innerHTML = events.map(formatApprovalAuditRow).join('');
+}
+
 function renderInventoryAuditList() {
   const el = document.getElementById('inventoryAuditList');
   if (!el) return;
   const events = (db.auditEvents || [])
-    .filter(e => ['stock_transfer', 'inventory', 'product', 'stock_movement'].includes(e.entityType) ||
-      /transfer|stock|inventory|purchase_receive|adjustment/i.test(String(e.action || '') + String(e.summary || '')))
+    .filter(e =>
+      ['stock_transfer', 'inventory', 'product', 'stock_movement', 'purchase'].includes(e.entityType) ||
+      /transfer|stock|inventory|purchase|adjustment/i.test(String(e.action || '') + String(e.summary || ''))
+    )
     .slice(-40)
     .reverse();
   if (!events.length) {
     el.innerHTML = '<p class="section-sub">No inventory activity logged yet. Transfers and stock changes will appear here.</p>';
     return;
   }
-  el.innerHTML = events.map(e =>
-    `<div style="padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">
+  el.innerHTML = events.map(e => {
+    const appr = isApprovalAuditEvent(e)
+      ? ' <span style="font-size:10px;font-weight:700;color:#92400e">APPROVAL</span>'
+      : '';
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <b>${e.summary || e.action}</b>
+        <b>${String(e.summary || e.action || '').replace(/</g, '')}${appr}</b>
         <span class="client-meta">${String(e.at || '').replace('T', ' ').slice(0, 16)}</span>
       </div>
-      <div class="client-meta">${e.actorEmail || 'local'} · ${e.entityType || ''}${e.entityId ? ' · ' + String(e.entityId).slice(0, 8) : ''}</div>
-    </div>`
-  ).join('');
+      <div class="client-meta">${String(e.actorEmail || 'local').replace(/</g, '')} · ${e.entityType || ''}${e.entityId ? ' · ' + String(e.entityId).slice(0, 8) : ''}</div>
+    </div>`;
+  }).join('');
+  try { renderApprovalAuditList('approvalAuditList'); } catch (_) {}
 }
 
 function purchasesView() {
   ensurePosDb();
+  try { refreshCloudMemberRole(); } catch (_) {}
+  try { applyRoleGates(); } catch (_) {}
   try {
     pullPurchasesBundleFromCloud()
-      .then(() => { renderPurchasesList(); renderSuppliersList(); })
-      .catch(() => { renderPurchasesList(); renderSuppliersList(); });
+      .then(() => { renderPurchasesList(); renderSuppliersList(); renderApprovalAuditList('purchaseApprovalAuditList', 'purchase'); })
+      .catch(() => { renderPurchasesList(); renderSuppliersList(); renderApprovalAuditList('purchaseApprovalAuditList', 'purchase'); });
   } catch {
     renderPurchasesList();
     renderSuppliersList();
   }
+  try { renderApprovalAuditList('purchaseApprovalAuditList', 'purchase'); } catch (_) {}
 }
 
 function renderPurchasesList() {
@@ -10005,11 +10641,15 @@ function renderPurchasesList() {
     <tbody>${list.map(p => {
       const sup = db.suppliers.find(s => s.id === p.supplier_id);
       const canRecv = p.status === 'ordered' || p.status === 'partial' || p.status === 'draft';
-      const canCancel = p.status === 'draft' || p.status === 'ordered';
+      const canCancel = p.status === 'draft' || p.status === 'ordered' || p.status === 'pending_approval';
       const canOrder = p.status === 'draft';
+      const canApprovePo = p.status === 'pending_approval' && canApproveApprovals();
+      const canSubmitPo = p.status === 'draft' && approvalsEnabledPurchases();
       const actions = [
         canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : '',
-        canOrder ? `<button class="button small" type="button" data-order-po="${p.id}">Order</button>` : '',
+        canOrder ? `<button class="button small" type="button" data-order-po="${p.id}">${approvalsEnabledPurchases() ? 'Submit' : 'Order'}</button>` : '',
+        canApprovePo ? `<button class="button small primary" type="button" data-approve-po="${p.id}">Approve</button>` : '',
+        canApprovePo ? `<button class="button small danger" type="button" data-reject-po="${p.id}">Reject</button>` : '',
         canCancel ? `<button class="button small" type="button" data-cancel-po="${p.id}">Cancel</button>` : ''
       ].filter(Boolean).join(' ');
       return `<tr>
@@ -10024,14 +10664,18 @@ function renderPurchasesList() {
     <div class="mobile-list">${list.map(p => {
       const sup = db.suppliers.find(s => s.id === p.supplier_id);
       const canRecv = p.status === 'ordered' || p.status === 'partial' || p.status === 'draft';
-      const canCancel = p.status === 'draft' || p.status === 'ordered';
+      const canCancel = p.status === 'draft' || p.status === 'ordered' || p.status === 'pending_approval';
       const canOrder = p.status === 'draft';
+      const canApprovePo = p.status === 'pending_approval' && canApproveApprovals();
+      const canSubmitPo = p.status === 'draft' && approvalsEnabledPurchases();
       return `<div class="mobile-card">
         <div class="mobile-card-title">${p.purchase_number}</div>
         <div class="mobile-card-sub">${sup?.name || '—'} · ${p.status} · ${formatPosMoney(p.total)}</div>
         <div class="mobile-card-actions">
           ${canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : ''}
-          ${canOrder ? `<button class="button small" type="button" data-order-po="${p.id}">Order</button>` : ''}
+          ${canOrder ? `<button class="button small" type="button" data-order-po="${p.id}">${approvalsEnabledPurchases() ? 'Submit' : 'Order'}</button>` : ''}
+          ${canApprovePo ? `<button class="button small primary" type="button" data-approve-po="${p.id}">Approve</button>
+          <button class="button small danger" type="button" data-reject-po="${p.id}">Reject</button>` : ''}
           ${canCancel ? `<button class="button small" type="button" data-cancel-po="${p.id}">Cancel</button>` : ''}
         </div>
       </div>`;
@@ -10391,7 +11035,7 @@ async function loadMyMemberLocationFromCloud() {
       .eq('user_id', cloud.user.id)
       .maybeSingle();
     if (error) throw error;
-    db.myOrgRole = String(data?.role || '').toLowerCase() || null;
+    setCurrentOrgRole(data?.role || '');
     const cloudLocId = data?.default_location_id;
     if (cloudLocId) {
       // Map cloud location uuid → local id
@@ -12070,6 +12714,7 @@ function profile() {
     console.warn('tax suggestion', e.message || e);
   }
   try { applyFeatureGates(); } catch (e) { console.warn('feature gates', e.message || e); }
+  try { applyRoleGates(); } catch (e) { console.warn('role gates', e.message || e); }
 
   // Referral widgets — always refresh when profile opens (must run even if tax helpers fail)
   refreshProfileReferralUI();
@@ -20152,6 +20797,28 @@ document.addEventListener('click', (e) => {
     markPurchaseOrdered(orderPo.getAttribute('data-order-po'));
     return;
   }
+  const approvePo = e.target.closest('[data-approve-po]');
+  if (approvePo) {
+    approvePurchaseOrder(approvePo.getAttribute('data-approve-po'));
+    return;
+  }
+  const rejectPo = e.target.closest('[data-reject-po]');
+  if (rejectPo) {
+    const note = window.prompt('Reason for rejection') || '';
+    rejectPurchaseOrder(rejectPo.getAttribute('data-reject-po'), note);
+    return;
+  }
+  const approveTr = e.target.closest('[data-approve-transfer]');
+  if (approveTr) {
+    approveStockTransfer(approveTr.getAttribute('data-approve-transfer'));
+    return;
+  }
+  const rejectTr = e.target.closest('[data-reject-transfer]');
+  if (rejectTr) {
+    const note = window.prompt('Reason for rejection') || '';
+    rejectStockTransfer(rejectTr.getAttribute('data-reject-transfer'), note);
+    return;
+  }
   const cancelPo = e.target.closest('[data-cancel-po]');
   if (cancelPo) {
     cancelPurchaseOrder(cancelPo.getAttribute('data-cancel-po'));
@@ -21688,8 +22355,11 @@ async function loadTeamPanel() {
 
     const myId = cloud.user?.id;
     const myMembership = members.find(m => m.user_id === myId);
-    const isOwner = String(myMembership?.role || '').toLowerCase() === 'owner';
-    const isTeamMember = String(myMembership?.role || '').toLowerCase() === 'member';
+    if (myMembership?.role) setCurrentOrgRole(myMembership.role);
+    try { applyRoleGates(); } catch (_) {}
+    const isOwner = currentOrgRole() === 'owner';
+    const isTeamMember = currentOrgRole() === 'member';
+    const isManager = currentOrgRole() === 'manager';
     const canTeam = TEAM_TEST_OVERRIDE ||
       hasFeature('team_collaboration') ||
       String(entitlements?.plan || '').toLowerCase() === 'pro' ||
@@ -21709,7 +22379,7 @@ async function loadTeamPanel() {
         : 'You’re on a shared business workspace.';
     }
 
-    if (inviteForm) inviteForm.hidden = !isOwner;
+    if (inviteForm) inviteForm.hidden = !can('team.manage');
     if (memberNote) memberNote.hidden = isOwner;
 
     if (membersEl) {
@@ -21732,7 +22402,7 @@ async function loadTeamPanel() {
           const email = m.email || 'Member';
           const role = String(m.role || 'member').toLowerCase();
           const isMe = m.user_id === myId;
-          const roleClass = role === 'owner' ? 'team-role is-owner' : 'team-role';
+          const roleClass = role === 'owner' ? 'team-role is-owner' : (role === 'manager' ? 'team-role is-manager' : 'team-role');
           const sub = isMe ? 'You' : '';
           const canRemove = isOwner && !isMe && m.user_id;
           const removeBtn = canRemove
@@ -22875,6 +23545,18 @@ document.addEventListener('click', (e) => {
   }
 }, true);
 
+
+document.addEventListener('click', (e) => {
+  const gated = e.target && e.target.closest && e.target.closest('[data-role-gate]');
+  if (!gated) return;
+  const need = gated.getAttribute('data-role-gate');
+  if (!need || typeof can !== 'function') return;
+  if (can(need)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  try { toast(roleGateMessage(need)); } catch (_) {}
+}, true);
+
 (function wireChatUi() {
   document.getElementById('chatRefreshBtn')?.addEventListener('click', () => {
     chatView().catch(() => {});
@@ -22981,6 +23663,7 @@ try {
   });
 } catch (_) {}
 try {
+  try { applyRoleGates(); } catch (_) {}
   switchTo('dashboard');
 } catch (err) {
   console.error('init switchTo failed', err);
