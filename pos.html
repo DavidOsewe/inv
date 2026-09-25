@@ -658,7 +658,11 @@ async function resolveOrg() {
     if (!rows.length) throw new Error('No organisation found. Open the main app once to finish setup.');
     const match = preferred && rows.find(r => r.organization_id === preferred);
     const team = rows.find(r => String(r.role || '').toLowerCase() === 'member');
-    organizationId = (match || team || rows[0]).organization_id;
+    const chosen = match || team || rows[0];
+    organizationId = chosen.organization_id;
+    try {
+      db.myOrgRole = String(chosen.role || '').toLowerCase() || null;
+    } catch (_) {}
     try { localStorage.setItem(cachedOrgKey(activeUserId), organizationId); } catch {}
     return organizationId;
   } catch (e) {
@@ -701,6 +705,77 @@ async function pullProducts() {
   });
   persistDb();
 }
+
+
+async function pullLocationsAndApplyMember() {
+  if (!organizationId || !isOnline() || !sb) return;
+  try {
+    const { data, error } = await sb.from('locations')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .order('name');
+    if (!error && data) {
+      if (!Array.isArray(db.locations)) db.locations = [];
+      const byLocal = new Map(db.locations.map(l => [l.id, l]));
+      const byCloud = new Map(db.locations.filter(l => l.cloudId).map(l => [l.cloudId, l]));
+      data.forEach(row => {
+        let l = byCloud.get(row.id) || (row.local_id && byLocal.get(row.local_id));
+        if (!l) {
+          l = { id: row.local_id || row.id, cloudId: row.id };
+          db.locations.push(l);
+        }
+        Object.assign(l, {
+          cloudId: row.id,
+          name: row.name,
+          code: row.code,
+          location_type: row.location_type || 'store',
+          is_default: !!row.is_default,
+          active: row.active !== false
+        });
+      });
+    }
+  } catch (e) { console.warn('pull locations', e); }
+
+  // Member assigned store from organization_members.default_location_id
+  try {
+    if (!activeUserId) return;
+    const { data: mem } = await sb
+      .from('organization_members')
+      .select('default_location_id, role')
+      .eq('organization_id', organizationId)
+      .eq('user_id', activeUserId)
+      .maybeSingle();
+    const role = String(mem?.role || '').toLowerCase();
+    try { db.myOrgRole = role || null; } catch (_) {}
+    const cloudLocId = mem?.default_location_id;
+    if (cloudLocId) {
+      let loc = (db.locations || []).find(l => l.cloudId === cloudLocId || l.id === cloudLocId);
+      if (!loc) {
+        try {
+          const { data: cloudLoc } = await sb.from('locations').select('id, name').eq('id', cloudLocId).maybeSingle();
+          if (cloudLoc) {
+            loc = (db.locations || []).find(l =>
+              l.cloudId === cloudLoc.id ||
+              (l.name && cloudLoc.name && l.name.toLowerCase() === String(cloudLoc.name).toLowerCase())
+            );
+            if (loc && !loc.cloudId) loc.cloudId = cloudLoc.id;
+          }
+        } catch (_) {}
+      }
+      if (loc) {
+        db.activeLocationId = loc.id;
+        db.memberDefaultLocationId = loc.id;
+        try {
+          localStorage.setItem('invoicedey-member-location-' + activeUserId, loc.id);
+          localStorage.setItem('invoicedey-active-location-' + activeUserId, loc.id);
+        } catch (_) {}
+      }
+    }
+  } catch (e) { console.warn('member location', e); }
+  persistDb();
+  try { updateLocationLabel(); } catch (_) {}
+}
+
 
 let syncInFlight = false;
 
@@ -768,19 +843,35 @@ function ensurePosLocation() {
   }
   // Prefer member-assigned location, then active, then default
   try {
+    if (db.memberDefaultLocationId && db.locations.some(l => l.id === db.memberDefaultLocationId)) {
+      db.activeLocationId = db.memberDefaultLocationId;
+    }
+  } catch {}
+  try {
     const memberKey = 'invoicedey-member-location-' + (activeUserId || 'anon');
     const mid = localStorage.getItem(memberKey);
     if (mid && db.locations.some(l => l.id === mid)) db.activeLocationId = mid;
   } catch {}
   try {
-    const activeKey = 'invoicedey-active-location-' + (activeUserId || 'anon');
-    const aid = localStorage.getItem(activeKey);
-    if (!db.activeLocationId && aid && db.locations.some(l => l.id === aid)) db.activeLocationId = aid;
+    const role = String(db.myOrgRole || '').toLowerCase();
+    const locked = role === 'member' && db.memberDefaultLocationId;
+    if (!locked) {
+      const activeKey = 'invoicedey-active-location-' + (activeUserId || 'anon');
+      const aid = localStorage.getItem(activeKey);
+      if (!db.activeLocationId && aid && db.locations.some(l => l.id === aid)) db.activeLocationId = aid;
+    }
   } catch {}
   if (!db.activeLocationId || !db.locations.some(l => l.id === db.activeLocationId)) {
     const def = db.locations.find(l => l.is_default) || db.locations[0];
     db.activeLocationId = def ? def.id : null;
   }
+  // Force member lock
+  try {
+    if (String(db.myOrgRole || '').toLowerCase() === 'member' && db.memberDefaultLocationId &&
+        db.locations.some(l => l.id === db.memberDefaultLocationId)) {
+      db.activeLocationId = db.memberDefaultLocationId;
+    }
+  } catch {}
 }
 
 function getActiveLocation() {
@@ -1474,7 +1565,7 @@ function setOnlineUI() {
   updatePendingBadge();
   if (!offline) {
     flushSyncQueue().catch(() => {});
-    pullProducts().then(() => renderProducts()).catch(() => {});
+    pullProducts().then(() => pullLocationsAndApplyMember()).then(() => { renderProducts(); updateLocationLabel(); }).catch(() => {});
   }
 }
 
@@ -1545,6 +1636,7 @@ async function boot() {
     document.getElementById('orgLabel').textContent = (db.profile && db.profile.name) || session.user.email || 'Signed in';
     if (isOnline()) {
       try { await pullProducts(); } catch (e) { console.warn('pull products', e); }
+      try { await pullLocationsAndApplyMember(); } catch (e) { console.warn('pull locations', e); }
     }
   } catch (e) {
     // Offline with cache is OK
@@ -1579,7 +1671,7 @@ document.getElementById('btnBackApp').onclick = () => { location.href = '/app.ht
 document.getElementById('btnSync').onclick = () => {
   if (!isOnline()) { toast('You are offline'); return; }
   flushSyncQueue()
-    .then(() => pullProducts())
+    .then(() => pullProducts()).then(() => pullLocationsAndApplyMember())
     .then(() => { renderProducts(); toast('Sync complete'); })
     .catch(e => toast(e.message || 'Sync failed'));
 };
