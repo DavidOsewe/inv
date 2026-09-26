@@ -9785,8 +9785,9 @@ function readTransferLinesFromEditor() {
 
 function openStockTransferModal() {
   ensurePosDb();
+  try { migrateProductStockToLocations(); } catch (_) {}
   if (db.locations.filter(l => l.active !== false).length < 2) {
-    toast('Add at least two locations first (Products → Locations)');
+    toast('Add at least two locations first (Inventory → Catalog → Locations)');
     openLocationsModal();
     return;
   }
@@ -9848,6 +9849,7 @@ function closeStockTransferModal() {
 
 async function saveStockTransfer() {
   ensurePosDb();
+  try { migrateProductStockToLocations(); } catch (_) {}
   const fromId = document.getElementById('transferFrom').value;
   const toId = document.getElementById('transferTo').value;
   if (!fromId || !toId) { toast('Choose from and to locations'); return; }
@@ -9855,11 +9857,12 @@ async function saveStockTransfer() {
   const lines = readTransferLinesFromEditor();
   if (!lines.length) { toast('Add at least one product line'); return; }
 
-  // Validate stock at source
+  // Validate stock at source (per-store, not global total)
   for (const line of lines) {
     const onHand = locationStockQty(line.product_id, fromId);
     if (onHand < line.qty_sent) {
-      toast(`${line.product_name}: only ${onHand} available at source`);
+      const fromN = db.locations.find(l => l.id === fromId)?.name || 'source';
+      toast((line.product_name || 'Item') + ': only ' + onHand + ' at ' + fromN);
       return;
     }
   }
@@ -9887,36 +9890,11 @@ async function saveStockTransfer() {
   };
 
   if (!needsApproval) {
-    // Ship: deduct from source
-    for (const line of lines) {
-      const { mov } = adjustLocationStock(line.product_id, fromId, -line.qty_sent, {
-        reason: 'transfer_out',
-        reference: transfer_number
-      });
-      mov.transfer_id = tr.id;
-      try {
-        const p = db.products.find(x => x.id === line.product_id);
-        if (p) await pushProductToCloud(p);
-        await pushLocationStockToCloud(line.product_id, fromId);
-        await pushStockMovementToCloud(mov);
-      } catch (e) { console.warn(e); }
-    }
-
-    if (mode === 'quick') {
-      for (const line of lines) {
-        line.qty_received = line.qty_sent;
-        const { mov } = adjustLocationStock(line.product_id, toId, line.qty_sent, {
-          reason: 'transfer_in',
-          reference: transfer_number
-        });
-        mov.transfer_id = tr.id;
-        try {
-          const p = db.products.find(x => x.id === line.product_id);
-          if (p) await pushProductToCloud(p);
-          await pushLocationStockToCloud(line.product_id, toId);
-          await pushStockMovementToCloud(mov);
-        } catch (e) { console.warn(e); }
-      }
+    try {
+      await applyTransferStockMovement(tr, mode);
+    } catch (e) {
+      toast(e.message || String(e));
+      return;
     }
   }
 
@@ -9937,19 +9915,97 @@ async function saveStockTransfer() {
     const fromN = db.locations.find(l => l.id === fromId)?.name || 'from';
     const toN = db.locations.find(l => l.id === toId)?.name || 'to';
     appendInventoryAudit(
-      mode === 'quick' ? 'transfer.completed' : 'transfer.shipped',
+      needsApproval ? 'transfer.submitted' : (mode === 'quick' ? 'transfer.completed' : 'transfer.shipped'),
       'stock_transfer',
       tr.id,
-      (mode === 'quick' ? 'Transfer completed' : 'Transfer shipped') + ' ' + transfer_number + ' · ' + fromN + ' → ' + toN,
-      { mode, lines: lines.length }
+      (needsApproval ? 'Transfer submitted' : (mode === 'quick' ? 'Transfer completed' : 'Transfer shipped')) +
+        ' ' + transfer_number + ' · ' + fromN + ' → ' + toN,
+      { mode, lines: lines.length, status: tr.status }
     );
   } catch (e) {}
   persistDb();
+  try { runLowStockAlertEngine({ silent: true, reason: 'transfer' }); } catch (_) {}
   closeStockTransferModal();
-  toast(mode === 'quick' ? 'Transfer completed' : 'Shipped — in transit');
+  if (needsApproval) {
+    toast('Submitted for manager approval — stock still at source');
+  } else if (mode === 'quick') {
+    toast('Transfer done — stock moved to destination store');
+  } else {
+    toast('Shipped — source reduced; destination receives when goods arrive');
+  }
   transfersView();
-  // Digital process: driver signs after ship (optional but prompted)
-  setTimeout(() => openTransferSignModal(tr.id, 'driver'), 450);
+  try { if (typeof productsView === 'function' && document.getElementById('invPanelCatalog') && !document.getElementById('invPanelCatalog').hidden) productsView(); } catch (_) {}
+  if (!needsApproval) {
+    setTimeout(() => openTransferSignModal(tr.id, 'driver'), 450);
+  }
+}
+
+/**
+ * Apply multi-store stock movement for a transfer document.
+ * - transit: source ↓ only (in transit)
+ * - quick: source ↓ and destination ↑ in one step
+ */
+async function applyTransferStockMovement(tr, mode) {
+  ensurePosDb();
+  try { migrateProductStockToLocations(); } catch (_) {}
+  mode = mode || tr.ship_mode || 'quick';
+  const fromId = tr.from_location_id;
+  const toId = tr.to_location_id;
+  const transfer_number = tr.transfer_number;
+  const lines = tr.lines || [];
+
+  for (const line of lines) {
+    const onHand = locationStockQty(line.product_id, fromId);
+    if (onHand < (Number(line.qty_sent) || 0)) {
+      const fromN = db.locations.find(l => l.id === fromId)?.name || 'source';
+      throw new Error((line.product_name || 'Item') + ': only ' + onHand + ' at ' + fromN);
+    }
+  }
+
+  // Source store decreases
+  for (const line of lines) {
+    const qty = Number(line.qty_sent) || 0;
+    if (qty <= 0) continue;
+    const { mov } = adjustLocationStock(line.product_id, fromId, -qty, {
+      reason: 'transfer_out',
+      reference: transfer_number,
+      note: 'Transfer out → ' + (db.locations.find(l => l.id === toId)?.name || toId)
+    });
+    mov.transfer_id = tr.id;
+    try {
+      const p = db.products.find(x => x.id === line.product_id);
+      if (p) await pushProductToCloud(p);
+      await pushLocationStockToCloud(line.product_id, fromId);
+      await pushStockMovementToCloud(mov);
+    } catch (e) { console.warn(e); }
+  }
+
+  if (mode === 'quick') {
+    for (const line of lines) {
+      const qty = Number(line.qty_sent) || 0;
+      if (qty <= 0) continue;
+      line.qty_received = qty;
+      const { mov } = adjustLocationStock(line.product_id, toId, qty, {
+        reason: 'transfer_in',
+        reference: transfer_number,
+        note: 'Transfer in ← ' + (db.locations.find(l => l.id === fromId)?.name || fromId)
+      });
+      mov.transfer_id = tr.id;
+      try {
+        const p = db.products.find(x => x.id === line.product_id);
+        if (p) await pushProductToCloud(p);
+        await pushLocationStockToCloud(line.product_id, toId);
+        await pushStockMovementToCloud(mov);
+      } catch (e) { console.warn(e); }
+    }
+    tr.status = 'received';
+    tr.shipped_at = tr.shipped_at || new Date().toISOString();
+    tr.received_at = new Date().toISOString();
+  } else {
+    tr.status = 'in_transit';
+    tr.shipped_at = tr.shipped_at || new Date().toISOString();
+  }
+  tr.updated_at = new Date().toISOString();
 }
 
 async function pushStockTransferToCloud(tr) {
@@ -10139,53 +10195,8 @@ function cancelStockTransfer(transferId) {
 
 
 async function executeTransferShip(tr) {
-  const mode = tr.ship_mode || 'ship';
-  const fromId = tr.from_location_id;
-  const toId = tr.to_location_id;
-  const transfer_number = tr.transfer_number;
-  const now = new Date().toISOString();
-  for (const line of (tr.lines || [])) {
-    const onHand = locationStockQty(line.product_id, fromId);
-    if (onHand < line.qty_sent) {
-      throw new Error((line.product_name || 'Item') + ': only ' + onHand + ' available at source');
-    }
-  }
-  for (const line of (tr.lines || [])) {
-    const { mov } = adjustLocationStock(line.product_id, fromId, -line.qty_sent, {
-      reason: 'transfer_out',
-      reference: transfer_number
-    });
-    mov.transfer_id = tr.id;
-    try {
-      const p = db.products.find(x => x.id === line.product_id);
-      if (p) await pushProductToCloud(p);
-      await pushLocationStockToCloud(line.product_id, fromId);
-      await pushStockMovementToCloud(mov);
-    } catch (e) { console.warn(e); }
-  }
-  if (mode === 'quick') {
-    for (const line of (tr.lines || [])) {
-      line.qty_received = line.qty_sent;
-      const { mov } = adjustLocationStock(line.product_id, toId, line.qty_sent, {
-        reason: 'transfer_in',
-        reference: transfer_number
-      });
-      mov.transfer_id = tr.id;
-      try {
-        const p = db.products.find(x => x.id === line.product_id);
-        if (p) await pushProductToCloud(p);
-        await pushLocationStockToCloud(line.product_id, toId);
-        await pushStockMovementToCloud(mov);
-      } catch (e) { console.warn(e); }
-    }
-    tr.status = 'received';
-    tr.shipped_at = now;
-    tr.received_at = now;
-  } else {
-    tr.status = 'in_transit';
-    tr.shipped_at = now;
-  }
-  tr.updated_at = now;
+  // Shared path for approve + direct save
+  await applyTransferStockMovement(tr, tr.ship_mode || 'transit');
 }
 
 async function approveStockTransfer(transferId, note) {
