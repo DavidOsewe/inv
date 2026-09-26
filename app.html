@@ -13571,8 +13571,52 @@ async function pushLocationStockToCloud(productId, locationId) {
   }
 }
 
+/** Per-store qty lines for one product (main-store visibility). */
+function productLocationBreakdown(productId) {
+  ensurePosDb();
+  try { migrateProductStockToLocations(); } catch (_) {}
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  return locs.map(loc => ({
+    location: loc,
+    qty: locationStockQty(productId, loc.id)
+  }));
+}
+
+function productLocationBreakdownHtml(productId, opts) {
+  opts = opts || {};
+  const parts = productLocationBreakdown(productId);
+  if (!parts.length) return '';
+  const showAll = opts.showZeros !== false;
+  const lines = parts
+    .filter(x => showAll || x.qty !== 0)
+    .map(x => {
+      const q = x.qty;
+      const cls = q <= 0 ? 'color:var(--red-text)' : '';
+      const short = String(x.location.name || 'Store').replace(/</g, '');
+      return `<span style="white-space:nowrap;${cls}"><b>${q}</b> ${short}</span>`;
+    });
+  if (!lines.length) return '<span class="client-meta">No stock at any store</span>';
+  return lines.join('<span class="client-meta"> · </span>');
+}
+
+function inventoryNetworkSummary() {
+  ensurePosDb();
+  try { migrateProductStockToLocations(); } catch (_) {}
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  const tracked = (db.products || []).filter(p => p.active !== false && p.track_stock !== false);
+  let totalUnits = 0;
+  const byLoc = locs.map(loc => {
+    let units = 0;
+    tracked.forEach(p => { units += locationStockQty(p.id, loc.id); });
+    totalUnits += units;
+    return { location: loc, units };
+  });
+  return { totalUnits, byLoc, productCount: tracked.length, locationCount: locs.length };
+}
+
 function renderProductsList() {
   ensurePosDb();
+  try { migrateProductStockToLocations(); } catch (_) {}
   const query = (document.getElementById('productSearch')?.value || '').trim().toLowerCase();
   const filter = document.getElementById('productFilter')?.value || 'all';
   const locFilter = document.getElementById('productLocationFilter')?.value || 'all';
@@ -13586,8 +13630,15 @@ function renderProductsList() {
     list = list.filter(p => [p.name, p.sku, p.barcode].some(v => String(v || '').toLowerCase().includes(query)));
   }
   list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+
+  const net = inventoryNetworkSummary();
   const countEl = document.getElementById('productCount');
-  if (countEl) countEl.textContent = db.products.length + ' product' + (db.products.length === 1 ? '' : 's');
+  if (countEl) {
+    countEl.textContent = db.products.length + ' product' + (db.products.length === 1 ? '' : 's') +
+      (net.totalUnits || net.totalUnits === 0
+        ? ' · ' + net.totalUnits + ' unit' + (net.totalUnits === 1 ? '' : 's') + ' across ' + net.locationCount + ' store' + (net.locationCount === 1 ? '' : 's')
+        : '');
+  }
 
   const el = document.getElementById('productList');
   if (!el) return;
@@ -13605,6 +13656,31 @@ function renderProductsList() {
     el.innerHTML = `<div class="empty"><div class="empty-icon">⌕</div><h3>No matching products</h3><p>Try a different search or filter.</p></div>`;
     return;
   }
+
+  // Network summary strip (main store HQ view)
+  const summaryHtml = net.locationCount > 0
+    ? `<div class="insight" style="margin-bottom:14px;padding:12px 14px">
+        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:baseline">
+          <div>
+            <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Total inventory</div>
+            <div style="font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;margin-top:2px">${net.totalUnits}</div>
+            <div class="client-meta">${net.productCount} tracked product${net.productCount === 1 ? '' : 's'} · ${net.locationCount} location${net.locationCount === 1 ? '' : 's'}</div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;max-width:100%">
+            ${net.byLoc.map(x => {
+              const name = String(x.location.name || 'Store').replace(/</g, '');
+              const def = x.location.is_default ? ' · main' : '';
+              return `<div style="padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:var(--panel);min-width:88px">
+                <div class="client-meta" style="font-weight:700">${name}${def}</div>
+                <div style="font-weight:800;font-variant-numeric:tabular-nums;font-size:16px">${x.units}</div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+        <p class="section-sub" style="margin:10px 0 0;font-size:12px">Each product below shows <b>total</b> and a breakdown by store. Filter by location to focus one outlet.</p>
+      </div>`
+    : '';
+
   const todayIso = new Date().toISOString().slice(0, 10);
   const rows = list.map(p => {
     const stock = locFilter === 'all' ? totalProductStock(p.id) : locationStockQty(p.id, locFilter);
@@ -13616,8 +13692,12 @@ function renderProductsList() {
       if (stock <= 0) stockBadge = `<span style="color:var(--red-text)"><b>${stock}</b> · out</span>`;
       else if (low > 0 && stock <= low) stockBadge = `<span style="color:orange"><b>${stock}</b> · low</span>`;
       else stockBadge = `<b>${stock}</b>`;
-      if (locFilter !== 'all' && total !== stock) {
-        stockBadge += `<div class="client-meta">All sites ${total}</div>`;
+      if (locFilter === 'all') {
+        stockBadge = `<div><span class="client-meta">Total</span> ${stockBadge}</div>
+          <div class="client-meta" style="margin-top:4px;line-height:1.45">${productLocationBreakdownHtml(p.id)}</div>`;
+      } else {
+        stockBadge += `<div class="client-meta">All stores ${total}</div>
+          <div class="client-meta" style="margin-top:2px;line-height:1.45">${productLocationBreakdownHtml(p.id)}</div>`;
       }
     } else stockBadge = '—';
     let expiryBadge = '—';
@@ -13640,7 +13720,7 @@ function renderProductsList() {
     return `<tr>
       <td><b>${p.name}</b>${inactive}${p.sku ? `<div class="client-meta">${p.sku}</div>` : ''}</td>
       <td>${formatPosMoney(p.price)}<div class="client-meta">Cost ${formatPosMoney(cost)}</div></td>
-      <td>${stockBadge}<div class="client-meta">${moves} movement${moves === 1 ? '' : 's'} · sold ${velLabel}</div></td>
+      <td>${stockBadge}<div class="client-meta" style="margin-top:4px">${moves} movement${moves === 1 ? '' : 's'} · sold ${velLabel}</div></td>
       <td>${expiryBadge}</td>
       <td><div class="client-actions">
         <button class="button small" type="button" data-edit-product="${p.id}">Edit</button>
@@ -13676,18 +13756,23 @@ function renderProductsList() {
           : `Exp ${p.expiry_date}`;
     }
     const inactive = p.active === false ? ' · inactive' : '';
-    const locHint = (locFilter !== 'all' && p.track_stock !== false && total !== stock)
-      ? ` · all sites ${total}` : '';
+    const breakdown = p.track_stock !== false
+      ? `<div style="margin-top:6px;font-size:12px;line-height:1.45">${productLocationBreakdownHtml(p.id)}</div>`
+      : '';
     return `<div class="mobile-card" role="listitem">
       <div class="mobile-card-top">
         <div>
           <div class="mobile-card-title">${p.name}${inactive}</div>
           <div class="mobile-card-sub">${p.sku ? p.sku + ' · ' : ''}${formatPosMoney(p.price)} · cost ${formatPosMoney(cost)}</div>
         </div>
-        <div style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums;${stockCls}">${stockLabel}</div>
+        <div style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums;${stockCls}">
+          <div class="client-meta" style="font-weight:600">Total</div>
+          ${stockLabel}
+        </div>
       </div>
+      ${breakdown}
       <div class="mobile-card-meta">
-        <span>${moves} movement${moves === 1 ? '' : 's'}${locHint}</span>
+        <span>${moves} movement${moves === 1 ? '' : 's'}${locFilter !== 'all' && total !== stock ? ' · all stores ' + total : ''}</span>
         <span>${cardVelLabel}</span>
         ${expBits ? `<span>${expBits}</span>` : ''}
       </div>
@@ -13699,8 +13784,8 @@ function renderProductsList() {
     </div>`;
   }).join('');
 
-  el.innerHTML = `<table class="table desktop-table">
-    <thead><tr><th>Product</th><th>Price / cost</th><th>Stock</th><th>Expiry</th><th>Actions</th></tr></thead>
+  el.innerHTML = summaryHtml + `<table class="table desktop-table">
+    <thead><tr><th>Product</th><th>Price / cost</th><th>Stock by store</th><th>Expiry</th><th>Actions</th></tr></thead>
     <tbody>${rows.join('')}</tbody>
   </table>
   <div class="mobile-list" role="list">${cards}</div>`;
@@ -13708,25 +13793,42 @@ function renderProductsList() {
 
 function openStockHistory(productId) {
   ensurePosDb();
+  try { migrateProductStockToLocations(); } catch (_) {}
   const p = db.products.find(x => x.id === productId);
   if (!p) return;
+  const total = totalProductStock(p.id);
   document.getElementById('stockHistoryProductName').textContent =
-    p.name + ' · on hand ' + (Number(p.stock_qty) || 0);
+    p.name + ' · total on hand ' + total;
+  const body = document.getElementById('stockHistoryBody');
+  const breakdown = productLocationBreakdown(productId);
+  const breakdownHtml = breakdown.length
+    ? `<div style="margin-bottom:12px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--panel-2,var(--bg))">
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px">By store</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;font-size:13px">
+          ${breakdown.map(x => {
+            const q = x.qty;
+            const cls = q <= 0 ? 'color:var(--red-text)' : '';
+            return `<span style="${cls}"><b>${q}</b> ${String(x.location.name || '').replace(/</g, '')}</span>`;
+          }).join('<span class="client-meta">·</span>')}
+        </div>
+      </div>`
+    : '';
   const moves = (db.stockMovements || [])
     .filter(m => m.product_id === productId)
     .slice()
-    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
-  const body = document.getElementById('stockHistoryBody');
+    .sort((a, b) => String(b.created_at || '').replace('T', ' ').localeCompare(String(a.created_at || '').replace('T', ' ')));
   if (!moves.length) {
-    body.innerHTML = '<p class="section-sub">No movements yet.</p>';
+    body.innerHTML = breakdownHtml + '<p class="section-sub">No movements yet.</p>';
   } else {
-    body.innerHTML = moves.map(m => {
+    body.innerHTML = breakdownHtml + moves.map(m => {
       const qty = Number(m.qty_change) || 0;
       const sign = qty > 0 ? '+' : '';
       const color = qty < 0 ? 'var(--red-text)' : 'var(--green, green)';
+      const loc = m.location_id ? db.locations.find(l => l.id === m.location_id) : null;
+      const locBit = loc ? ' · ' + loc.name : '';
       return `<div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">
         <div>
-          <b>${m.reason || 'move'}</b>
+          <b>${m.reason || 'move'}</b>${locBit}
           <div class="client-meta">${String(m.created_at || '').replace('T', ' ').slice(0, 16)}${m.reference ? ' · ' + m.reference : ''}${m.note ? ' · ' + m.note : ''}</div>
         </div>
         <span style="font-weight:800;color:${color};font-variant-numeric:tabular-nums">${sign}${qty}</span>
