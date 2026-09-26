@@ -11960,7 +11960,10 @@ async function saveStockAdjust() {
     locationStockQty(id, l.id) + ' ' + l.name
   ).join(' · ');
   toast(loc.name + ' now ' + next + ' · Total ' + totalProductStock(id) + (bits ? ' (' + bits + ')' : ''));
-  productsView();
+  // Re-render from local data only — do NOT pull cloud yet (that was wiping store qty)
+  try { fillProductLocationFilter(); } catch (_) {}
+  try { renderProductsList(); } catch (_) {}
+  try { refreshInventoryOpsPanels(); } catch (_) {}
 }
 
 
@@ -12268,6 +12271,11 @@ async function pullProductsFromCloud() {
       p = { id: row.local_id || row.id, cloudId: row.id };
       db.products.push(p);
     }
+    // Keep local location breakdown as source of truth for qty when we already have rows
+    const hasLocRows = (db.locationStock || []).some(s => s.product_id === p.id);
+    const localSum = hasLocRows
+      ? (db.locationStock || []).filter(s => s.product_id === p.id).reduce((n, s) => n + (Number(s.qty) || 0), 0)
+      : null;
     Object.assign(p, {
       cloudId: row.id,
       name: row.name,
@@ -12276,7 +12284,7 @@ async function pullProductsFromCloud() {
       price: Number(row.price) || 0,
       cost: Number(row.cost) || 0,
       currency: row.currency || posCurrency(),
-      stock_qty: Number(row.stock_qty) || 0,
+      stock_qty: localSum != null ? localSum : (Number(row.stock_qty) || 0),
       low_stock_at: Number(row.low_stock_at) || 0,
       optimal_stock: row.optimal_stock != null ? Number(row.optimal_stock) : (p.optimal_stock != null ? p.optimal_stock : null),
       primary_supplier_id: row.primary_supplier_id || p.primary_supplier_id || null,
@@ -12562,6 +12570,7 @@ function locationStockQty(productId, locationId) {
 function adjustLocationStock(productId, locationId, qtyChange, meta) {
   meta = meta || {};
   ensurePosDb();
+  try { repairLocationStockIds(); } catch (_) {}
   try { migrateProductStockToLocations(); } catch (_) {}
   if (!locationId) {
     locationId = resolveStockTargetLocationId();
@@ -12569,17 +12578,23 @@ function adjustLocationStock(productId, locationId, qtyChange, meta) {
   if (!locationId) {
     throw new Error('No store selected for stock change');
   }
+  // Resolve location id if a cloud id was passed
+  const locObj = db.locations.find(l => l.id === locationId || l.cloudId === locationId);
+  if (locObj) locationId = locObj.id;
   let row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === locationId);
   if (!row) {
     row = { product_id: productId, location_id: locationId, qty: 0 };
     db.locationStock.push(row);
   }
   row.qty = (Number(row.qty) || 0) + (Number(qtyChange) || 0);
+  const locName = locObj?.name || (db.locations.find(l => l.id === locationId) || {}).name;
+  if (locName) row.location_name = locName;
   const p = db.products.find(x => x.id === productId);
   if (p) {
     p.stock_qty = totalProductStock(productId);
     p.updated_at = new Date().toISOString();
   }
+  try { persistDb(); } catch (_) {}
   const mov = {
     id: crypto.randomUUID(),
     product_id: productId,
@@ -13394,10 +13409,10 @@ function refreshInventoryOpsPanels() {
 
 function productsView() {
   ensurePosDb();
+  try { repairLocationStockIds(); } catch (_) {}
   try { migrateProductStockToLocations(); } catch (_) {}
   try { runLowStockAlertEngine({ silent: true }); } catch (_) {}
   fillProductLocationFilter();
-  // Phase C: members default to their assigned location view
   try {
     const role = String(db.myOrgRole || '').toLowerCase();
     const myDef = getMyDefaultLocationId();
@@ -13406,11 +13421,17 @@ function productsView() {
       locF.value = myDef;
     }
   } catch (_) {}
+  // Paint local data first so Adjust results are visible immediately
+  try { renderProductsList(); } catch (_) {}
+  try { refreshInventoryOpsPanels(); } catch (_) {}
+  // Soft cloud refresh — must not wipe per-store rows
   try {
-    pullProductsFromCloud()
-      .then(() => pullLocationsFromCloud())
+    pullLocationsFromCloud()
+      .then(() => pullProductsFromCloud())
       .then(async () => {
         try { await applyMemberLocationScope(); } catch (_) {}
+        try { repairLocationStockIds(); } catch (_) {}
+        try { migrateProductStockToLocations(); } catch (_) {}
         fillProductLocationFilter();
         const role = String(db.myOrgRole || currentOrgRole() || '').toLowerCase();
         const myDef = getMyDefaultLocationId();
@@ -13418,11 +13439,52 @@ function productsView() {
         if (role === 'member' && myDef && locF && [...locF.options].some(o => o.value === myDef)) {
           locF.value = myDef;
         }
+        persistDb();
         renderProductsList();
         refreshInventoryOpsPanels();
       })
-      .catch(() => { renderProductsList(); refreshInventoryOpsPanels(); });
-  } catch { renderProductsList(); refreshInventoryOpsPanels(); }
+      .catch(() => { try { renderProductsList(); } catch (_) {} });
+  } catch (_) {}
+}
+
+/** Fix locationStock rows whose location_id no longer matches any location (cloud id remap). */
+function repairLocationStockIds() {
+  ensurePosDb();
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  const locs = db.locations || [];
+  if (!locs.length) return;
+  const byId = new Map(locs.map(l => [l.id, l]));
+  const byCloud = new Map(locs.filter(l => l.cloudId).map(l => [l.cloudId, l]));
+  const byName = new Map(locs.map(l => [String(l.name || '').toLowerCase(), l]));
+  db.locationStock.forEach(row => {
+    if (!row || byId.has(row.location_id)) return;
+    // Try cloud id
+    const viaCloud = byCloud.get(row.location_id);
+    if (viaCloud) {
+      row.location_id = viaCloud.id;
+      return;
+    }
+    // Try location_name stamped on row
+    if (row.location_name) {
+      const viaName = byName.get(String(row.location_name).toLowerCase());
+      if (viaName) row.location_id = viaName.id;
+    }
+  });
+  // Merge duplicate product+location rows after remap
+  const seen = new Map();
+  const keep = [];
+  db.locationStock.forEach(row => {
+    if (!row) return;
+    const k = row.product_id + '@' + row.location_id;
+    if (seen.has(k)) {
+      const prev = seen.get(k);
+      prev.qty = (Number(prev.qty) || 0) + (Number(row.qty) || 0);
+    } else {
+      seen.set(k, row);
+      keep.push(row);
+    }
+  });
+  db.locationStock = keep;
 }
 
 function fillProductLocationFilter() {
