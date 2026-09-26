@@ -13431,6 +13431,12 @@ function refreshInventoryOpsPanels() {
 
 function productsView() {
   ensurePosDb();
+  try {
+    const r = dedupeLocationsByName();
+    if (r && r.merged > 0) {
+      try { toast('Merged ' + r.merged + ' duplicate store name(s) — stock maps fixed'); } catch (_) {}
+    }
+  } catch (_) {}
   try { repairLocationStockIds(); } catch (_) {}
   try { migrateProductStockToLocations(); } catch (_) {}
   try { runLowStockAlertEngine({ silent: true }); } catch (_) {}
@@ -13469,11 +13475,99 @@ function productsView() {
   } catch (_) {}
 }
 
+/**
+ * ROOT CAUSE: multiple "Main store" rows with different UUIDs.
+ * Stock written to one id; UI read another → looked like stores never update.
+ */
+function dedupeLocationsByName() {
+  ensurePosDb();
+  if (!Array.isArray(db.locations) || db.locations.length < 2) return { merged: 0 };
+  const groups = new Map();
+  db.locations.forEach(l => {
+    if (!l || l.active === false) return;
+    const key = String(l.name || '').trim().toLowerCase() || l.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(l);
+  });
+  const idMap = {};
+  let merged = 0;
+  groups.forEach(list => {
+    if (list.length < 2) return;
+    list.sort((a, b) => {
+      if (!!b.cloudId !== !!a.cloudId) return b.cloudId ? 1 : -1;
+      if (!!b.is_default !== !!a.is_default) return b.is_default ? 1 : -1;
+      return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+    const keep = list[0];
+    for (let i = 1; i < list.length; i++) {
+      const drop = list[i];
+      idMap[drop.id] = keep.id;
+      if (drop.cloudId && !keep.cloudId) keep.cloudId = drop.cloudId;
+      if (drop.is_default) keep.is_default = true;
+      drop.active = false;
+      drop._dedupedInto = keep.id;
+      merged++;
+    }
+  });
+  if (!merged) return { merged: 0, idMap };
+
+  (db.products || []).forEach(p => {
+    if (!p.stock_by_location || typeof p.stock_by_location !== 'object') return;
+    const next = {};
+    Object.keys(p.stock_by_location).forEach(lid => {
+      const canon = idMap[lid] || lid;
+      next[canon] = (Number(next[canon]) || 0) + (Number(p.stock_by_location[lid]) || 0);
+    });
+    p.stock_by_location = next;
+    p.stock_qty = Object.values(next).reduce((n, v) => n + (Number(v) || 0), 0);
+  });
+
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  db.locationStock.forEach(row => {
+    if (row && idMap[row.location_id]) row.location_id = idMap[row.location_id];
+  });
+  const seenLs = new Map();
+  const keepLs = [];
+  db.locationStock.forEach(row => {
+    if (!row) return;
+    const k = row.product_id + '@' + row.location_id;
+    if (seenLs.has(k)) {
+      seenLs.get(k).qty = (Number(seenLs.get(k).qty) || 0) + (Number(row.qty) || 0);
+    } else {
+      seenLs.set(k, row);
+      keepLs.push(row);
+    }
+  });
+  db.locationStock = keepLs;
+
+  if (db.activeLocationId && idMap[db.activeLocationId]) db.activeLocationId = idMap[db.activeLocationId];
+  if (db.memberDefaultLocationId && idMap[db.memberDefaultLocationId]) {
+    db.memberDefaultLocationId = idMap[db.memberDefaultLocationId];
+  }
+  (db.stockTransfers || []).forEach(tr => {
+    if (tr.from_location_id && idMap[tr.from_location_id]) tr.from_location_id = idMap[tr.from_location_id];
+    if (tr.to_location_id && idMap[tr.to_location_id]) tr.to_location_id = idMap[tr.to_location_id];
+  });
+  (db.stockMovements || []).forEach(m => {
+    if (m.location_id && idMap[m.location_id]) m.location_id = idMap[m.location_id];
+  });
+  (db.posSales || []).forEach(s => {
+    if (s.location_id && idMap[s.location_id]) s.location_id = idMap[s.location_id];
+  });
+
+  db.locations = db.locations.filter(l => !l._dedupedInto);
+  const defs = db.locations.filter(l => l.is_default && l.active !== false);
+  if (defs.length > 1) defs.slice(1).forEach(l => { l.is_default = false; });
+  try { persistDb(); } catch (_) {}
+  return { merged, idMap };
+}
+
 /** Fix locationStock rows whose location_id no longer matches any location (cloud id remap). */
 function repairLocationStockIds() {
   ensurePosDb();
+  try { dedupeLocationsByName(); } catch (e) { console.warn('dedupeLocationsByName', e); }
   if (!Array.isArray(db.locationStock)) db.locationStock = [];
-  const locs = db.locations || [];
+  const locs = (db.locations || []).filter(l => l.active !== false);
   if (!locs.length) return;
   const byId = new Map(locs.map(l => [l.id, l]));
   const byCloud = new Map(locs.filter(l => l.cloudId).map(l => [l.cloudId, l]));
@@ -13629,11 +13723,21 @@ async function pullLocationsFromCloud() {
   ensurePosDb();
   const byLocal = new Map(db.locations.map(l => [l.id, l]));
   const byCloud = new Map(db.locations.filter(l => l.cloudId).map(l => [l.cloudId, l]));
+  const byName = new Map(
+    db.locations
+      .filter(l => l.active !== false)
+      .map(l => [String(l.name || '').trim().toLowerCase(), l])
+  );
   (data || []).forEach(row => {
-    let l = byCloud.get(row.id) || (row.local_id && byLocal.get(row.local_id));
+    const nameKey = String(row.name || '').trim().toLowerCase();
+    // Match: cloud id → local_id → same name (prevents duplicate "Main store")
+    let l = byCloud.get(row.id)
+      || (row.local_id && byLocal.get(row.local_id))
+      || (nameKey && byName.get(nameKey));
     if (!l) {
       l = { id: row.local_id || row.id, cloudId: row.id };
       db.locations.push(l);
+      if (nameKey) byName.set(nameKey, l);
     }
     Object.assign(l, {
       cloudId: row.id,
@@ -13671,8 +13775,9 @@ async function pullLocationsFromCloud() {
     try { migrateProductStockToLocations(); } catch (_) {}
     db.products.forEach(p => { p.stock_qty = totalProductStock(p.id); });
   } catch (e) { console.warn('location stock pull', e); }
+  try { dedupeLocationsByName(); } catch (_) {}
   try { migrateProductStockToLocations(); } catch (_) {}
-  const def = db.locations.find(l => l.is_default) || db.locations[0];
+  const def = db.locations.find(l => l.is_default && l.active !== false) || db.locations.find(l => l.active !== false);
   if (def && !db.activeLocationId) db.activeLocationId = def.id;
   persistDb();
   try { await applyMemberLocationScope(); } catch (_) {}
