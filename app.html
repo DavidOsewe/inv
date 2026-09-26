@@ -12271,10 +12271,11 @@ async function pullProductsFromCloud() {
       p = { id: row.local_id || row.id, cloudId: row.id };
       db.products.push(p);
     }
-    // Keep local location breakdown as source of truth for qty when we already have rows
-    const hasLocRows = (db.locationStock || []).some(s => s.product_id === p.id);
-    const localSum = hasLocRows
-      ? (db.locationStock || []).filter(s => s.product_id === p.id).reduce((n, s) => n + (Number(s.qty) || 0), 0)
+    // Never wipe local per-store map
+    const savedMap = (p.stock_by_location && typeof p.stock_by_location === 'object')
+      ? { ...p.stock_by_location } : null;
+    const localSum = savedMap
+      ? Object.values(savedMap).reduce((n, v) => n + (Number(v) || 0), 0)
       : null;
     Object.assign(p, {
       cloudId: row.id,
@@ -12293,7 +12294,9 @@ async function pullProductsFromCloud() {
       active: row.active !== false,
       updated_at: row.updated_at
     });
+    if (savedMap) p.stock_by_location = savedMap;
   });
+  try { migrateProductStockToLocations(); } catch (_) {}
   persistDb();
 }
 
@@ -12475,9 +12478,17 @@ function renderDashboardLowStock() {
 
 
 /**
- * Every product × active location gets a stock row.
- * Unallocated product.stock_qty lands on the default (main) store — never faked onto every store.
+ * Primary source of truth for multi-store qty: product.stock_by_location = { [locationId]: number }
+ * Secondary mirror: db.locationStock[] (for cloud sync / older code paths)
  */
+function ensureProductStockMap(p) {
+  if (!p) return {};
+  if (!p.stock_by_location || typeof p.stock_by_location !== 'object') {
+    p.stock_by_location = {};
+  }
+  return p.stock_by_location;
+}
+
 function ensureAllLocationStockRows() {
   ensurePosDb();
   if (!Array.isArray(db.locationStock)) db.locationStock = [];
@@ -12485,47 +12496,60 @@ function ensureAllLocationStockRows() {
   if (!locs.length) return;
   (db.products || []).forEach(p => {
     if (!p || p.track_stock === false) return;
+    const map = ensureProductStockMap(p);
     locs.forEach(loc => {
-      if (!db.locationStock.some(s => s.product_id === p.id && s.location_id === loc.id)) {
-        db.locationStock.push({ product_id: p.id, location_id: loc.id, qty: 0 });
+      if (map[loc.id] == null) map[loc.id] = 0;
+      let row = db.locationStock.find(s => s.product_id === p.id && s.location_id === loc.id);
+      if (!row) {
+        row = { product_id: p.id, location_id: loc.id, qty: Number(map[loc.id]) || 0 };
+        db.locationStock.push(row);
+      } else {
+        // Prefer map if it has been written; else keep row
+        if (map[loc.id] != null) row.qty = Number(map[loc.id]) || 0;
+        else map[loc.id] = Number(row.qty) || 0;
       }
     });
   });
 }
 
-/**
- * Ensure product.stock_qty is allocated to locations.
- * Bug fix: stock lived only on product total → every store looked the same or sales hit 0-base rows.
- */
 function migrateProductStockToLocations() {
   ensurePosDb();
   if (!Array.isArray(db.locationStock)) db.locationStock = [];
   const locs = (db.locations || []).filter(l => l.active !== false);
   if (!locs.length) return;
   const def = locs.find(l => l.is_default) || locs[0];
-  ensureAllLocationStockRows();
   (db.products || []).forEach(p => {
     if (!p || p.track_stock === false) return;
-    const rows = db.locationStock.filter(s => s.product_id === p.id && locs.some(l => l.id === s.location_id));
-    const sum = rows.reduce((n, s) => n + (Number(s.qty) || 0), 0);
-    const total = Number(p.stock_qty) || 0;
-    // Orphan product total (no qty on any store) → main store
-    if (Math.abs(sum) < 0.0001 && Math.abs(total) > 0.0001) {
-      let row = rows.find(s => s.location_id === def.id);
-      if (!row) {
-        row = { product_id: p.id, location_id: def.id, qty: 0 };
-        db.locationStock.push(row);
-      }
-      row.qty = total;
-      p.stock_qty = total;
-    } else {
-      // Location rows are source of truth
-      p.stock_qty = sum;
+    const map = ensureProductStockMap(p);
+    // Seed map from locationStock rows if map empty
+    let mapSum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
+    if (Math.abs(mapSum) < 0.0001) {
+      const rows = (db.locationStock || []).filter(s => s.product_id === p.id);
+      rows.forEach(s => {
+        if (s.location_id) map[s.location_id] = Number(s.qty) || 0;
+      });
+      mapSum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
     }
+    const total = Number(p.stock_qty) || 0;
+    // Orphan total with no per-store qty → put on main
+    if (Math.abs(mapSum) < 0.0001 && Math.abs(total) > 0.0001 && def) {
+      map[def.id] = total;
+      mapSum = total;
+    }
+    // Sync locationStock array from map
+    locs.forEach(loc => {
+      if (map[loc.id] == null) map[loc.id] = 0;
+      let row = db.locationStock.find(s => s.product_id === p.id && s.location_id === loc.id);
+      if (!row) {
+        db.locationStock.push({ product_id: p.id, location_id: loc.id, qty: Number(map[loc.id]) || 0 });
+      } else {
+        row.qty = Number(map[loc.id]) || 0;
+      }
+    });
+    p.stock_qty = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
   });
 }
 
-/** Which store should Adjust / product form hit? Catalog filter wins when set. */
 function resolveStockTargetLocationId() {
   ensurePosDb();
   const filter = document.getElementById('productLocationFilter')?.value || 'all';
@@ -12539,61 +12563,59 @@ function resolveStockTargetLocationId() {
 
 function totalProductStock(productId) {
   ensurePosDb();
-  try { ensureAllLocationStockRows(); } catch (_) {}
-  const locs = (db.locations || []).filter(l => l.active !== false);
-  const locIds = new Set(locs.map(l => l.id));
-  const rows = (db.locationStock || []).filter(s => s.product_id === productId && locIds.has(s.location_id));
-  if (rows.length) {
-    return rows.reduce((n, s) => n + (Number(s.qty) || 0), 0);
-  }
   const p = (db.products || []).find(x => x.id === productId);
-  return Number(p?.stock_qty) || 0;
+  if (!p) return 0;
+  const map = ensureProductStockMap(p);
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  if (locs.length) {
+    return locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
+  }
+  return Number(p.stock_qty) || 0;
 }
 
 function locationStockQty(productId, locationId) {
   ensurePosDb();
-  try { migrateProductStockToLocations(); } catch (_) {}
+  const p = (db.products || []).find(x => x.id === productId);
+  if (!p) return 0;
   const lid = locationId || resolveStockTargetLocationId() || db.activeLocationId;
-  if (!lid) {
-    const p = db.products.find(x => x.id === productId);
-    return Number(p?.stock_qty) || 0;
+  if (!lid) return Number(p.stock_qty) || 0;
+  const map = ensureProductStockMap(p);
+  if (map[lid] != null && map[lid] !== '') return Number(map[lid]) || 0;
+  // One-time fallback from locationStock row
+  const row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === lid);
+  if (row) {
+    map[lid] = Number(row.qty) || 0;
+    return map[lid];
   }
-  let row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === lid);
-  if (!row) {
-    // Create explicit zero row so UI and next write are consistent
-    row = { product_id: productId, location_id: lid, qty: 0 };
-    db.locationStock.push(row);
-  }
-  return Number(row.qty) || 0;
+  map[lid] = 0;
+  return 0;
 }
 
 function adjustLocationStock(productId, locationId, qtyChange, meta) {
   meta = meta || {};
   ensurePosDb();
-  try { repairLocationStockIds(); } catch (_) {}
-  try { migrateProductStockToLocations(); } catch (_) {}
-  if (!locationId) {
-    locationId = resolveStockTargetLocationId();
-  }
-  if (!locationId) {
-    throw new Error('No store selected for stock change');
-  }
-  // Resolve location id if a cloud id was passed
+  if (!locationId) locationId = resolveStockTargetLocationId();
+  if (!locationId) throw new Error('No store selected for stock change');
   const locObj = db.locations.find(l => l.id === locationId || l.cloudId === locationId);
   if (locObj) locationId = locObj.id;
-  let row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === locationId);
-  if (!row) {
-    row = { product_id: productId, location_id: locationId, qty: 0 };
-    db.locationStock.push(row);
-  }
-  row.qty = (Number(row.qty) || 0) + (Number(qtyChange) || 0);
-  const locName = locObj?.name || (db.locations.find(l => l.id === locationId) || {}).name;
-  if (locName) row.location_name = locName;
   const p = db.products.find(x => x.id === productId);
-  if (p) {
-    p.stock_qty = totalProductStock(productId);
-    p.updated_at = new Date().toISOString();
+  if (!p) throw new Error('Product not found');
+  const map = ensureProductStockMap(p);
+  const prev = Number(map[locationId]) || 0;
+  const next = prev + (Number(qtyChange) || 0);
+  map[locationId] = next;
+  // Mirror to locationStock
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  let row = db.locationStock.find(s => s.product_id === productId && s.location_id === locationId);
+  if (!row) {
+    row = { product_id: productId, location_id: locationId, qty: next };
+    db.locationStock.push(row);
+  } else {
+    row.qty = next;
   }
+  if (locObj?.name) row.location_name = locObj.name;
+  p.stock_qty = totalProductStock(productId);
+  p.updated_at = new Date().toISOString();
   try { persistDb(); } catch (_) {}
   const mov = {
     id: crypto.randomUUID(),
