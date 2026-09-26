@@ -13660,22 +13660,50 @@ async function pushLocationStockToCloud(productId, locationId) {
   if (!cloud?.client || !cloud?.organizationId) return;
   const p = db.products.find(x => x.id === productId);
   const loc = db.locations.find(x => x.id === locationId);
-  if (!p?.cloudId || !loc?.cloudId) return;
+  if (!p) return;
+  // Ensure product + location have cloud ids
+  if (!p.cloudId) {
+    try { await pushProductToCloud(p); } catch (e) { console.warn('push product before loc stock', e); }
+  }
+  if (!loc?.cloudId) {
+    try { await pushLocationToCloud(loc); } catch (e) { console.warn('push location before loc stock', e); }
+  }
+  if (!p.cloudId || !loc?.cloudId) {
+    console.warn('skip location stock push — missing cloudId', { product: p.name, loc: loc?.name });
+    return;
+  }
   const qty = locationStockQty(productId, locationId);
-  const { data: existing } = await cloud.client.from('product_location_stock')
+  const { data: existing, error: selErr } = await cloud.client.from('product_location_stock')
     .select('id')
     .eq('product_id', p.cloudId)
     .eq('location_id', loc.cloudId)
     .maybeSingle();
+  if (selErr) {
+    // Table missing or RLS — surface once so we know SQL is the issue
+    console.warn('product_location_stock select', selErr.message || selErr);
+    if (/relation|does not exist|schema cache/i.test(String(selErr.message || ''))) {
+      try { toast('SQL missing: run product_location_stock_v1.sql in Supabase'); } catch (_) {}
+    }
+    return;
+  }
   if (existing?.id) {
-    await cloud.client.from('product_location_stock').update({ qty, updated_at: new Date().toISOString() }).eq('id', existing.id);
+    const { error } = await cloud.client.from('product_location_stock')
+      .update({ qty, updated_at: new Date().toISOString() })
+      .eq('id', existing.id);
+    if (error) console.warn('product_location_stock update', error.message || error);
   } else {
-    await cloud.client.from('product_location_stock').insert({
+    const { error } = await cloud.client.from('product_location_stock').insert({
       organization_id: cloud.organizationId,
       product_id: p.cloudId,
       location_id: loc.cloudId,
       qty
     });
+    if (error) {
+      console.warn('product_location_stock insert', error.message || error);
+      if (/relation|does not exist|schema cache/i.test(String(error.message || ''))) {
+        try { toast('SQL missing: run product_location_stock_v1.sql in Supabase'); } catch (_) {}
+      }
+    }
   }
 }
 
