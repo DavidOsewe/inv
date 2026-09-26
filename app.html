@@ -11800,15 +11800,42 @@ async function saveProductFromModal() {
     const prevStock = Number(p.stock_qty) || 0;
     Object.assign(p, { name, sku, barcode, price, cost: Number.isNaN(cost) ? 0 : cost, stock_qty: Number.isNaN(stock) ? prevStock : stock, low_stock_at: low, optimal_stock, primary_supplier_id, expiry_date, track_stock, active, currency, updated_at: now });
     if (!Number.isNaN(stock) && stock !== prevStock) {
-      db.stockMovements.push({
-        id: crypto.randomUUID(),
-        product_id: id,
-        qty_change: stock - prevStock,
-        reason: 'adjustment',
-        reference: null,
-        note: 'Edited from product form',
-        created_at: now
-      });
+      // Apply form stock change to the active/default location so stores stay accurate
+      try {
+        const loc = (typeof getActiveLocation === 'function' && getActiveLocation())
+          || (db.locations || []).find(l => l.is_default)
+          || (db.locations || [])[0];
+        if (loc && typeof adjustLocationStock === 'function') {
+          const atLoc = locationStockQty(id, loc.id);
+          const delta = stock - atLoc;
+          // Set product total via location: adjust so this location absorbs the form delta
+          const formDelta = stock - prevStock;
+          adjustLocationStock(id, loc.id, formDelta, {
+            reason: 'adjustment',
+            note: 'Edited from product form'
+          });
+        } else {
+          db.stockMovements.push({
+            id: crypto.randomUUID(),
+            product_id: id,
+            qty_change: stock - prevStock,
+            reason: 'adjustment',
+            reference: null,
+            note: 'Edited from product form',
+            created_at: now
+          });
+        }
+      } catch (_) {
+        db.stockMovements.push({
+          id: crypto.randomUUID(),
+          product_id: id,
+          qty_change: stock - prevStock,
+          reason: 'adjustment',
+          reference: null,
+          note: 'Edited from product form',
+          created_at: now
+        });
+      }
     }
     try { await pushProductToCloud(p); } catch (e) { console.warn(e); }
     toast('Product updated');
@@ -11829,15 +11856,37 @@ async function saveProductFromModal() {
     };
     db.products.push(product);
     if (product.stock_qty) {
-      db.stockMovements.push({
-        id: crypto.randomUUID(),
-        product_id: product.id,
-        qty_change: product.stock_qty,
-        reason: 'opening',
-        reference: null,
-        note: 'Opening stock',
-        created_at: now
-      });
+      try {
+        const loc = (typeof getActiveLocation === 'function' && getActiveLocation())
+          || (db.locations || []).find(l => l.is_default)
+          || (db.locations || [])[0];
+        if (loc && typeof adjustLocationStock === 'function') {
+          adjustLocationStock(product.id, loc.id, product.stock_qty, {
+            reason: 'opening',
+            note: 'Opening stock'
+          });
+        } else {
+          db.stockMovements.push({
+            id: crypto.randomUUID(),
+            product_id: product.id,
+            qty_change: product.stock_qty,
+            reason: 'opening',
+            reference: null,
+            note: 'Opening stock',
+            created_at: now
+          });
+        }
+      } catch (_) {
+        db.stockMovements.push({
+          id: crypto.randomUUID(),
+          product_id: product.id,
+          qty_change: product.stock_qty,
+          reason: 'opening',
+          reference: null,
+          note: 'Opening stock',
+          created_at: now
+        });
+      }
     }
     try { await pushProductToCloud(product); } catch (e) { console.warn(e); }
     toast('Product added');
@@ -12404,6 +12453,95 @@ function renderDashboardLowStock() {
   });
 }
 
+
+/**
+ * Ensure product.stock_qty is allocated to locations.
+ * Bug fix: stock lived only on product total → every store looked the same or sales hit 0-base rows.
+ */
+function migrateProductStockToLocations() {
+  ensurePosDb();
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  if (!locs.length) return;
+  const def = locs.find(l => l.is_default) || locs[0];
+  (db.products || []).forEach(p => {
+    if (!p || p.track_stock === false) return;
+    const rows = db.locationStock.filter(s => s.product_id === p.id);
+    const sum = rows.reduce((n, s) => n + (Number(s.qty) || 0), 0);
+    const total = Number(p.stock_qty) || 0;
+    if (!rows.length) {
+      if (total !== 0) {
+        db.locationStock.push({ product_id: p.id, location_id: def.id, qty: total });
+      }
+    } else if (Math.abs(sum) < 0.0001 && Math.abs(total) > 0.0001) {
+      let row = rows.find(s => s.location_id === def.id);
+      if (!row) {
+        row = { product_id: p.id, location_id: def.id, qty: 0 };
+        db.locationStock.push(row);
+      }
+      row.qty = total;
+    } else {
+      p.stock_qty = sum;
+    }
+  });
+}
+
+function totalProductStock(productId) {
+  ensurePosDb();
+  const rows = (db.locationStock || []).filter(s => s.product_id === productId);
+  if (rows.length) {
+    return rows.reduce((n, s) => n + (Number(s.qty) || 0), 0);
+  }
+  const p = (db.products || []).find(x => x.id === productId);
+  return Number(p?.stock_qty) || 0;
+}
+
+function locationStockQty(productId, locationId) {
+  ensurePosDb();
+  try { migrateProductStockToLocations(); } catch (_) {}
+  const lid = locationId || (typeof getActiveLocation === 'function' ? getActiveLocation()?.id : null) || db.activeLocationId;
+  if (!lid) {
+    const p = db.products.find(x => x.id === productId);
+    return Number(p?.stock_qty) || 0;
+  }
+  const row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === lid);
+  if (row) return Number(row.qty) || 0;
+  const locCount = (db.locations || []).filter(l => l.active !== false).length;
+  // Multi-store: no row = zero at that store (do NOT show global total)
+  if (locCount > 1) return 0;
+  const p = db.products.find(x => x.id === productId);
+  return Number(p?.stock_qty) || 0;
+}
+
+function adjustLocationStock(productId, locationId, qtyChange, meta) {
+  meta = meta || {};
+  ensurePosDb();
+  try { migrateProductStockToLocations(); } catch (_) {}
+  let row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === locationId);
+  if (!row) {
+    row = { product_id: productId, location_id: locationId, qty: 0 };
+    db.locationStock.push(row);
+  }
+  row.qty = (Number(row.qty) || 0) + (Number(qtyChange) || 0);
+  const p = db.products.find(x => x.id === productId);
+  if (p) {
+    p.stock_qty = totalProductStock(productId);
+    p.updated_at = new Date().toISOString();
+  }
+  const mov = {
+    id: crypto.randomUUID(),
+    product_id: productId,
+    location_id: locationId,
+    qty_change: Number(qtyChange) || 0,
+    reason: meta.reason || 'adjustment',
+    reference: meta.reference || null,
+    note: meta.note || null,
+    created_at: new Date().toISOString()
+  };
+  if (!Array.isArray(db.stockMovements)) db.stockMovements = [];
+  db.stockMovements.push(mov);
+  return { row, mov, product: p };
+}
 
 /** Weighted average cost after receiving qty at unitCost onto existing on-hand. */
 function applyWeightedAverageCost(product, qtyReceived, unitCost, onHandBefore) {
@@ -13204,6 +13342,7 @@ function refreshInventoryOpsPanels() {
 
 function productsView() {
   ensurePosDb();
+  try { migrateProductStockToLocations(); } catch (_) {}
   try { runLowStockAlertEngine({ silent: true }); } catch (_) {}
   fillProductLocationFilter();
   // Phase C: members default to their assigned location view
@@ -13388,8 +13527,10 @@ async function pullLocationsFromCloud() {
       }
       s.qty = Number(row.qty) || 0;
     });
+    try { migrateProductStockToLocations(); } catch (_) {}
     db.products.forEach(p => { p.stock_qty = totalProductStock(p.id); });
   } catch (e) { console.warn('location stock pull', e); }
+  try { migrateProductStockToLocations(); } catch (_) {}
   const def = db.locations.find(l => l.is_default) || db.locations[0];
   if (def && !db.activeLocationId) db.activeLocationId = def.id;
   persistDb();
