@@ -2264,6 +2264,45 @@ input:focus:not(:focus-visible) {
   color: var(--text) !important;
   box-shadow: var(--shadow) !important;
 }
+/* Inventory spine tabs */
+.inv-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 4px;
+  background: var(--panel-2, var(--bg));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.inv-tab {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  min-height: var(--touch-min);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.inv-tab:hover { color: var(--text); background: var(--panel); }
+.inv-tab.primary,
+.inv-tab[aria-selected="true"] {
+  background: var(--panel) !important;
+  color: var(--text) !important;
+  box-shadow: var(--shadow);
+}
+.inv-panel { min-height: 120px; }
+.inv-panel > .section-head { margin-top: 0; }
+@media (max-width: 640px) {
+  .inv-tabs { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .inv-tab { flex: 0 0 auto; }
+}
 .books-subnav {
   display: flex;
   flex-wrap: wrap;
@@ -2834,9 +2873,7 @@ input:focus:not(:focus-visible) {
       <button data-view="clients"><span>♙</span> Clients</button>
 
       <div class="nav-section">Stock &amp; shops</div>
-      <button data-view="products"><span>■</span> Products <span class="nav-badge" id="productsNavBadge" hidden></span></button>
-      <button data-view="purchases"><span>□</span> Purchases</button>
-      <button data-view="transfers"><span>⇄</span> Transfers</button>
+      <button data-view="inventory"><span>■</span> Inventory <span class="nav-badge" id="inventoryNavBadge" hidden></span></button>
       <a class="nav-link-pos" href="/pos.html"><span>▣</span> POS</a>
 
       <div class="nav-section">Books</div>
@@ -2958,7 +2995,47 @@ input:focus:not(:focus-visible) {
       <div id="invoiceList"></div>
     </section>
 
-    <section class="view" id="products">
+    <section class="view" id="inventory">
+      <div class="section-head" style="margin-bottom:8px">
+        <div>
+          <h2>Inventory</h2>
+          <div class="client-count" id="inventoryFlowHint">Buy once → move to shops → sell → count weekly</div>
+        </div>
+      </div>
+      <div class="inv-tabs" id="inventoryTabs" role="tablist" aria-label="Inventory">
+        <button type="button" class="inv-tab primary" role="tab" data-inv-tab="today" aria-selected="true">Today <span class="nav-badge" id="invTodayBadge" hidden></span></button>
+        <button type="button" class="inv-tab" role="tab" data-inv-tab="move">Move</button>
+        <button type="button" class="inv-tab" role="tab" data-inv-tab="buy">Buy</button>
+        <button type="button" class="inv-tab" role="tab" data-inv-tab="count">Count</button>
+        <button type="button" class="inv-tab" role="tab" data-inv-tab="catalog">Catalog</button>
+      </div>
+      <div id="invPanelToday" class="inv-panel" data-inv-panel="today"></div>
+      <div id="invPanelMove" class="inv-panel" data-inv-panel="move" hidden></div>
+      <div id="invPanelBuy" class="inv-panel" data-inv-panel="buy" hidden></div>
+      <div id="invPanelCount" class="inv-panel" data-inv-panel="count" hidden>
+        <div class="insight" style="margin-bottom:14px">
+          <h3 style="margin:0 0 6px;font-size:15px">Stock count</h3>
+          <p class="section-sub" style="margin:0 0 12px;max-width:480px">
+            Count what is on the shelf, then post differences. This is the correct way to fix stock — not editing product numbers by hand.
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="button primary" type="button" id="invCountStart">Start count</button>
+            <button class="button" type="button" id="invCountLocations">Manage locations</button>
+          </div>
+        </div>
+        <div class="insight">
+          <h3 style="margin:0 0 6px;font-size:14px">How counts work</h3>
+          <ol class="steps" style="margin:0;padding-left:18px;font-size:13px;line-height:1.5">
+            <li>Pick the store you are standing in</li>
+            <li>Enter counted qty (leave blank to skip)</li>
+            <li>Post only the differences — system adjusts with reason “stock count”</li>
+          </ol>
+        </div>
+      </div>
+      <div id="invPanelCatalog" class="inv-panel" data-inv-panel="catalog" hidden></div>
+    </section>
+
+    <section class="view" id="products" hidden aria-hidden="true">
       <div class="section-head">
         <div>
           <h2>Products</h2>
@@ -3017,12 +3094,57 @@ input:focus:not(:focus-visible) {
       </div>
     </div>
 
-    <section class="view" id="transfers">
+
+    <section class="view" id="replenish" hidden aria-hidden="true">
       <div class="section-head">
         <div>
-          <h2>Stock transfers</h2>
-          <div class="client-count" id="transferCount">Move stock between warehouses and outlets</div>
-          <p class="section-sub" id="transferFlowHint" style="margin:6px 0 0;max-width:520px">Create a transfer → manager approves (if required) → destination receives the goods.</p>
+          <h2>Today</h2>
+          <div class="client-count" id="replenishCount">What needs action — transfer first, then buy</div>
+          <p class="section-sub" style="margin:6px 0 0;max-width:560px">
+            Clear this queue daily. Move surplus from warehouse or other stores before ordering from suppliers.
+          </p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="replenishDays" class="button small" title="Sales window">
+            <option value="7">7 days sales</option>
+            <option value="14" selected>14 days sales</option>
+            <option value="30">30 days sales</option>
+          </select>
+          <button class="button" type="button" id="replenishRefresh">Refresh</button>
+        </div>
+      </div>
+      <div class="client-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <div class="search-bar" style="margin:0;flex:1;max-width:280px">
+          <input type="search" id="replenishSearch" placeholder="Search product…" autocomplete="off">
+        </div>
+        <select id="replenishLocationFilter" class="button small" style="min-width:140px">
+          <option value="all">All locations</option>
+        </select>
+        <div id="replenishChips" style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="button small primary" data-replenish-filter="needs">Needs action</button>
+          <button type="button" class="button small" data-replenish-filter="transfer">Transfers</button>
+          <button type="button" class="button small" data-replenish-filter="po">Purchase orders</button>
+          <button type="button" class="button small" data-replenish-filter="all">All gaps</button>
+        </div>
+      </div>
+      <div id="replenishSummary" class="insight" style="margin:12px 0;display:none"></div>
+      <div id="replenishList"></div>
+      <div id="replenishBulkBar" hidden style="position:sticky;bottom:12px;z-index:5;margin-top:12px;padding:12px 14px;border-radius:14px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow-lg);display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+        <span id="replenishBulkLabel" class="client-meta" style="font-weight:700">0 selected</span>
+        <span style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="button" type="button" id="replenishBulkClear">Clear</button>
+          <button class="button primary" type="button" id="replenishBulkTransfer">Create transfer</button>
+          <button class="button" type="button" id="replenishBulkPo">Create PO</button>
+        </span>
+      </div>
+    </section>
+
+    <section class="view" id="transfers" hidden aria-hidden="true">
+      <div class="section-head">
+        <div>
+          <h2>Move stock</h2>
+          <div class="client-count" id="transferCount">Between warehouses and outlets</div>
+          <p class="section-sub" id="transferFlowHint" style="margin:6px 0 0;max-width:520px">Create → manager approves (if required) → destination receives.</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="button primary" type="button" id="btnNewTransfer" data-role-gate="transfers.create">+ Transfer</button>
@@ -3175,11 +3297,11 @@ input:focus:not(:focus-visible) {
       </div>
     </div>
 
-    <section class="view" id="purchases">
+    <section class="view" id="purchases" hidden aria-hidden="true">
       <div class="section-head">
         <div>
-          <h2>Purchases</h2>
-          <div class="client-count" id="purchaseCount">Orders, receiving &amp; suppliers</div>
+          <h2>Buy stock</h2>
+          <div class="client-count" id="purchaseCount">Suppliers, orders &amp; receiving</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="button" type="button" id="btnAddSupplier" data-role-gate="purchases.create">+ Supplier</button>
@@ -4198,9 +4320,7 @@ input:focus:not(:focus-visible) {
     </div>
     <div class="more-sheet-title">Stock &amp; shops</div>
     <div class="more-sheet-grid">
-      <button type="button" data-more-view="products"><span>■</span>Products <span class="nav-badge" id="productsMoreBadge" hidden></span></button>
-      <button type="button" data-more-view="purchases"><span>□</span>Purchases</button>
-      <button type="button" data-more-view="transfers"><span>⇄</span>Transfers</button>
+      <button type="button" data-more-view="inventory"><span>■</span>Inventory <span class="nav-badge" id="inventoryMoreBadge" hidden></span></button>
       <a href="/pos.html"><span>▣</span>POS</a>
     </div>
     <div class="more-sheet-title">Books &amp; account</div>
@@ -7670,8 +7790,104 @@ function updateHeaderActions(view) {
   if (newBtn) newBtn.style.display = isEditor ? 'none' : '';
 }
 
+/** Inventory spine: one nav entry, five jobs. */
+const INV_TAB_TO_LEGACY = {
+  today: 'replenish',
+  move: 'transfers',
+  buy: 'purchases',
+  catalog: 'products',
+  count: null
+};
+const LEGACY_TO_INV_TAB = {
+  replenish: 'today',
+  transfers: 'move',
+  purchases: 'buy',
+  products: 'catalog'
+};
+let _invTab = 'today';
+let _invMounted = false;
+
+function ensureInventoryMounted() {
+  if (_invMounted) return;
+  const pairs = [
+    ['replenish', 'invPanelToday'],
+    ['transfers', 'invPanelMove'],
+    ['purchases', 'invPanelBuy'],
+    ['products', 'invPanelCatalog']
+  ];
+  pairs.forEach(([srcId, destId]) => {
+    const src = document.getElementById(srcId);
+    const dest = document.getElementById(destId);
+    if (!src || !dest) return;
+    while (src.firstChild) dest.appendChild(src.firstChild);
+  });
+  _invMounted = true;
+}
+
+function setInventoryTab(tab) {
+  if (!INV_TAB_TO_LEGACY.hasOwnProperty(tab)) tab = 'today';
+  _invTab = tab;
+  document.querySelectorAll('#inventoryTabs .inv-tab').forEach(btn => {
+    const on = btn.getAttribute('data-inv-tab') === tab;
+    btn.classList.toggle('primary', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('#inventory .inv-panel').forEach(panel => {
+    const on = panel.getAttribute('data-inv-panel') === tab;
+    panel.hidden = !on;
+  });
+}
+
+function inventoryView(tab) {
+  ensurePosDb();
+  ensureInventoryMounted();
+  setInventoryTab(tab || _invTab || 'today');
+  const t = _invTab;
+  try {
+    if (t === 'today') replenishView();
+    else if (t === 'move') transfersView();
+    else if (t === 'buy') purchasesView();
+    else if (t === 'catalog') productsView();
+    else if (t === 'count') {
+      /* static panel */
+    }
+  } catch (e) { console.warn('inventory tab', e); }
+  try { updateInventoryNavBadge(); } catch (_) {}
+}
+
+function updateInventoryNavBadge() {
+  let n = 0;
+  try {
+    if (typeof buildReplenishRows === 'function') {
+      n = buildReplenishRows({ days: 14 }).filter(r => r.severity === 'critical' || r.gap > 0).length;
+    }
+  } catch (_) {}
+  try {
+    if (typeof pendingApprovalsCount === 'function') n += pendingApprovalsCount();
+  } catch (_) {}
+  ['inventoryNavBadge', 'inventoryMoreBadge', 'invTodayBadge'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (n > 0) {
+      el.hidden = false;
+      el.textContent = n > 99 ? '99+' : String(n);
+    } else {
+      el.hidden = true;
+      el.textContent = '';
+    }
+  });
+}
+
 function switchTo(v) {
   try { closeMoreSheet(); } catch (_) {}
+  // Legacy inventory routes → spine
+  if (LEGACY_TO_INV_TAB[v]) {
+    _invTab = LEGACY_TO_INV_TAB[v];
+    v = 'inventory';
+  }
+  if (v === 'inventory') {
+    /* fall through with v=inventory */
+  }
   try {
     if (typeof guardViewAccess === 'function' && !guardViewAccess(v)) return;
   } catch (_) {}
@@ -7679,9 +7895,20 @@ function switchTo(v) {
     if (v !== 'chat' && typeof chatStopRealtime === 'function') chatStopRealtime();
   } catch (_) {}
   try { applyRoleGates(); } catch (_) {}
-  document.querySelectorAll('.view').forEach(x => x.classList.toggle('active', x.id === v));
+  document.querySelectorAll('.view').forEach(x => {
+    const isInvLegacy = x.id === 'products' || x.id === 'transfers' || x.id === 'purchases' || x.id === 'replenish';
+    if (isInvLegacy) {
+      x.classList.remove('active');
+      x.hidden = true;
+      return;
+    }
+    x.classList.toggle('active', x.id === v);
+    if (x.id === v) x.hidden = false;
+  });
   document.querySelectorAll('.nav button, .bottom-nav button').forEach(x => {
-    x.classList.toggle('active', x.dataset.view === v);
+    const view = x.dataset.view;
+    const invActive = v === 'inventory' && (view === 'inventory' || LEGACY_TO_INV_TAB[view]);
+    x.classList.toggle('active', view === v || !!invActive);
   });
   const h = {
     dashboard: ['Invoice control centre', 'Know what has been paid and what needs attention.'],
@@ -7689,9 +7916,11 @@ function switchTo(v) {
     receipts: ['Receipts', 'Download payment confirmations for your records.'],
     recurring: ['Recurring invoices', 'Schedules that create the next invoice when due.'],
     books: ['Books', 'Full accounting — ledger, journals, AR/AP, and financial reports.'],
-    products: ['Products', 'Inventory catalog for POS checkout.'],
-    purchases: ['Purchases', 'Suppliers, purchase orders, and goods received.'],
-    transfers: ['Transfers', 'Move stock between warehouses and outlets.'],
+    inventory: ['Inventory', 'Buy once → move to shops → sell → count weekly.'],
+    products: ['Inventory', 'Catalog, locations and stock levels.'],
+    replenish: ['Inventory', 'What needs action today.'],
+    purchases: ['Inventory', 'Suppliers, purchase orders, and receiving.'],
+    transfers: ['Inventory', 'Move stock between locations.'],
     pos: ['POS Checkout', 'Sell from any Windows or Android device.'],
     clients: ['Clients', 'Your reusable client directory.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
@@ -7703,9 +7932,8 @@ function switchTo(v) {
   $('#subheading').textContent = h[1];
   const bottomNav = document.querySelector('.bottom-nav');
   if (bottomNav) {
-    // Hide tab bar only while editing an invoice; always restore on other pages
     bottomNav.classList.toggle('nav-hidden', v === 'editor');
-    bottomNav.style.display = ''; // clear any old inline styles
+    bottomNav.style.display = '';
   }
   const backBtn = document.getElementById('editorBack');
   if (backBtn) backBtn.style.display = v === 'editor' ? '' : 'none';
@@ -7717,10 +7945,8 @@ function switchTo(v) {
   updateGrowthMeter();
   if (v === 'dashboard') { dashboard(); try { chatRefreshUnread(); } catch (_) {} }
   if (v === 'books') booksView();
-  if (v === 'products') productsView();
+  if (v === 'inventory') inventoryView(_invTab || 'today');
   if (v === 'chat') chatView();
-  if (v === 'purchases') purchasesView();
-  if (v === 'transfers') transfersView();
   if (v === 'pos') posView();
   if (v === 'invoices') invoices();
   if (v === 'receipts') receiptsView();
@@ -12043,7 +12269,7 @@ function updateLowStockNavBadge() {
     const myDef = typeof getMyDefaultLocationId === 'function' ? getMyDefaultLocationId() : null;
     const scoped = role === 'member' && myDef ? myDef : null;
     const n = getLowStockAlerts(scoped ? { locationId: scoped } : {}).length;
-    ['productsNavBadge', 'productsMoreBadge'].forEach(id => {
+    ['productsNavBadge', 'productsMoreBadge', 'inventoryNavBadge', 'inventoryMoreBadge'].forEach(id => {
       const el = document.getElementById(id);
       if (!el) return;
       if (n > 0) {
@@ -12054,6 +12280,7 @@ function updateLowStockNavBadge() {
         el.textContent = '';
       }
     });
+    try { updateInventoryNavBadge(); } catch (_) {}
   } catch (_) {}
 }
 
@@ -12072,6 +12299,17 @@ function runLowStockAlertEngine(opts) {
   const alerts = getLowStockAlerts(scoped ? { locationId: scoped } : {});
 
   try { updateLowStockNavBadge(); } catch (_) {}
+  try {
+    if (typeof buildReplenishRows === 'function') {
+      const n = buildReplenishRows({ days: 14 }).length;
+      ['replenishNavBadge', 'replenishMoreBadge'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (n > 0) { el.hidden = false; el.textContent = n > 99 ? '99+' : String(n); }
+        else { el.hidden = true; }
+      });
+    }
+  } catch (_) {}
   try {
     if (document.getElementById('products')?.classList.contains('active')) {
       renderInventoryNeedsAttention();
@@ -12211,6 +12449,434 @@ function getIncomingQty(productId, locationId) {
 }
 
 /** Suggested reorder qty: optimal - on hand - incoming (min 0). */
+
+/* ---------- Replenishment board (R1) ---------- */
+let _replenishFilter = 'needs';
+let _replenishSelected = new Set(); // keys productId@locationId
+let _replenishRowsCache = [];
+
+function replenishVelocityDays() {
+  const n = Number(document.getElementById('replenishDays')?.value) || 14;
+  return n > 0 ? n : 14;
+}
+
+/** Units sold per day at location from POS sales in last N days. */
+function posVelocityAtLocation(productId, locationId, days) {
+  ensurePosDb();
+  days = days || 14;
+  const cutoff = Date.now() - days * 86400000;
+  let units = 0;
+  (db.posSales || []).forEach(sale => {
+    if (!sale) return;
+    const t = Date.parse(sale.sold_at || sale.created_at || '');
+    if (!Number.isFinite(t) || t < cutoff) return;
+    // Prefer exact location; if sale has no location, attribute only when single-location org
+    if (locationId) {
+      if (sale.location_id && sale.location_id !== locationId) return;
+      if (!sale.location_id && (db.locations || []).filter(l => l.active !== false).length > 1) return;
+    }
+    (sale.lines || sale.items || []).forEach(line => {
+      const pid = line.product_id || line.id;
+      if (pid !== productId) return;
+      units += Number(line.qty) || 0;
+    });
+  });
+  return units / days;
+}
+
+function replenishLeadTimeDays(product) {
+  const d = Number(product && product.lead_time_days);
+  if (d > 0) return d;
+  return 3; // org default for R1
+}
+
+function replenishTargetQty(product, locationId, velocity) {
+  const optimal = Number(product.optimal_stock);
+  if (optimal > 0) return optimal;
+  const low = Number(product.low_stock_at) || 0;
+  const lead = replenishLeadTimeDays(product);
+  const safety = low > 0 ? low : Math.ceil((velocity || 0) * 2);
+  const rop = Math.ceil((velocity || 0) * lead) + safety;
+  if (rop > 0) return rop;
+  return low > 0 ? low : 0;
+}
+
+function replenishGap(product, locationId, velocity) {
+  const onHand = locationStockQty(product.id, locationId);
+  const incoming = typeof getIncomingQty === 'function' ? getIncomingQty(product.id, locationId) : 0;
+  const target = replenishTargetQty(product, locationId, velocity);
+  if (!(target > 0) && onHand > 0) return { gap: 0, onHand, incoming, target: 0 };
+  // Out of stock always a gap of at least 1 if tracked
+  let gap = Math.max(0, target - onHand - incoming);
+  if (onHand <= 0 && product.track_stock !== false) {
+    gap = Math.max(gap, target > 0 ? target : Math.max(1, Number(product.low_stock_at) || 1));
+  } else if (Number(product.low_stock_at) > 0 && onHand <= Number(product.low_stock_at)) {
+    gap = Math.max(gap, Math.max(0, (Number(product.optimal_stock) || Number(product.low_stock_at) * 2) - onHand - incoming));
+  }
+  return { gap, onHand, incoming, target };
+}
+
+function findBestTransferSource(productId, demandLocationId, needQty) {
+  ensurePosDb();
+  const demand = db.locations.find(l => l.id === demandLocationId);
+  let best = null;
+  (db.locations || []).filter(l => l.active !== false && l.id !== demandLocationId).forEach(loc => {
+    const onHand = locationStockQty(productId, loc.id);
+    const p = db.products.find(x => x.id === productId);
+    const low = Number(p?.low_stock_at) || 0;
+    // Keep a small buffer at source
+    const buffer = Math.max(low, 0);
+    const surplus = onHand - buffer;
+    if (surplus < 1) return;
+    const rank = (loc.location_type === 'warehouse' ? 0 : loc.is_default ? 1 : 2);
+    const score = surplus * 10 - rank * 1000;
+    if (!best || score > best.score) {
+      best = { location: loc, surplus, onHand, score, qty: Math.min(needQty, Math.floor(surplus)) };
+    }
+  });
+  return best;
+}
+
+function buildReplenishRows(opts) {
+  ensurePosDb();
+  opts = opts || {};
+  const days = opts.days || replenishVelocityDays();
+  const onlyLoc = opts.locationId || null;
+  const rows = [];
+  const locs = (db.locations || []).filter(l => l.active !== false && (!onlyLoc || l.id === onlyLoc));
+  const products = (db.products || []).filter(p => p.active !== false && p.track_stock !== false);
+
+  products.forEach(p => {
+    locs.forEach(loc => {
+      const velocity = posVelocityAtLocation(p.id, loc.id, days);
+      const { gap, onHand, incoming, target } = replenishGap(p, loc.id, velocity);
+      const low = Number(p.low_stock_at) || 0;
+      const isOut = onHand <= 0;
+      const isLow = low > 0 && onHand <= low;
+      if (!(gap > 0 || isOut || isLow)) return;
+
+      const source = findBestTransferSource(p.id, loc.id, gap > 0 ? gap : Math.max(1, target || low || 1));
+      const transferQty = source && source.qty > 0 ? source.qty : 0;
+      const need = gap > 0 ? gap : (isOut ? Math.max(1, target || low || 1) : Math.max(0, (target || low * 2) - onHand - incoming));
+      const poQty = Math.max(0, need - transferQty);
+      const daysCover = velocity > 0.0001 ? onHand / velocity : (onHand > 0 ? 999 : 0);
+      const lead = replenishLeadTimeDays(p);
+      let severity = 'low';
+      if (isOut || daysCover < lead) severity = 'critical';
+      else if (isLow || gap > 0) severity = 'low';
+
+      const action = transferQty > 0
+        ? (poQty > 0 ? 'both' : 'transfer')
+        : (poQty > 0 ? 'po' : 'none');
+
+      const supplier = p.primary_supplier_id
+        ? (db.suppliers || []).find(s => s.id === p.primary_supplier_id)
+        : null;
+
+      const priority =
+        (isOut ? 1000 : 0) +
+        (daysCover < lead ? 300 : 0) +
+        (need * (velocity || 0.1)) -
+        (incoming > 0 ? 50 : 0);
+
+      rows.push({
+        key: p.id + '@' + loc.id,
+        product: p,
+        location: loc,
+        velocity,
+        daysCover,
+        onHand,
+        incoming,
+        target,
+        gap: need,
+        transferQty,
+        poQty,
+        source,
+        supplier,
+        action,
+        severity,
+        priority,
+        days
+      });
+    });
+  });
+
+  rows.sort((a, b) => b.priority - a.priority);
+  return rows;
+}
+
+function replenishView() {
+  ensurePosDb();
+  try { applyRoleGates(); } catch (_) {}
+  const locSel = document.getElementById('replenishLocationFilter');
+  if (locSel) {
+    const cur = locSel.value || 'all';
+    locSel.innerHTML = '<option value="all">All locations</option>' +
+      (db.locations || []).filter(l => l.active !== false).map(l =>
+        '<option value="' + l.id + '">' + String(l.name || '').replace(/</g, '') + '</option>'
+      ).join('');
+    if ([...locSel.options].some(o => o.value === cur)) locSel.value = cur;
+  }
+  renderReplenishBoard();
+}
+
+function renderReplenishBoard() {
+  ensurePosDb();
+  const locFilter = document.getElementById('replenishLocationFilter')?.value || 'all';
+  const q = (document.getElementById('replenishSearch')?.value || '').trim().toLowerCase();
+  const days = replenishVelocityDays();
+  let rows = buildReplenishRows({
+    days,
+    locationId: locFilter === 'all' ? null : locFilter
+  });
+  _replenishRowsCache = rows;
+
+  // Badge
+  const needsN = rows.filter(r => r.gap > 0 || r.severity === 'critical').length;
+  ['replenishNavBadge', 'replenishMoreBadge'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (needsN > 0) { el.hidden = false; el.textContent = needsN > 99 ? '99+' : String(needsN); }
+    else { el.hidden = true; el.textContent = ''; }
+  });
+
+  const filter = _replenishFilter || 'needs';
+  document.querySelectorAll('#replenishChips [data-replenish-filter]').forEach(btn => {
+    btn.classList.toggle('primary', btn.getAttribute('data-replenish-filter') === filter);
+  });
+
+  let list = rows.slice();
+  if (filter === 'needs') list = list.filter(r => r.severity === 'critical' || r.gap > 0);
+  else if (filter === 'transfer') list = list.filter(r => r.transferQty > 0);
+  else if (filter === 'po') list = list.filter(r => r.poQty > 0);
+
+  if (q) {
+    list = list.filter(r =>
+      String(r.product.name || '').toLowerCase().includes(q) ||
+      String(r.product.sku || '').toLowerCase().includes(q) ||
+      String(r.product.barcode || '').toLowerCase().includes(q)
+    );
+  }
+
+  // Summary
+  const sum = document.getElementById('replenishSummary');
+  if (sum) {
+    const crit = rows.filter(r => r.severity === 'critical').length;
+    const tr = rows.filter(r => r.transferQty > 0).length;
+    const po = rows.filter(r => r.poQty > 0).length;
+    if (!rows.length) {
+      sum.style.display = 'none';
+      sum.innerHTML = '';
+    } else {
+      sum.style.display = '';
+      sum.innerHTML =
+        '<div style="display:flex;flex-wrap:wrap;gap:14px;font-size:13px">' +
+        '<span><b>' + crit + '</b> <span class="client-meta">critical</span></span>' +
+        '<span><b>' + tr + '</b> <span class="client-meta">can transfer</span></span>' +
+        '<span><b>' + po + '</b> <span class="client-meta">may need PO</span></span>' +
+        '<span class="client-meta">Velocity window: ' + days + ' days · ' + rows.length + ' gap line' + (rows.length === 1 ? '' : 's') + '</span>' +
+        '</div>';
+    }
+  }
+
+  const countEl = document.getElementById('replenishCount');
+  if (countEl) {
+    countEl.textContent = list.length
+      ? list.length + ' item' + (list.length === 1 ? '' : 's') + ' to review'
+      : 'Restock outlets — transfer first, then buy';
+  }
+
+  const el = document.getElementById('replenishList');
+  if (!el) return;
+
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">↻</div>
+      <h3>Nothing to replenish</h3>
+      <p style="max-width:360px;margin:0 auto">Tracked stock is healthy vs low/optimal levels, or you need POS sales and location stock to drive velocity. Set <b>low</b> and <b>optimal</b> stock on products for better targets.</p>
+      <button class="button" type="button" onclick="switchTo('products')">Open products</button></div>`;
+    updateReplenishBulkBar();
+    return;
+  }
+  if (!list.length) {
+    el.innerHTML = `<div class="empty"><h3>No rows in this filter</h3>
+      <p class="section-sub">Try “All gaps” or another location.</p></div>`;
+    updateReplenishBulkBar();
+    return;
+  }
+
+  el.innerHTML = list.map(r => {
+    const sel = _replenishSelected.has(r.key);
+    const sev = r.severity === 'critical'
+      ? '<span style="color:var(--red-text);font-weight:800;font-size:11px">CRITICAL</span>'
+      : '<span style="color:#c2410c;font-weight:800;font-size:11px">LOW</span>';
+    const vel = r.velocity >= 0.05 ? r.velocity.toFixed(1) + '/day' : (r.velocity > 0 ? r.velocity.toFixed(2) + '/day' : 'no sales');
+    const cover = r.daysCover >= 999 ? '—' : (r.daysCover < 1 ? '<1 day cover' : '~' + Math.floor(r.daysCover) + ' days cover');
+    let suggestion = '';
+    if (r.transferQty > 0 && r.source) {
+      suggestion += 'Move <b>' + r.transferQty + '</b> from ' + String(r.source.location.name || '').replace(/</g, '');
+      if (r.poQty > 0) suggestion += ' · still short <b>' + r.poQty + '</b>';
+    } else if (r.poQty > 0) {
+      suggestion += 'Order <b>' + r.poQty + '</b>' + (r.supplier ? ' from ' + String(r.supplier.name || '').replace(/</g, '') : ' (set primary supplier on product)');
+    } else {
+      suggestion = 'Review stock levels';
+    }
+    const btns = [];
+    if (r.transferQty > 0) {
+      btns.push('<button class="button small primary" type="button" data-rep-transfer="' + r.key + '">Transfer</button>');
+    }
+    if (r.poQty > 0) {
+      btns.push('<button class="button small" type="button" data-rep-po="' + r.key + '">Purchase</button>');
+    }
+    btns.push('<button class="button small" type="button" data-rep-why="' + r.key + '">Why?</button>');
+
+    return `<div class="insight" data-rep-row="${r.key}" style="margin-bottom:10px;padding:12px 14px${sel ? ';outline:2px solid var(--blue)' : ''}">
+      <div style="display:flex;gap:10px;align-items:flex-start">
+        <input type="checkbox" data-rep-check="${r.key}" ${sel ? 'checked' : ''} style="margin-top:4px;width:18px;height:18px">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline">
+            <div>
+              <b>${String(r.product.name || '').replace(/</g, '')}</b>
+              <span class="client-meta"> · ${String(r.location.name || '').replace(/</g, '')}</span>
+            </div>
+            ${sev}
+          </div>
+          <div class="client-meta" style="margin-top:4px">
+            On hand <b>${r.onHand}</b>
+            · ${vel}
+            · ${cover}
+            · incoming ${r.incoming}
+            · short <b>${r.gap}</b>
+          </div>
+          <div style="margin-top:6px;font-size:13px">${suggestion}</div>
+          <div class="client-actions" style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">${btns.join('')}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  updateReplenishBulkBar();
+}
+
+function updateReplenishBulkBar() {
+  const bar = document.getElementById('replenishBulkBar');
+  const label = document.getElementById('replenishBulkLabel');
+  const n = _replenishSelected.size;
+  if (bar) bar.hidden = n === 0;
+  if (label) label.textContent = n + ' selected';
+}
+
+function getReplenishRow(key) {
+  return (_replenishRowsCache || []).find(r => r.key === key);
+}
+
+function replenishWhy(key) {
+  const r = getReplenishRow(key);
+  if (!r) return;
+  const lines = [
+    r.product.name + ' @ ' + r.location.name,
+    'Sold ~' + r.velocity.toFixed(2) + '/day over ' + r.days + ' days',
+    'On hand ' + r.onHand + ' · incoming ' + r.incoming + ' · target ' + r.target,
+    'Short by ' + r.gap,
+    r.source
+      ? ('Best source: ' + r.source.location.name + ' (on hand ' + r.source.onHand + ', can move ' + r.transferQty + ')')
+      : 'No internal surplus — buy from supplier',
+    r.supplier ? ('Primary supplier: ' + r.supplier.name) : 'No primary supplier set on product'
+  ];
+  toast(lines.join(' · '));
+}
+
+function replenishStartTransfer(keys) {
+  ensurePosDb();
+  const rows = keys.map(getReplenishRow).filter(r => r && r.transferQty > 0 && r.source);
+  if (!rows.length) { toast('No transfer suggestions in selection'); return; }
+  // Group by from→to
+  const groups = new Map();
+  rows.forEach(r => {
+    const k = r.source.location.id + '>' + r.location.id;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  });
+  if (groups.size > 1) {
+    toast('Selection spans multiple routes — creating the largest group first');
+  }
+  let best = null;
+  groups.forEach((list, k) => {
+    if (!best || list.length > best.list.length) best = { k, list };
+  });
+  const list = best.list;
+  const fromId = list[0].source.location.id;
+  const toId = list[0].location.id;
+  if (typeof openStockTransferModal !== 'function') {
+    toast('Transfers not available');
+    return;
+  }
+  openStockTransferModal();
+  const fromSel = document.getElementById('transferFrom');
+  const toSel = document.getElementById('transferTo');
+  if (fromSel) fromSel.value = fromId;
+  if (toSel) toSel.value = toId;
+  document.getElementById('transferShipMode').value = 'transit';
+  document.getElementById('transferNote').value = 'Replenish board';
+  const lines = list.map(r => ({
+    product_id: r.product.id,
+    qty: r.transferQty
+  }));
+  document.getElementById('transferLinesEditor').innerHTML = transferLineEditorHtml(lines);
+  try { initSearchableSelects(document.getElementById('stockTransferModal')); } catch (_) {}
+  try { refreshTransferLineStockHints(); } catch (_) {}
+  try { updateTransferModalHints(); } catch (_) {}
+  toast('Review transfer · ' + lines.length + ' line' + (lines.length === 1 ? '' : 's'));
+}
+
+function replenishStartPo(keys) {
+  ensurePosDb();
+  const rows = keys.map(getReplenishRow).filter(r => r && r.poQty > 0);
+  if (!rows.length) { toast('No purchase suggestions in selection'); return; }
+  if (!db.suppliers.length) {
+    toast('Add a supplier first');
+    if (typeof openSupplierModal === 'function') openSupplierModal(null);
+    return;
+  }
+  // Prefer rows sharing a supplier
+  const withSup = rows.filter(r => r.product.primary_supplier_id);
+  const use = withSup.length ? withSup : rows;
+  let supplierId = use[0].product.primary_supplier_id || db.suppliers.find(s => s.active !== false)?.id;
+  if (withSup.length) {
+    // majority supplier
+    const counts = {};
+    withSup.forEach(r => {
+      counts[r.product.primary_supplier_id] = (counts[r.product.primary_supplier_id] || 0) + 1;
+    });
+    supplierId = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+  }
+  const forPo = use.filter(r => !r.product.primary_supplier_id || r.product.primary_supplier_id === supplierId);
+  if (typeof openPurchaseModal !== 'function') {
+    toast('Purchases not available');
+    return;
+  }
+  openPurchaseModal();
+  const sel = document.getElementById('purchaseSupplier');
+  if (sel && supplierId) sel.value = supplierId;
+  // Location: prefer warehouse if exists else first demand loc
+  const wh = (db.locations || []).find(l => l.active !== false && l.location_type === 'warehouse');
+  const locSel = document.getElementById('purchaseLocation');
+  if (locSel) {
+    if (wh) locSel.value = wh.id;
+    else if (forPo[0]) locSel.value = forPo[0].location.id;
+  }
+  document.getElementById('purchaseNote').value = 'Replenish board';
+  const lines = forPo.map(r => ({
+    product_id: r.product.id,
+    qty: r.poQty,
+    unit_cost: Number(r.product.cost) || 0
+  }));
+  document.getElementById('purchaseLinesEditor').innerHTML = purchaseLineEditorHtml(lines);
+  try { initSearchableSelects(document.getElementById('purchaseModal')); } catch (_) {}
+  refreshPurchaseModalTotal();
+  toast('Review PO · ' + lines.length + ' line' + (lines.length === 1 ? '' : 's'));
+}
+
+
 function suggestedReorderQty(product, locationId) {
   const optimal = Number(product.optimal_stock);
   if (!(optimal > 0)) return 0;
@@ -21473,6 +22139,27 @@ async function openClientModal(client) {
 
 $('#addClient').onclick = () => openClientModal(null);
 
+// Inventory spine tabs
+document.getElementById('inventoryTabs')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-inv-tab]');
+  if (!btn) return;
+  const tab = btn.getAttribute('data-inv-tab');
+  if (!tab) return;
+  _invTab = tab;
+  if (document.getElementById('inventory')?.classList.contains('active')) {
+    inventoryView(tab);
+  } else {
+    switchTo('inventory');
+  }
+});
+document.getElementById('invCountStart')?.addEventListener('click', () => {
+  if (typeof openStockCountModal === 'function') openStockCountModal();
+  else toast('Count is not available yet');
+});
+document.getElementById('invCountLocations')?.addEventListener('click', () => {
+  if (typeof openLocationsModal === 'function') openLocationsModal();
+});
+
 // POS + Products bindings
 document.getElementById('btnAddSupplier')?.addEventListener('click', () => openSupplierModal(null));
 document.getElementById('supplierModalCancel')?.addEventListener('click', closeSupplierModal);
@@ -21601,6 +22288,46 @@ document.getElementById('transferReceiveConfirm')?.addEventListener('click', () 
 });
 document.getElementById('transferSearch')?.addEventListener('input', () => renderTransfersList());
 document.getElementById('transferStatusFilter')?.addEventListener('change', () => renderTransfersList());
+
+document.getElementById('replenishRefresh')?.addEventListener('click', () => renderReplenishBoard());
+document.getElementById('replenishDays')?.addEventListener('change', () => renderReplenishBoard());
+document.getElementById('replenishLocationFilter')?.addEventListener('change', () => renderReplenishBoard());
+document.getElementById('replenishSearch')?.addEventListener('input', () => renderReplenishBoard());
+document.getElementById('replenishChips')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-replenish-filter]');
+  if (!btn) return;
+  _replenishFilter = btn.getAttribute('data-replenish-filter') || 'needs';
+  renderReplenishBoard();
+});
+document.getElementById('replenishList')?.addEventListener('click', (e) => {
+  const why = e.target.closest('[data-rep-why]');
+  if (why) { replenishWhy(why.getAttribute('data-rep-why')); return; }
+  const tr = e.target.closest('[data-rep-transfer]');
+  if (tr) { replenishStartTransfer([tr.getAttribute('data-rep-transfer')]); return; }
+  const po = e.target.closest('[data-rep-po]');
+  if (po) { replenishStartPo([po.getAttribute('data-rep-po')]); return; }
+});
+document.getElementById('replenishList')?.addEventListener('change', (e) => {
+  const cb = e.target.closest('[data-rep-check]');
+  if (!cb) return;
+  const key = cb.getAttribute('data-rep-check');
+  if (cb.checked) _replenishSelected.add(key);
+  else _replenishSelected.delete(key);
+  updateReplenishBulkBar();
+  const row = document.querySelector('[data-rep-row="' + key + '"]');
+  if (row) row.style.outline = cb.checked ? '2px solid var(--blue)' : '';
+});
+document.getElementById('replenishBulkClear')?.addEventListener('click', () => {
+  _replenishSelected.clear();
+  renderReplenishBoard();
+});
+document.getElementById('replenishBulkTransfer')?.addEventListener('click', () => {
+  replenishStartTransfer([..._replenishSelected]);
+});
+document.getElementById('replenishBulkPo')?.addEventListener('click', () => {
+  replenishStartPo([..._replenishSelected]);
+});
+
 document.getElementById('transferNeedsAttention')?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-transfer-filter]');
   if (!btn) return;
@@ -21643,7 +22370,7 @@ document.getElementById('locationsList')?.addEventListener('click', (e) => {
   }
 });
 document.getElementById('btnOpenPosFromProducts')?.addEventListener('click', () => { location.href = '/pos.html'; });
-document.getElementById('btnPosToProducts')?.addEventListener('click', () => switchTo('products'));
+document.getElementById('btnPosToProducts')?.addEventListener('click', () => { _invTab = 'catalog'; switchTo('inventory'); });
 document.getElementById('btnPosClearCart')?.addEventListener('click', () => {
   ensurePosDb();
   db.posCart = [];
