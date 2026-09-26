@@ -4533,15 +4533,20 @@ input:focus:not(:focus-visible) {
     <h2>Adjust stock</h2>
     <p class="section-sub" id="stockAdjustProductName">—</p>
     <input type="hidden" id="stockAdjustProductId">
-    <div class="field"><label>Current stock</label><input id="stockAdjustCurrent" type="text" readonly></div>
+    <div class="field"><label>Store *</label>
+      <select id="stockAdjustLocation"></select>
+      <p class="section-sub" style="margin:4px 0 0">Stock is always stored per store. Pick the outlet this quantity belongs to.</p>
+    </div>
+    <div class="field"><label>Current at this store</label><input id="stockAdjustCurrent" type="text" readonly></div>
     <div class="field"><label>Adjustment type</label>
       <select id="stockAdjustType">
-        <option value="set">Set new quantity</option>
-        <option value="add">Add / remove (use negative to remove)</option>
+        <option value="set">Set new quantity at this store</option>
+        <option value="add">Add / remove at this store (negative removes)</option>
       </select>
     </div>
     <div class="field"><label>Quantity</label><input id="stockAdjustQty" type="number" step="any" placeholder="0"></div>
     <div class="field"><label>Reason (optional)</label><input id="stockAdjustNote" placeholder="e.g. Count correction, damaged"></div>
+    <div id="stockAdjustBreakdown" class="client-meta" style="margin-top:8px;line-height:1.5"></div>
     <div class="buttons" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
       <button class="button" type="button" id="stockAdjustCancel">Cancel</button>
       <button class="button primary" type="button" id="stockAdjustSave">Save</button>
@@ -11682,48 +11687,8 @@ async function setMemberDefaultLocation(userId, locationLocalId) {
 
 
 
-function locationStockQty(productId, locationId) {
-  ensurePosDb();
-  const lid = locationId || db.activeLocationId;
-  const row = db.locationStock.find(s => s.product_id === productId && s.location_id === lid);
-  return row ? Number(row.qty) || 0 : 0;
-}
-
-function totalProductStock(productId) {
-  ensurePosDb();
-  return db.locationStock
-    .filter(s => s.product_id === productId)
-    .reduce((n, s) => n + (Number(s.qty) || 0), 0);
-}
-
-/** Adjust stock at a location and keep products.stock_qty as total cache. */
-function adjustLocationStock(productId, locationId, qtyChange, meta) {
-  ensurePosDb();
-  meta = meta || {};
-  let row = db.locationStock.find(s => s.product_id === productId && s.location_id === locationId);
-  if (!row) {
-    row = { product_id: productId, location_id: locationId, qty: 0 };
-    db.locationStock.push(row);
-  }
-  row.qty = (Number(row.qty) || 0) + (Number(qtyChange) || 0);
-  const p = db.products.find(x => x.id === productId);
-  if (p) {
-    p.stock_qty = totalProductStock(productId);
-    p.updated_at = new Date().toISOString();
-  }
-  const mov = {
-    id: crypto.randomUUID(),
-    product_id: productId,
-    location_id: locationId,
-    qty_change: Number(qtyChange) || 0,
-    reason: meta.reason || 'adjustment',
-    reference: meta.reference || null,
-    note: meta.note || null,
-    created_at: new Date().toISOString()
-  };
-  db.stockMovements.push(mov);
-  return { row, mov, product: p };
-}
+/* locationStockQty / totalProductStock / adjustLocationStock — single canonical
+   implementations are defined later (with migrate + multi-store rules). */
 
 function posCurrency() {
   return (db.profile && db.profile.reporting) || 'NGN';
@@ -11910,30 +11875,43 @@ async function saveProductFromModal() {
   if (document.getElementById('pos')?.classList.contains('active')) posView();
 }
 
+function refreshStockAdjustCurrent() {
+  const pid = document.getElementById('stockAdjustProductId')?.value;
+  const locId = document.getElementById('stockAdjustLocation')?.value;
+  if (!pid || !locId) return;
+  const atLoc = locationStockQty(pid, locId);
+  document.getElementById('stockAdjustCurrent').value = String(atLoc);
+  const bd = document.getElementById('stockAdjustBreakdown');
+  if (bd && typeof productLocationBreakdownHtml === 'function') {
+    bd.innerHTML = '<b>All stores:</b> ' + productLocationBreakdownHtml(pid);
+  }
+}
+
 function openStockAdjustModal(productId) {
   ensurePosDb();
   try { migrateProductStockToLocations(); } catch (_) {}
   const p = db.products.find(x => x.id === productId);
   if (!p) return;
-  const locId = resolveStockTargetLocationId();
-  const loc = locId ? db.locations.find(l => l.id === locId) : getActiveLocation();
-  const atLoc = loc ? locationStockQty(p.id, loc.id) : Number(p.stock_qty) || 0;
-  document.getElementById('stockAdjustProductId').value = p.id;
-  // Remember which store this adjust targets (catalog filter or active)
-  let hid = document.getElementById('stockAdjustLocationId');
-  if (!hid) {
-    hid = document.createElement('input');
-    hid.type = 'hidden';
-    hid.id = 'stockAdjustLocationId';
-    document.getElementById('stockAdjustModal')?.querySelector('.modal')?.appendChild(hid);
+  if (!(db.locations || []).filter(l => l.active !== false).length) {
+    toast('Add a store first (Locations)');
+    openLocationsModal();
+    return;
   }
-  hid.value = loc ? loc.id : '';
-  document.getElementById('stockAdjustProductName').textContent =
-    p.name + (loc ? ' · ' + loc.name : ' · pick a store in the location filter');
-  document.getElementById('stockAdjustCurrent').value = String(atLoc);
+  const preferred = resolveStockTargetLocationId();
+  const sel = document.getElementById('stockAdjustLocation');
+  if (sel) {
+    sel.innerHTML = (db.locations || []).filter(l => l.active !== false).map(l =>
+      '<option value="' + l.id + '">' + String(l.name || '').replace(/</g, '') +
+      (l.is_default ? ' (main)' : '') + '</option>'
+    ).join('');
+    if (preferred && [...sel.options].some(o => o.value === preferred)) sel.value = preferred;
+  }
+  document.getElementById('stockAdjustProductId').value = p.id;
+  document.getElementById('stockAdjustProductName').textContent = p.name;
   document.getElementById('stockAdjustType').value = 'set';
   document.getElementById('stockAdjustQty').value = '';
   document.getElementById('stockAdjustNote').value = '';
+  refreshStockAdjustCurrent();
   document.getElementById('stockAdjustModal').classList.add('show');
   document.getElementById('stockAdjustQty').focus();
 }
@@ -11951,16 +11929,20 @@ async function saveStockAdjust() {
   const type = document.getElementById('stockAdjustType').value;
   const qty = Number(document.getElementById('stockAdjustQty').value);
   if (Number.isNaN(qty)) { toast('Enter a valid quantity'); return; }
-  const locId = document.getElementById('stockAdjustLocationId')?.value
+  const locId = document.getElementById('stockAdjustLocation')?.value
     || resolveStockTargetLocationId();
   const loc = locId ? db.locations.find(l => l.id === locId) : null;
-  if (!loc) { toast('No store selected — filter Catalog by a store, or set POS location'); return; }
+  if (!loc) { toast('Pick a store'); return; }
   const prev = locationStockQty(id, loc.id);
   const next = type === 'add' ? prev + qty : qty;
+  if (next < 0) { toast('Quantity at this store cannot go below 0'); return; }
   const change = next - prev;
   if (change === 0) { closeStockAdjustModal(); return; }
   const note = (document.getElementById('stockAdjustNote').value || '').trim() || null;
-  const { mov } = adjustLocationStock(id, loc.id, change, { reason: 'adjustment', note });
+  const { mov } = adjustLocationStock(id, loc.id, change, {
+    reason: 'adjustment',
+    note: note || ('Set at ' + loc.name)
+  });
   try {
     await pushProductToCloud(p);
     await pushLocationStockToCloud(id, loc.id);
@@ -11969,12 +11951,15 @@ async function saveStockAdjust() {
   try {
     appendInventoryAudit('stock.adjusted', 'inventory', id,
       'Stock adjust ' + (p.name || '') + ' @ ' + (loc.name || '') + ' · ' + (change > 0 ? '+' : '') + change,
-      { location_id: loc.id, change });
+      { location_id: loc.id, change, prev, next });
   } catch (e) {}
   persistDb();
   try { runLowStockAlertEngine({ reason: 'adjustment' }); } catch (_) {}
   closeStockAdjustModal();
-  toast('Stock updated at ' + loc.name + ' · total now ' + totalProductStock(id));
+  const bits = (db.locations || []).filter(l => l.active !== false).map(l =>
+    locationStockQty(id, l.id) + ' ' + l.name
+  ).join(' · ');
+  toast(loc.name + ' now ' + next + ' · Total ' + totalProductStock(id) + (bits ? ' (' + bits + ')' : ''));
   productsView();
 }
 
@@ -22640,6 +22625,9 @@ document.getElementById('stockHistoryClose')?.addEventListener('click', () => do
 document.getElementById('journalSearch')?.addEventListener('input', () => { try { renderBooksJournal(); } catch (_) {} });
 document.getElementById('stockAdjustCancel')?.addEventListener('click', closeStockAdjustModal);
 document.getElementById('stockAdjustSave')?.addEventListener('click', () => { saveStockAdjust().catch(e => toast(e.message || 'Save failed')); });
+document.getElementById('stockAdjustLocation')?.addEventListener('change', () => {
+  try { refreshStockAdjustCurrent(); } catch (_) {}
+});
 document.getElementById('btnStockCount')?.addEventListener('click', () => openStockCountModal());
 document.getElementById('stockCountCancel')?.addEventListener('click', closeStockCountModal);
 document.getElementById('stockCountCancel2')?.addEventListener('click', closeStockCountModal);
