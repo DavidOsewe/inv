@@ -12521,15 +12521,16 @@ function migrateProductStockToLocations() {
   (db.products || []).forEach(p => {
     if (!p || p.track_stock === false) return;
     const map = ensureProductStockMap(p);
-    // Seed map from locationStock rows if map empty
+    // Merge locationStock rows into map (don't wipe map; fill missing + prefer non-zero row if map is 0)
+    const rows = (db.locationStock || []).filter(s => s.product_id === p.id);
+    rows.forEach(s => {
+      if (!s.location_id) return;
+      const fromRow = Number(s.qty) || 0;
+      if (map[s.location_id] == null || map[s.location_id] === '') {
+        map[s.location_id] = fromRow;
+      }
+    });
     let mapSum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
-    if (Math.abs(mapSum) < 0.0001) {
-      const rows = (db.locationStock || []).filter(s => s.product_id === p.id);
-      rows.forEach(s => {
-        if (s.location_id) map[s.location_id] = Number(s.qty) || 0;
-      });
-      mapSum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
-    }
     const total = Number(p.stock_qty) || 0;
     // Orphan total with no per-store qty → put on main
     if (Math.abs(mapSum) < 0.0001 && Math.abs(total) > 0.0001 && def) {
@@ -13660,6 +13661,14 @@ async function addLocationFromModal() {
   ensurePosDb();
   const name = (document.getElementById('locationNewName')?.value || '').trim();
   if (!name) { toast('Enter a location name'); return; }
+  const nameKey = name.toLowerCase();
+  const existing = (db.locations || []).find(l =>
+    l.active !== false && String(l.name || '').trim().toLowerCase() === nameKey
+  );
+  if (existing) {
+    toast('A store named "' + name + '" already exists — use that one');
+    return;
+  }
   const code = (document.getElementById('locationNewCode')?.value || '').trim() || null;
   const location_type = document.getElementById('locationNewType')?.value || 'store';
   const loc = {
@@ -13667,7 +13676,7 @@ async function addLocationFromModal() {
     name,
     code,
     location_type,
-    is_default: db.locations.length === 0,
+    is_default: !(db.locations || []).some(l => l.active !== false),
     active: true,
     address: null,
     cloudId: null,
