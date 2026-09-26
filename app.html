@@ -12460,28 +12460,115 @@ function replenishVelocityDays() {
   return n > 0 ? n : 14;
 }
 
-/** Units sold per day at location from POS sales in last N days. */
+/** Units sold per day at location from POS sales (fallback: sale stock movements). */
 function posVelocityAtLocation(productId, locationId, days) {
   ensurePosDb();
   days = days || 14;
   const cutoff = Date.now() - days * 86400000;
   let units = 0;
+  let fromSales = false;
   (db.posSales || []).forEach(sale => {
     if (!sale) return;
     const t = Date.parse(sale.sold_at || sale.created_at || '');
     if (!Number.isFinite(t) || t < cutoff) return;
-    // Prefer exact location; if sale has no location, attribute only when single-location org
     if (locationId) {
       if (sale.location_id && sale.location_id !== locationId) return;
+      // Multi-location org: skip sales with no location (can't attribute)
       if (!sale.location_id && (db.locations || []).filter(l => l.active !== false).length > 1) return;
     }
     (sale.lines || sale.items || []).forEach(line => {
       const pid = line.product_id || line.id;
       if (pid !== productId) return;
       units += Number(line.qty) || 0;
+      fromSales = true;
     });
   });
+  // Fallback: stock movements reason=sale when no line-level sales yet
+  if (!fromSales) {
+    (db.stockMovements || []).forEach(m => {
+      if (!m || m.product_id !== productId) return;
+      if (String(m.reason || '') !== 'sale') return;
+      const t = Date.parse(m.created_at || '');
+      if (!Number.isFinite(t) || t < cutoff) return;
+      if (locationId && m.location_id && m.location_id !== locationId) return;
+      const q = Number(m.qty_change);
+      if (q < 0) units += -q;
+    });
+  }
   return units / days;
+}
+
+/** Aggregate POS units + revenue over last N days (optional location). */
+function posSalesSummary(days, locationId) {
+  ensurePosDb();
+  days = days || 7;
+  const cutoff = Date.now() - days * 86400000;
+  let units = 0, revenue = 0, tickets = 0;
+  (db.posSales || []).forEach(sale => {
+    if (!sale) return;
+    const t = Date.parse(sale.sold_at || sale.created_at || '');
+    if (!Number.isFinite(t) || t < cutoff) return;
+    if (locationId) {
+      if (sale.location_id && sale.location_id !== locationId) return;
+      if (!sale.location_id && (db.locations || []).filter(l => l.active !== false).length > 1) return;
+    }
+    tickets += 1;
+    revenue += Number(sale.total) || 0;
+    (sale.lines || sale.items || []).forEach(line => {
+      units += Number(line.qty) || 0;
+    });
+  });
+  return { units, revenue, tickets, days };
+}
+
+/** Pull POS sales from cloud so velocity works across devices. */
+async function pullPosSalesFromCloud() {
+  if (!cloud?.client || !cloud?.organizationId) return;
+  try {
+    const since = new Date(Date.now() - 90 * 86400000).toISOString();
+    const { data, error } = await cloud.client
+      .from('pos_sales')
+      .select('*')
+      .eq('organization_id', cloud.organizationId)
+      .gte('sold_at', since)
+      .order('sold_at', { ascending: false })
+      .limit(500);
+    if (error) throw error;
+    ensurePosDb();
+    if (!Array.isArray(db.posSales)) db.posSales = [];
+    const byLocal = new Map(db.posSales.map(s => [s.id, s]));
+    const byCloud = new Map(db.posSales.filter(s => s.cloudId).map(s => [s.cloudId, s]));
+    const byNumber = new Map(db.posSales.filter(s => s.sale_number).map(s => [s.sale_number, s]));
+    (data || []).forEach(row => {
+      let s = byCloud.get(row.id) || (row.local_id && byLocal.get(row.local_id)) ||
+        (row.sale_number && byNumber.get(row.sale_number));
+      if (!s) {
+        s = { id: row.local_id || row.id };
+        db.posSales.push(s);
+        byLocal.set(s.id, s);
+        if (row.sale_number) byNumber.set(row.sale_number, s);
+      }
+      Object.assign(s, {
+        cloudId: row.id,
+        sale_number: row.sale_number || s.sale_number,
+        sold_at: row.sold_at || s.sold_at,
+        total: row.total != null ? Number(row.total) : s.total,
+        cost_total: row.cost_total != null ? Number(row.cost_total) : s.cost_total,
+        currency: row.currency || s.currency,
+        payment_method: row.payment_method || s.payment_method,
+        amount_tendered: row.amount_tendered,
+        change_given: row.change_given,
+        payment_note: row.payment_note,
+        lines: row.lines || s.lines || [],
+        location_id: row.location_id || s.location_id || null,
+        location_name: row.location_name || s.location_name || null,
+        synced: true
+      });
+    });
+    persistDb();
+  } catch (e) {
+    console.warn('pullPosSalesFromCloud', e);
+  }
 }
 
 function replenishLeadTimeDays(product) {
@@ -12617,6 +12704,14 @@ function replenishView() {
       ).join('');
     if ([...locSel.options].some(o => o.value === cur)) locSel.value = cur;
   }
+  // Pull recent POS sales so velocity is current (non-blocking)
+  try {
+    if (cloud?.client && cloud?.organizationId) {
+      pullPosSalesFromCloud().then(() => {
+        try { renderReplenishBoard(); } catch (_) {}
+      }).catch(() => {});
+    }
+  } catch (_) {}
   renderReplenishBoard();
 }
 
@@ -12658,25 +12753,32 @@ function renderReplenishBoard() {
     );
   }
 
-  // Summary
+  // Summary + POS sales pulse
   const sum = document.getElementById('replenishSummary');
   if (sum) {
     const crit = rows.filter(r => r.severity === 'critical').length;
     const tr = rows.filter(r => r.transferQty > 0).length;
     const po = rows.filter(r => r.poQty > 0).length;
-    if (!rows.length) {
-      sum.style.display = 'none';
-      sum.innerHTML = '';
-    } else {
-      sum.style.display = '';
-      sum.innerHTML =
-        '<div style="display:flex;flex-wrap:wrap;gap:14px;font-size:13px">' +
-        '<span><b>' + crit + '</b> <span class="client-meta">critical</span></span>' +
-        '<span><b>' + tr + '</b> <span class="client-meta">can transfer</span></span>' +
-        '<span><b>' + po + '</b> <span class="client-meta">may need PO</span></span>' +
-        '<span class="client-meta">Velocity window: ' + days + ' days · ' + rows.length + ' gap line' + (rows.length === 1 ? '' : 's') + '</span>' +
-        '</div>';
-    }
+    const locFilter = document.getElementById('replenishLocationFilter')?.value || 'all';
+    const sales = typeof posSalesSummary === 'function'
+      ? posSalesSummary(7, locFilter === 'all' ? null : locFilter)
+      : { units: 0, revenue: 0, tickets: 0, days: 7 };
+    const salesBit = sales.tickets
+      ? '<span><b>' + sales.units + '</b> <span class="client-meta">units sold (7d)</span></span>' +
+        '<span><b>' + (typeof formatPosMoney === 'function' ? formatPosMoney(sales.revenue) : sales.revenue) +
+        '</b> <span class="client-meta">POS revenue · ' + sales.tickets + ' sale' + (sales.tickets === 1 ? '' : 's') + '</span></span>'
+      : '<span class="client-meta">No POS sales in last 7 days — velocity uses low/optimal stock only</span>';
+    sum.style.display = '';
+    sum.innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;gap:14px;font-size:13px">' +
+      salesBit +
+      (rows.length
+        ? '<span><b>' + crit + '</b> <span class="client-meta">critical</span></span>' +
+          '<span><b>' + tr + '</b> <span class="client-meta">can transfer</span></span>' +
+          '<span><b>' + po + '</b> <span class="client-meta">may need PO</span></span>' +
+          '<span class="client-meta">Velocity: ' + days + 'd · ' + rows.length + ' gap line' + (rows.length === 1 ? '' : 's') + '</span>'
+        : '') +
+      '</div>';
   }
 
   const countEl = document.getElementById('replenishCount');
@@ -13378,10 +13480,15 @@ function renderProductsList() {
     }
     const inactive = p.active === false ? ' <span class="client-meta">(inactive)</span>' : '';
     const moves = (db.stockMovements || []).filter(m => m.product_id === p.id).length;
+    const locId = locFilter !== 'all' ? locFilter : null;
+    const vel = typeof posVelocityAtLocation === 'function'
+      ? posVelocityAtLocation(p.id, locId, 14)
+      : 0;
+    const velLabel = vel >= 0.05 ? vel.toFixed(1) + '/d' : (vel > 0 ? vel.toFixed(2) + '/d' : '—');
     return `<tr>
       <td><b>${p.name}</b>${inactive}${p.sku ? `<div class="client-meta">${p.sku}</div>` : ''}</td>
       <td>${formatPosMoney(p.price)}<div class="client-meta">Cost ${formatPosMoney(cost)}</div></td>
-      <td>${stockBadge}<div class="client-meta">${moves} movement${moves === 1 ? '' : 's'}</div></td>
+      <td>${stockBadge}<div class="client-meta">${moves} movement${moves === 1 ? '' : 's'} · sold ${velLabel}</div></td>
       <td>${expiryBadge}</td>
       <td><div class="client-actions">
         <button class="button small" type="button" data-edit-product="${p.id}">Edit</button>
@@ -13396,6 +13503,9 @@ function renderProductsList() {
     const low = Number(p.low_stock_at) || 0;
     const cost = Number(p.cost) || 0;
     const moves = (db.stockMovements || []).filter(m => m.product_id === p.id).length;
+    const cardLocId = locFilter !== 'all' ? locFilter : null;
+    const cardVel = typeof posVelocityAtLocation === 'function' ? posVelocityAtLocation(p.id, cardLocId, 14) : 0;
+    const cardVelLabel = cardVel >= 0.05 ? cardVel.toFixed(1) + '/d sold' : (cardVel > 0 ? cardVel.toFixed(2) + '/d sold' : 'no recent sales');
     let stockLabel = '—';
     let stockCls = '';
     if (p.track_stock !== false) {
@@ -13426,6 +13536,7 @@ function renderProductsList() {
       </div>
       <div class="mobile-card-meta">
         <span>${moves} movement${moves === 1 ? '' : 's'}${locHint}</span>
+        <span>${cardVelLabel}</span>
         ${expBits ? `<span>${expBits}</span>` : ''}
       </div>
       <div class="mobile-card-actions">
