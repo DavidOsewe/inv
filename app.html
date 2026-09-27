@@ -12146,8 +12146,12 @@ function renderStockCountLines() {
   const counted = session.lines.filter(l => l.counted_qty != null && l.counted_qty !== '').length;
   if (prog) prog.textContent = counted + ' of ' + session.lines.length + ' counted';
 
+  const locId = session.locationId;
   el.innerHTML = lines.map(l => {
-    const sys = Number(l.system_qty) || 0;
+    // Live System qty for the store being counted
+    const liveSys = Number(locationStockQty(l.product_id, locId)) || 0;
+    l.system_qty = liveSys;
+    const sys = liveSys;
     const raw = l.counted_qty;
     const has = raw != null && raw !== '';
     const cnt = has ? Number(raw) : null;
@@ -12158,10 +12162,25 @@ function renderStockCountLines() {
       else if (d > 0) varHtml = '<span style="color:var(--green-text,#065f46);font-weight:700">+' + d + '</span>';
       else varHtml = '<span style="color:var(--red-text);font-weight:700">' + d + '</span>';
     }
+    // If Main is 0 but stock sits at Lekki/Gbagada, show that (not a wrong index)
+    let elseHtml = '';
+    if (sys === 0) {
+      const p = (db.products || []).find(x => x.id === l.product_id);
+      const map = p?.stock_by_location || {};
+      const bits = [];
+      (db.locations || []).filter(loc => loc.active !== false && loc.id !== locId).forEach(loc => {
+        const q = Number(map[loc.id]) || 0;
+        if (q) bits.push(String(loc.name).replace(/</g, '') + ' ' + q);
+      });
+      if (bits.length) {
+        elseHtml = '<div class="client-meta" style="color:#b45309">Elsewhere: ' + bits.join(' · ') + '</div>';
+      }
+    }
     return `<div class="stock-count-row" data-pid="${l.product_id}" style="display:grid;grid-template-columns:1fr 72px 88px 64px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">
       <div style="min-width:0">
         <b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${String(l.name || '').replace(/</g,'')}</b>
-        <span class="client-meta">${l.sku ? String(l.sku).replace(/</g,'') + ' · ' : ''}System ${sys}</span>
+        <span class="client-meta">${l.sku ? String(l.sku).replace(/</g,'') + ' · ' : ''}System ${sys} @ ${String(session.locationName || '').replace(/</g,'')}</span>
+        ${elseHtml}
       </div>
       <div class="client-meta" style="text-align:right;font-variant-numeric:tabular-nums">${sys}</div>
       <div>
