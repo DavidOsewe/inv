@@ -12008,12 +12008,23 @@ function openStockCountModal() {
   document.getElementById('stockCountWork').hidden = true;
   document.getElementById('stockCountNote').value = '';
   document.getElementById('stockCountSearch').value = '';
+  try { dedupeLocationsByName(); } catch (_) {}
+  try { consolidateStockOntoCanonicalLocations(); } catch (_) {}
   const locs = db.locations.filter(l => l.active !== false);
+  // One option per store name (canonical id)
+  const seenName = new Set();
+  const uniqueLocs = [];
+  locs.forEach(l => {
+    const k = String(l.name || '').trim().toLowerCase();
+    if (seenName.has(k)) return;
+    seenName.add(k);
+    uniqueLocs.push(l);
+  });
   const role = typeof currentOrgRole === 'function' ? currentOrgRole() : '';
   const myDef = typeof getMyDefaultLocationId === 'function' ? getMyDefaultLocationId() : null;
   const locked = role === 'member' && myDef;
-  let list = locs;
-  if (locked) list = locs.filter(l => l.id === myDef);
+  let list = uniqueLocs;
+  if (locked) list = uniqueLocs.filter(l => l.id === myDef);
   const sel = document.getElementById('stockCountLocation');
   sel.innerHTML = list.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
   const active = typeof getActiveLocation === 'function' ? getActiveLocation() : null;
@@ -12028,16 +12039,77 @@ function closeStockCountModal() {
   _stockCountSession = null;
 }
 
+/**
+ * Move stock map keys from duplicate/orphan location ids onto the active
+ * location with the same name (fixes "Main store shows 0" while qty sits on old id).
+ */
+function consolidateStockOntoCanonicalLocations() {
+  ensurePosDb();
+  try { dedupeLocationsByName(); } catch (_) {}
+  const active = (db.locations || []).filter(l => l.active !== false);
+  if (!active.length) return;
+  const byName = new Map();
+  active.forEach(l => {
+    const k = String(l.name || '').trim().toLowerCase();
+    if (!k) return;
+    if (!byName.has(k)) byName.set(k, l);
+  });
+  // Also map inactive / leftover ids by name → canonical
+  const idToCanon = {};
+  (db.locations || []).forEach(l => {
+    const k = String(l.name || '').trim().toLowerCase();
+    const canon = byName.get(k);
+    if (canon && l.id !== canon.id) idToCanon[l.id] = canon.id;
+  });
+  if (!Object.keys(idToCanon).length) return;
+  (db.products || []).forEach(p => {
+    if (!p?.stock_by_location || typeof p.stock_by_location !== 'object') return;
+    const map = p.stock_by_location;
+    const next = {};
+    Object.keys(map).forEach(lid => {
+      const canon = idToCanon[lid] || lid;
+      next[canon] = (Number(next[canon]) || 0) + (Number(map[lid]) || 0);
+    });
+    p.stock_by_location = next;
+    active.forEach(loc => {
+      if (next[loc.id] == null) next[loc.id] = 0;
+      stockMirrorRow(p.id, loc.id, next[loc.id]);
+    });
+    stockRecalcTotal(p);
+  });
+  try { persistDb(); } catch (_) {}
+}
+
 function startStockCountSession() {
   ensurePosDb();
+  try { consolidateStockOntoCanonicalLocations(); } catch (_) {}
+  try { migrateProductStockToLocations(); } catch (_) {}
   const locId = document.getElementById('stockCountLocation').value;
-  const loc = db.locations.find(l => l.id === locId);
+  const loc = db.locations.find(l => l.id === locId && l.active !== false)
+    || db.locations.find(l => l.id === locId);
   if (!loc) { toast('Choose a location'); return; }
   const note = (document.getElementById('stockCountNote').value || '').trim() || null;
   const products = (db.products || [])
     .filter(p => p.active !== false && p.track_stock !== false)
     .slice()
     .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  // Always read live qty for the chosen store id
+  const systemAt = (pid) => {
+    let q = Number(locationStockQty(pid, loc.id)) || 0;
+    if (q !== 0) return q;
+    // Fallback: any map key whose location shares this store name
+    const p = db.products.find(x => x.id === pid);
+    const map = p?.stock_by_location;
+    if (!map) return 0;
+    const nameKey = String(loc.name || '').trim().toLowerCase();
+    Object.keys(map).forEach(lid => {
+      const L = (db.locations || []).find(x => x.id === lid);
+      if (L && String(L.name || '').trim().toLowerCase() === nameKey) {
+        q += Number(map[lid]) || 0;
+      }
+    });
+    return q;
+  };
   _stockCountSession = {
     locationId: loc.id,
     locationName: loc.name,
@@ -12047,7 +12119,7 @@ function startStockCountSession() {
       product_id: p.id,
       name: p.name,
       sku: p.sku || '',
-      system_qty: locationStockQty(p.id, loc.id),
+      system_qty: systemAt(p.id),
       counted_qty: null // null = skipped
     }))
   };
@@ -13550,6 +13622,7 @@ function productsView() {
       try { toast('Merged ' + r.merged + ' duplicate store name(s) — stock maps fixed'); } catch (_) {}
     }
   } catch (_) {}
+  try { consolidateStockOntoCanonicalLocations(); } catch (_) {}
   try { repairLocationStockIds(); } catch (_) {}
   try { migrateProductStockToLocations(); } catch (_) {}
   try { runLowStockAlertEngine({ silent: true }); } catch (_) {}
