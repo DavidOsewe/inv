@@ -703,6 +703,34 @@ async function pullProducts() {
       updated_at: row.updated_at
     });
   });
+  // Pull per-store stock so POS sells against the right outlet qty
+  try {
+    const { data: stockRows } = await sb.from('product_location_stock')
+      .select('*')
+      .eq('organization_id', organizationId);
+    if (stockRows && stockRows.length) {
+      if (!Array.isArray(db.locationStock)) db.locationStock = [];
+      const productByCloud = new Map(db.products.filter(p => p.cloudId).map(p => [p.cloudId, p]));
+      const locationByCloud = new Map((db.locations || []).filter(l => l.cloudId).map(l => [l.cloudId, l]));
+      stockRows.forEach(row => {
+        const p = productByCloud.get(row.product_id);
+        const loc = locationByCloud.get(row.location_id);
+        if (!p || !loc) return;
+        let s = db.locationStock.find(x => x.product_id === p.id && x.location_id === loc.id);
+        if (!s) {
+          s = { product_id: p.id, location_id: loc.id, qty: 0 };
+          db.locationStock.push(s);
+        }
+        if (row.qty != null && row.qty !== '') s.qty = Number(row.qty) || 0;
+      });
+      db.products.forEach(p => {
+        p.stock_qty = (db.locationStock || [])
+          .filter(s => s.product_id === p.id)
+          .reduce((n, s) => n + (Number(s.qty) || 0), 0);
+      });
+    }
+  } catch (e) { console.warn('pos location stock pull', e); }
+  try { migrateProductStockToLocations(); } catch (_) {}
   persistDb();
 }
 
@@ -733,6 +761,29 @@ async function pullLocationsAndApplyMember() {
           active: row.active !== false
         });
       });
+      // After locations exist, pull location stock if products already loaded
+      try {
+        const { data: stockRows } = await sb.from('product_location_stock')
+          .select('*')
+          .eq('organization_id', organizationId);
+        if (stockRows && stockRows.length) {
+          if (!Array.isArray(db.locationStock)) db.locationStock = [];
+          const productByCloud = new Map((db.products || []).filter(p => p.cloudId).map(p => [p.cloudId, p]));
+          const locationByCloud = new Map(db.locations.filter(l => l.cloudId).map(l => [l.cloudId, l]));
+          stockRows.forEach(row => {
+            const p = productByCloud.get(row.product_id);
+            const loc = locationByCloud.get(row.location_id);
+            if (!p || !loc) return;
+            let s = db.locationStock.find(x => x.product_id === p.id && x.location_id === loc.id);
+            if (!s) {
+              s = { product_id: p.id, location_id: loc.id, qty: 0 };
+              db.locationStock.push(s);
+            }
+            if (row.qty != null && row.qty !== '') s.qty = Number(row.qty) || 0;
+          });
+        }
+      } catch (e2) { console.warn('loc stock in pullLocations', e2); }
+      try { migrateProductStockToLocations(); } catch (_) {}
     }
   } catch (e) { console.warn('pull locations', e); }
 
@@ -804,6 +855,9 @@ async function flushSyncQueue() {
       } else if (job.type === 'stock') {
         const p = db.products.find(x => x.id === job.product_id);
         if (p) await pushProduct(p);
+        if (job.location_id) {
+          try { await pushLocationStock(job.product_id, job.location_id); } catch (e) { console.warn('loc stock', e); }
+        }
         if (job.movement) await pushMovement(job.movement, job.product_cloud_id || p?.cloudId);
       } else if (job.type === 'product_stock') {
         const p = db.products.find(x => x.id === job.product_id);
@@ -829,6 +883,7 @@ async function flushSyncQueue() {
 function ensurePosLocation() {
   if (!Array.isArray(db.locations)) db.locations = [];
   if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  try { migrateProductStockToLocations(); } catch (_) {}
   if (!db.locations.length) {
     const loc = {
       id: crypto.randomUUID(),
@@ -879,17 +934,54 @@ function getActiveLocation() {
   return db.locations.find(l => l.id === db.activeLocationId) || db.locations[0] || null;
 }
 
+/** Put product.stock_qty onto default location when no location rows exist yet. */
+function migrateProductStockToLocations() {
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
+  if (!Array.isArray(db.locations) || !db.locations.length) return;
+  const def = db.locations.find(l => l.is_default && l.active !== false)
+    || db.locations.find(l => l.active !== false)
+    || db.locations[0];
+  if (!def) return;
+  (db.products || []).forEach(p => {
+    if (!p || p.track_stock === false) return;
+    const rows = db.locationStock.filter(s => s.product_id === p.id);
+    const sum = rows.reduce((n, s) => n + (Number(s.qty) || 0), 0);
+    const total = Number(p.stock_qty) || 0;
+    if (!rows.length && total !== 0) {
+      db.locationStock.push({ product_id: p.id, location_id: def.id, qty: total });
+    } else if (rows.length && Math.abs(sum - total) > 0.0001 && sum === 0 && total !== 0) {
+      // All zeros but product total > 0 → assign to default
+      let row = rows.find(s => s.location_id === def.id);
+      if (!row) {
+        row = { product_id: p.id, location_id: def.id, qty: 0 };
+        db.locationStock.push(row);
+      }
+      row.qty = total;
+    } else if (rows.length) {
+      p.stock_qty = sum;
+    }
+  });
+}
+
 function locationStockQty(productId, locationId) {
+  migrateProductStockToLocations();
   const lid = locationId || db.activeLocationId;
+  if (!lid) {
+    const p = db.products.find(x => x.id === productId);
+    return Number(p?.stock_qty) || 0;
+  }
   const row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === lid);
   if (row) return Number(row.qty) || 0;
-  // Fallback: total product stock if no location rows yet
+  // Multi-location: missing row means 0 at that store (not the global total)
+  const locCount = (db.locations || []).filter(l => l.active !== false).length;
+  if (locCount > 1) return 0;
   const p = db.products.find(x => x.id === productId);
   return Number(p?.stock_qty) || 0;
 }
 
 function adjustLocationStockLocal(productId, locationId, qtyChange, meta) {
   meta = meta || {};
+  migrateProductStockToLocations();
   let row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === locationId);
   if (!row) {
     row = { product_id: productId, location_id: locationId, qty: 0 };
@@ -915,6 +1007,29 @@ function adjustLocationStockLocal(productId, locationId, qtyChange, meta) {
   };
   db.stockMovements.push(mov);
   return { row, mov, product: p };
+}
+
+async function pushLocationStock(productId, locationId) {
+  if (!organizationId || !isOnline()) return;
+  const p = db.products.find(x => x.id === productId);
+  const loc = db.locations.find(x => x.id === locationId);
+  if (!p?.cloudId || !loc?.cloudId) return;
+  const qty = locationStockQty(productId, locationId);
+  const { data: existing } = await sb.from('product_location_stock')
+    .select('id')
+    .eq('product_id', p.cloudId)
+    .eq('location_id', loc.cloudId)
+    .maybeSingle();
+  if (existing?.id) {
+    await sb.from('product_location_stock').update({ qty, updated_at: new Date().toISOString() }).eq('id', existing.id);
+  } else {
+    await sb.from('product_location_stock').insert({
+      organization_id: organizationId,
+      product_id: p.cloudId,
+      location_id: loc.cloudId,
+      qty
+    });
+  }
 }
 
 function updateLocationLabel() {
@@ -1356,7 +1471,7 @@ async function pushSale(sale) {
   if (!isOnline()) throw new Error('offline');
   // Idempotent: if already has cloudId, skip
   if (sale.cloudId) return;
-  const { data, error } = await sb.from('pos_sales').insert({
+  const base = {
     organization_id: organizationId,
     local_id: sale.id,
     sale_number: sale.sale_number,
@@ -1368,13 +1483,33 @@ async function pushSale(sale) {
     change_given: sale.change_given,
     payment_note: sale.payment_note,
     lines: sale.lines
-  }).select('id').single();
-  if (error) {
-    // Unique conflict on local_id / sale_number — treat as already synced
-    if (/duplicate|unique/i.test(String(error.message || ''))) return;
+  };
+  // Prefer full payload (location + cost); fall back if columns not migrated yet
+  const attempts = [
+    Object.assign({}, base, {
+      cost_total: sale.cost_total != null ? sale.cost_total : null,
+      location_id: sale.location_id || null,
+      location_name: sale.location_name || null
+    }),
+    Object.assign({}, base, {
+      cost_total: sale.cost_total != null ? sale.cost_total : null
+    }),
+    base
+  ];
+  let lastErr = null;
+  for (const payload of attempts) {
+    const { data, error } = await sb.from('pos_sales').insert(payload).select('id').single();
+    if (!error && data) {
+      sale.cloudId = data.id;
+      return;
+    }
+    lastErr = error;
+    if (error && /duplicate|unique/i.test(String(error.message || ''))) return;
+    // Column missing → try leaner payload
+    if (error && /column|schema|does not exist/i.test(String(error.message || ''))) continue;
     throw error;
   }
-  sale.cloudId = data.id;
+  if (lastErr) throw lastErr;
 }
 
 function saleCostTotal(lines) {
@@ -1387,7 +1522,17 @@ function saleCostTotal(lines) {
 
 function postLocalBooks(sale) {
   const key = 'pos:' + sale.id;
-  const date = sale.sold_at.slice(0, 10);
+  const date = (sale.sold_at || new Date().toISOString()).slice(0, 10);
+  const outletSlug = String(sale.location_name || sale.location_id || 'store')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^\w\-]/g, '') || 'store';
+  const saleLabel = (sale.sale_number || 'POS') + '_' + outletSlug; // e.g. POS-0004_Gbagada
+  sale.books_label = saleLabel;
+
+  const payCash = !sale.payment_method || sale.payment_method === 'cash';
+  const debitAcct = payCash ? '1000' : '1000'; // bank mapping can be refined later
+
   if (!db.cashEntries.some(e => e.sourceKey === key)) {
     db.cashEntries.push({
       id: crypto.randomUUID(),
@@ -1396,30 +1541,35 @@ function postLocalBooks(sale) {
       amount: sale.total,
       currency: sale.currency,
       date,
-      note: 'POS sale ' + sale.sale_number,
+      note: 'POS sale ' + saleLabel,
       source: 'pos_sale',
-      sourceKey: key
+      sourceKey: key,
+      location_id: sale.location_id || null,
+      location_name: sale.location_name || null
     });
   }
-  // Revenue: cash in / sales (use `date` — same field as app.html Books)
+  // Revenue: Dr Cash/Bank · Cr Sales (Books uses `date`)
   if (!db.journals.some(j => j.sourceKey === 'j:' + key)) {
     db.journals.push({
       id: crypto.randomUUID(),
       date: date,
       entry_date: date,
-      memo: 'POS sale ' + sale.sale_number,
+      memo: 'POS sale ' + saleLabel,
       source: 'pos_sale',
       sourceKey: 'j:' + key,
       currency: sale.currency,
+      location_id: sale.location_id || null,
+      location_name: sale.location_name || null,
       lines: [
-        { accountId: '1000', debit: sale.total, credit: 0 },
-        { accountId: '4000', debit: 0, credit: sale.total }
+        { accountId: debitAcct, debit: Number(sale.total) || 0, credit: 0 },
+        { accountId: '4000', debit: 0, credit: Number(sale.total) || 0 }
       ],
       createdAt: new Date().toISOString(),
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      reversed: false
     });
   }
-  // COGS: only when product cost is set
+  // COGS: only when product cost is set — Dr COGS · Cr Inventory
   const costTotal = Number(sale.cost_total) || saleCostTotal(sale.lines);
   const cogsKey = 'j:pos_cogs:' + sale.id;
   if (costTotal > 0.0001 && !db.journals.some(j => j.sourceKey === cogsKey)) {
@@ -1427,16 +1577,19 @@ function postLocalBooks(sale) {
       id: crypto.randomUUID(),
       date: date,
       entry_date: date,
-      memo: 'COGS · POS sale ' + sale.sale_number,
+      memo: 'COGS · POS sale ' + saleLabel,
       source: 'pos_cogs',
       sourceKey: cogsKey,
       currency: sale.currency,
+      location_id: sale.location_id || null,
+      location_name: sale.location_name || null,
       lines: [
         { accountId: '5000', debit: costTotal, credit: 0 },
         { accountId: '1300', debit: 0, credit: costTotal }
       ],
       createdAt: new Date().toISOString(),
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      reversed: false
     });
   }
 }
