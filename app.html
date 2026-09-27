@@ -2958,6 +2958,7 @@ input:focus:not(:focus-visible) {
         </div>
       </div>
       <div id="nextAction" class="next-action" style="display:none"></div>
+      <div id="dashboardApprovals" class="insight" style="display:none;margin:14px 0;border-color:#fcd34d;background:#fffbeb"></div>
       <div id="dashboardLowStock" class="insight" style="display:none;margin:14px 0"></div>
       <div class="section-head">
         <h2>Recent invoices</h2>
@@ -4068,6 +4069,58 @@ input:focus:not(:focus-visible) {
             <span>Require approval for purchase orders</span>
           </label>
           <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
+            <input type="checkbox" data-p="requireExpenseApproval" id="requireExpenseApproval">
+            <span>Require approval for expenses &amp; supplier bills</span>
+          </label>
+          <div id="expenseApprovalRolesBox" style="margin:10px 0 4px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px">Expense workflow roles</div>
+            <p class="section-sub" style="margin:0 0 10px">Who can request, review, and finally approve money out. Review is optional for small amounts.</p>
+            <div class="two" style="gap:10px">
+              <div class="field" style="margin:0">
+                <label>Requester (can submit)</label>
+                <select id="expenseRequesterRole" data-p="expenseRequesterRole">
+                  <option value="member">Member + above</option>
+                  <option value="manager">Manager + owner only</option>
+                  <option value="owner">Owner only</option>
+                </select>
+              </div>
+              <div class="field" style="margin:0">
+                <label>Reviewer (checks request)</label>
+                <select id="expenseReviewerRole" data-p="expenseReviewerRole">
+                  <option value="manager">Manager + owner</option>
+                  <option value="owner">Owner only</option>
+                  <option value="none">Skip review (straight to approval)</option>
+                </select>
+              </div>
+            </div>
+            <div class="two" style="gap:10px;margin-top:8px">
+              <div class="field" style="margin:0">
+                <label>Approver (posts to books)</label>
+                <select id="expenseApproverRole" data-p="expenseApproverRole">
+                  <option value="manager">Manager + owner</option>
+                  <option value="owner">Owner only</option>
+                </select>
+              </div>
+              <div class="field" style="margin:0">
+                <label>Auto-approve under (₦ / reporting currency)</label>
+                <input type="number" min="0" step="1" id="expenseApprovalThreshold" data-p="expenseApprovalThreshold" placeholder="0 = all need approval">
+              </div>
+            </div>
+            <p class="section-sub" style="margin:8px 0 0">
+              Flow: <b>Requester</b> submits plain details (no journal skills needed) →
+              <b>Reviewer</b> checks → <b>Approver / accountant</b> assigns ledger and posts books.
+              Below the threshold, expenses post immediately.
+            </p>
+            <label style="display:flex;align-items:center;gap:10px;margin:10px 0 0;cursor:pointer">
+              <input type="checkbox" data-p="expenseBlockSelfApprove" id="expenseBlockSelfApprove" checked>
+              <span>Block self-approve (cannot approve your own request)</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;margin:8px 0 0;cursor:pointer">
+              <input type="checkbox" data-p="expenseRequireReceipt" id="expenseRequireReceipt" checked>
+              <span>Require receipt/attachment when approval is required</span>
+            </label>
+          </div>
+          <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
             <input type="checkbox" data-p="lowStockAlertsEnabled" id="lowStockAlertsEnabled">
             <span>Automated low-stock alerts (toast + badge when stock hits threshold)</span>
           </label>
@@ -4934,11 +4987,15 @@ input:focus:not(:focus-visible) {
 
 <div class="modalback" id="billModal">
   <div class="modal" style="max-width:440px">
-    <h2>Supplier bill</h2>
-    <p class="section-sub">Accrue expense + accounts payable. Pay later to clear the liability.</p>
-    <div class="field"><label>Supplier</label><input id="billSupplier" placeholder="e.g. MTN, landlord, distributor"></div>
-    <div class="field"><label>Category / expense ledger</label><select id="billCategory" class="searchable" data-searchable="1"></select></div>
-    <div class="field"><label>Supporting documents</label>
+    <h2 id="billModalTitle">Expense request</h2>
+    <p class="section-sub" id="billModalSub">Describe the spend and attach the receipt. Your accountant picks the ledger and posts the journal — you do not need to know bookkeeping codes.</p>
+    <div class="field"><label>Supplier / payee</label><input id="billSupplier" placeholder="e.g. MTN, landlord, distributor"></div>
+    <div class="field" id="billCategoryField">
+      <label id="billCategoryLabel">Suggested category (optional)</label>
+      <select id="billCategory" class="searchable" data-searchable="1"></select>
+      <div class="section-sub" id="billCategoryHint" style="margin-top:4px">Leave blank if unsure — accountant sets this on approval.</div>
+    </div>
+    <div class="field"><label>Supporting documents (receipt / invoice)</label>
       <input id="billDocs" type="file" multiple accept="image/*,.pdf,.png,.jpg,.jpeg">
       <div id="billDocsList" class="client-meta" style="margin-top:6px"></div>
     </div>
@@ -4951,9 +5008,9 @@ input:focus:not(:focus-visible) {
       <div class="field"><label>Bill date</label><input id="billDate" type="date"></div>
       <div class="field"><label>Due date</label><input id="billDue" type="date"></div>
     </div>
-    <div class="field"><label>Note / reference</label><input id="billNote" placeholder="Invoice number from supplier"></div>
+    <div class="field"><label>What is this for?</label><input id="billNote" placeholder="e.g. June rent, POS paper, fuel for delivery"></div>
     <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="button primary" type="button" id="billSave">Accrue bill</button>
+      <button class="button primary" type="button" id="billSave">Submit to accountant</button>
       <button class="button" type="button" id="billCancel">Cancel</button>
     </div>
   </div>
@@ -7069,6 +7126,24 @@ document.addEventListener('click', (e) => {
     paySupplierBill(id, { accountId });
     return;
   }
+  const reviewBill = e.target.closest('[data-review-bill]');
+  if (reviewBill) {
+    e.preventDefault();
+    try { reviewExpenseBill(reviewBill.getAttribute('data-review-bill')); } catch (err) { toast(err.message || 'Review failed'); }
+    return;
+  }
+  const approveBill = e.target.closest('[data-approve-bill]');
+  if (approveBill) {
+    e.preventDefault();
+    try { approveExpenseBill(approveBill.getAttribute('data-approve-bill')); } catch (err) { toast(err.message || 'Approve failed'); }
+    return;
+  }
+  const rejectBill = e.target.closest('[data-reject-bill]');
+  if (rejectBill) {
+    e.preventDefault();
+    try { rejectExpenseBill(rejectBill.getAttribute('data-reject-bill')); } catch (err) { toast(err.message || 'Reject failed'); }
+    return;
+  }
   const bankMatch = e.target.closest('[data-bank-match]');
   if (bankMatch) { e.preventDefault(); matchBankTx(bankMatch.getAttribute('data-bank-match')); return; }
   const bankAdd = e.target.closest('[data-bank-add]');
@@ -8440,6 +8515,7 @@ function dashboard() {
   ).join('');
 
   try { renderCollectionsPanel(); } catch (e) { console.warn('collections', e.message || e); }
+  try { renderDashboardApprovals(); } catch (e) { console.warn('approvals strip', e); }
 
   if (!all.length) {
     $('#insightText').innerHTML = `<b style="color:var(--text)">Welcome to invoicedey</b><br>
@@ -9669,18 +9745,21 @@ const ROLE_PERMISSIONS = {
     'books.write', 'books.view',
     'inventory.manage', 'transfers.create', 'transfers.approve',
     'purchases.create', 'purchases.approve',
+    'expenses.request', 'expenses.review', 'expenses.approve',
     'pos.sell', 'invoices.write', 'locations.manage', 'approvals.settings'
   ],
   manager: [
     'books.write', 'books.view',
     'inventory.manage', 'transfers.create', 'transfers.approve',
     'purchases.create', 'purchases.approve',
+    'expenses.request', 'expenses.review', 'expenses.approve',
     'pos.sell', 'invoices.write', 'locations.manage'
   ],
   member: [
-    'books.view',
+    'books.view', 'books.write',
     'transfers.create', // submit; approve gated separately
     'purchases.create',
+    'expenses.request', // submit only — review/approve gated by settings
     'pos.sell', 'invoices.write'
   ]
 };
@@ -9698,7 +9777,7 @@ function can(permission) {
 function canApproveApprovals() {
   try {
     if (typeof can === 'function') {
-      return !!(can('transfers.approve') || can('purchases.approve'));
+      return !!(can('transfers.approve') || can('purchases.approve') || can('expenses.approve') || can('expenses.review'));
     }
   } catch (_) {}
   // Fallback if RBAC not ready: owners/managers only by role string
@@ -9758,12 +9837,223 @@ async function refreshCloudMemberRole() {
   return currentOrgRole();
 }
 
-/* ---------- Approvals (transfers + POs) ---------- */
+/* ---------- Approvals (transfers + POs + expenses) ---------- */
 function approvalsEnabledTransfers() {
   return !!(db.profile && db.profile.requireTransferApproval);
 }
 function approvalsEnabledPurchases() {
   return !!(db.profile && db.profile.requirePurchaseApproval);
+}
+function approvalsEnabledExpenses() {
+  return !!(db.profile && db.profile.requireExpenseApproval);
+}
+function expenseApprovalThreshold() {
+  const n = Number(db.profile && db.profile.expenseApprovalThreshold);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+/** role rank: owner > manager > member */
+function roleRank(role) {
+  const r = String(role || '').toLowerCase();
+  if (r === 'owner') return 3;
+  if (r === 'manager') return 2;
+  return 1;
+}
+function roleMeetsMinimum(minRole) {
+  const min = String(minRole || 'member').toLowerCase();
+  if (min === 'none') return false;
+  return roleRank(currentOrgRole()) >= roleRank(min);
+}
+function canRequestExpense() {
+  if (!approvalsEnabledExpenses()) return can('books.write') || can('expenses.request');
+  const need = (db.profile && db.profile.expenseRequesterRole) || 'member';
+  return roleMeetsMinimum(need);
+}
+function canReviewExpense() {
+  if (!approvalsEnabledExpenses()) return false;
+  const need = (db.profile && db.profile.expenseReviewerRole) || 'manager';
+  if (need === 'none') return false;
+  // Org role floor + permission
+  if (!roleMeetsMinimum(need)) return false;
+  return can('expenses.review') || currentOrgRole() === 'owner';
+}
+function canApproveExpense() {
+  if (!approvalsEnabledExpenses()) return can('books.write');
+  const need = (db.profile && db.profile.expenseApproverRole) || 'manager';
+  if (!roleMeetsMinimum(need)) return false;
+  return can('expenses.approve') || currentOrgRole() === 'owner';
+}
+/** Does this amount need the full approval chain? */
+function expenseNeedsApproval(amount, currency) {
+  if (!approvalsEnabledExpenses()) return false;
+  const amt = Number(amount) || 0;
+  const thr = expenseApprovalThreshold();
+  if (thr > 0 && amt < thr) return false;
+  return true;
+}
+function expenseReviewRequired() {
+  if (!approvalsEnabledExpenses()) return false;
+  const need = (db.profile && db.profile.expenseReviewerRole) || 'manager';
+  return need !== 'none';
+}
+/** Initial status when requester submits an expense/bill */
+function expenseSubmitStatus(amount) {
+  if (!expenseNeedsApproval(amount)) return 'open'; // post immediately
+  if (expenseReviewRequired()) return 'pending_review';
+  return 'pending_approval';
+}
+function expenseActorMeta() {
+  try {
+    const a = typeof booksActor === 'function' ? booksActor() : {};
+    return {
+      userId: a.userId || (cloud && cloud.user && cloud.user.id) || null,
+      email: a.email || (cloud && cloud.user && cloud.user.email) || null,
+      role: currentOrgRole() || null,
+      at: new Date().toISOString()
+    };
+  } catch (_) {
+    return { userId: null, email: null, role: currentOrgRole() || null, at: new Date().toISOString() };
+  }
+}
+function expenseBlockSelfApprove() {
+  // Default ON when setting missing
+  if (!db.profile) return true;
+  if (db.profile.expenseBlockSelfApprove === false) return false;
+  return true;
+}
+function expenseRequireReceipt() {
+  if (!db.profile) return true;
+  if (db.profile.expenseRequireReceipt === false) return false;
+  return true;
+}
+function isSelfExpenseRequest(entity) {
+  if (!entity) return false;
+  const me = expenseActorMeta();
+  if (me.userId && entity.requested_by && String(me.userId) === String(entity.requested_by)) return true;
+  if (me.email && entity.requested_by_email &&
+      String(me.email).toLowerCase() === String(entity.requested_by_email).toLowerCase()) return true;
+  return false;
+}
+function expenseHasReceipt(entity) {
+  const docs = entity && (entity.documents || entity.docs);
+  return Array.isArray(docs) && docs.length > 0;
+}
+/** Unified pending items for Home + Books attention */
+function listPendingApprovalItems() {
+  const items = [];
+  try {
+    (db.stockTransfers || []).forEach(t => {
+      if (t.status === 'pending_approval') {
+        items.push({
+          kind: 'transfer',
+          id: t.id,
+          label: (t.transfer_number || 'Transfer') + ' · waiting for manager',
+          go: () => { try { _invTab = 'move'; switchTo('inventory'); } catch (_) { switchTo('inventory'); } }
+        });
+      }
+    });
+  } catch (_) {}
+  try {
+    (db.purchases || []).forEach(p => {
+      if (p.status === 'pending_approval') {
+        items.push({
+          kind: 'purchase',
+          id: p.id,
+          label: (p.purchase_number || 'PO') + ' · waiting for approval',
+          go: () => { try { _invTab = 'buy'; switchTo('inventory'); } catch (_) { switchTo('inventory'); } }
+        });
+      }
+    });
+  } catch (_) {}
+  try {
+    (db.bills || []).forEach(b => {
+      if (b.status === 'pending_review' || b.status === 'pending_approval') {
+        items.push({
+          kind: 'bill',
+          id: b.id,
+          status: b.status,
+          label: (b.supplier || 'Expense') + ' · ' +
+            (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) +
+            (b.status === 'pending_review' ? ' · needs review' : ' · accountant queue'),
+          go: () => {
+            try {
+              switchTo('books');
+              booksPage = 'ap';
+              booksTab = 'payables';
+              setBooksPage('ap', 'payables');
+              renderBooksPayables();
+            } catch (_) { switchTo('books'); }
+          }
+        });
+      }
+    });
+  } catch (_) {}
+  try {
+    (db.cashEntries || []).forEach(c => {
+      if (c.type === 'out' && (c.status === 'pending_review' || c.status === 'pending_approval')) {
+        items.push({
+          kind: 'cash',
+          id: c.id,
+          status: c.status,
+          label: (c.note || 'Cash expense') + ' · ' +
+            (typeof money === 'function' ? money(c.amount, c.currency) : c.amount) +
+            ' · accountant queue',
+          go: () => {
+            try {
+              switchTo('books');
+              booksPage = 'ap';
+              booksTab = 'payables';
+              setBooksPage('ap', 'payables');
+            } catch (_) { switchTo('books'); }
+          }
+        });
+      }
+    });
+  } catch (_) {}
+  return items;
+}
+function renderDashboardApprovals() {
+  const el = document.getElementById('dashboardApprovals');
+  if (!el) return;
+  const items = listPendingApprovalItems();
+  if (!items.length) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  const canAct = (typeof canApproveApprovals === 'function' && canApproveApprovals())
+    || (typeof canReviewExpense === 'function' && canReviewExpense())
+    || (typeof canApproveExpense === 'function' && canApproveExpense());
+  el.style.display = '';
+  el.innerHTML =
+    '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:flex-start">' +
+    '<div><div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#92400e">Needs approval</div>' +
+    '<div style="font-weight:700;margin-top:4px">' + items.length + ' item' + (items.length === 1 ? '' : 's') + ' in queue</div>' +
+    '<div class="section-sub" style="margin:4px 0 0">' +
+    (canAct
+      ? 'Review and post from the queue — requesters do not touch the ledger.'
+      : 'Submitted — waiting for a reviewer or accountant.') +
+    '</div></div>' +
+    '<button type="button" class="button small primary" id="dashApprovalsOpen">Open queue</button></div>' +
+    '<ul style="margin:10px 0 0;padding:0;list-style:none">' +
+    items.slice(0, 5).map(it =>
+      '<li style="padding:6px 0;border-top:1px solid rgba(146,64,14,.15);font-size:13px;display:flex;justify-content:space-between;gap:8px">' +
+      '<span>' + String(it.label).replace(/</g, '') + '</span>' +
+      '<button type="button" class="button text" data-dash-approval="' + it.kind + ':' + it.id + '" style="flex-shrink:0">Open</button></li>'
+    ).join('') +
+    (items.length > 5 ? '<li class="section-sub" style="padding-top:6px">+' + (items.length - 5) + ' more</li>' : '') +
+    '</ul>';
+  document.getElementById('dashApprovalsOpen')?.addEventListener('click', () => {
+    const first = items[0];
+    if (first && first.go) first.go();
+    else switchTo('books');
+  });
+  el.querySelectorAll('[data-dash-approval]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-dash-approval') || '';
+      const it = items.find(x => (x.kind + ':' + x.id) === key);
+      if (it && it.go) it.go();
+    });
+  });
 }
 function logStockAudit(action, entityType, entityId, summary, meta) {
   const enriched = Object.assign({}, meta || {}, {
@@ -9794,7 +10084,9 @@ function pendingApprovalsCount() {
   ensurePosDb();
   const t = (db.stockTransfers || []).filter(x => x.status === 'pending_approval').length;
   const p = (db.purchases || []).filter(x => x.status === 'pending_approval').length;
-  return t + p;
+  const exp = (db.bills || []).filter(x => x.status === 'pending_review' || x.status === 'pending_approval').length
+    + (db.cashEntries || []).filter(x => x.status === 'pending_review' || x.status === 'pending_approval').length;
+  return t + p + exp;
 }
 
 /* ---------- Stock transfers (Phase B) ---------- */
@@ -17425,6 +17717,112 @@ function renderBooksAuditTrail() {
 
 
 /** Accrue supplier bill: Dr Expense (+ input tax) / Cr AP */
+function reviewExpenseBill(billId) {
+  ensureBooksDb();
+  if (!canReviewExpense()) { toast('Your role cannot review expenses'); return; }
+  const bill = (db.bills || []).find(b => b.id === billId);
+  if (!bill || bill.status !== 'pending_review') { toast('Not waiting for review'); return; }
+  if (expenseBlockSelfApprove() && isSelfExpenseRequest(bill)) {
+    toast('You cannot review your own expense request');
+    return;
+  }
+  const actor = expenseActorMeta();
+  bill.status = 'pending_approval';
+  bill.reviewed_by = actor.userId;
+  bill.reviewed_by_email = actor.email;
+  bill.reviewed_at = actor.at;
+  try {
+    appendBooksAudit('bill.reviewed', 'bill', bill.id,
+      'Reviewed · ' + (bill.supplier || 'Supplier') + ' · ' + (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount),
+      null, { status: bill.status }, { status: bill.status });
+  } catch (_) {}
+  save();
+  try { queueBooksCloudSync(); } catch (_) {}
+  toast('Reviewed — waiting for final approval');
+  try { renderBooksPayables(); } catch (_) { booksView(); }
+}
+
+function approveExpenseBill(billId) {
+  ensureBooksDb();
+  if (!canApproveExpense()) { toast('Your role cannot approve expenses'); return; }
+  const bill = (db.bills || []).find(b => b.id === billId);
+  if (!bill || (bill.status !== 'pending_approval' && bill.status !== 'pending_review')) {
+    toast('Not waiting for approval');
+    return;
+  }
+  if (expenseBlockSelfApprove() && isSelfExpenseRequest(bill)) {
+    toast('You cannot approve your own expense — another approver must post it');
+    return;
+  }
+  if (bill.status === 'pending_review' && expenseReviewRequired() && !canReviewExpense()) {
+    toast('Needs review first');
+    return;
+  }
+  if (expenseRequireReceipt() && expenseNeedsApproval(bill.amount) && !expenseHasReceipt(bill)) {
+    toast('Receipt required before posting — ask requester to re-submit with attachment');
+    return;
+  }
+  // Accountant picks ledger if requester left it blank
+  if (!bill.category || bill.category === 'other_out' || bill.category === '') {
+    const coa = (typeof getCoa === 'function' ? getCoa() : []).filter(a => a.type === 'expense');
+    const hint = coa.slice(0, 8).map(a => a.id + ' ' + a.name).join('\n');
+    const picked = (prompt(
+      'Accountant: which expense ledger code should this hit?\n\nExamples:\n' + (hint || '5700 Operating expense') + '\n\nEnter account code:',
+      bill.category || '5700'
+    ) || '').trim();
+    if (!picked) { toast('Ledger required to post'); return; }
+    bill.category = picked;
+  }
+  const actor = expenseActorMeta();
+  try {
+    accrueSupplierBill(bill);
+  } catch (err) {
+    toast('Could not post to ledger — ' + (err.message || 'error'));
+    return;
+  }
+  bill.status = 'open';
+  bill.approved_by = actor.userId;
+  bill.approved_by_email = actor.email;
+  bill.approved_at = actor.at;
+  bill.posted_by = actor.userId;
+  bill.posted_at = actor.at;
+  try {
+    appendBooksAudit('bill.approved', 'bill', bill.id,
+      'Accountant posted · ' + (bill.supplier || 'Supplier') + ' · ' + (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
+        ' · ledger ' + (bill.category || ''),
+      null, { status: bill.status, category: bill.category }, { status: bill.status });
+  } catch (_) {}
+  save();
+  try { queueBooksCloudSync(); } catch (_) {}
+  toast('Posted to books · AP open');
+  try { renderBooksPayables(); } catch (_) { booksView(); }
+}
+
+function rejectExpenseBill(billId) {
+  ensureBooksDb();
+  if (!canReviewExpense() && !canApproveExpense()) { toast('Your role cannot reject expenses'); return; }
+  const bill = (db.bills || []).find(b => b.id === billId);
+  if (!bill || (bill.status !== 'pending_review' && bill.status !== 'pending_approval')) {
+    toast('Not pending');
+    return;
+  }
+  const note = (prompt('Rejection reason (optional)') || '').trim();
+  const actor = expenseActorMeta();
+  bill.status = 'rejected';
+  bill.rejected_by = actor.userId;
+  bill.rejected_at = actor.at;
+  bill.rejection_note = note || null;
+  try {
+    appendBooksAudit('bill.rejected', 'bill', bill.id,
+      'Rejected · ' + (bill.supplier || 'Supplier') + (note ? (' · ' + note) : ''),
+      null, { status: bill.status, note }, { status: bill.status });
+  } catch (_) {}
+  save();
+  try { queueBooksCloudSync(); } catch (_) {}
+  toast('Expense rejected');
+  try { renderBooksPayables(); } catch (_) { booksView(); }
+}
+
 function accrueSupplierBill(bill) {
   ensureBooksDb();
   const key = 'bill:' + bill.id;
@@ -17434,14 +17832,16 @@ function accrueSupplierBill(bill) {
   const totalRep = toRep(totalAmt, bill.currency);
   const taxRep = toRep(taxAmt, bill.currency);
   const netRep = toRep(net, bill.currency);
-  // category may be a COA account id (preferred) or a legacy category key
-  let expenseAccount = bill.category || '5700';
-  if (EXPENSE_ACCOUNT_BY_CATEGORY[expenseAccount]) {
+  // category may be a COA account id (preferred) or a legacy category key.
+  // Requesters often leave this blank — accountant sets it on approve; default 5700 as last resort.
+  let expenseAccount = (bill.category || '').trim() || '5700';
+  if (typeof EXPENSE_ACCOUNT_BY_CATEGORY !== 'undefined' && EXPENSE_ACCOUNT_BY_CATEGORY[expenseAccount]) {
     expenseAccount = EXPENSE_ACCOUNT_BY_CATEGORY[expenseAccount];
   }
   if (typeof getCoa === 'function' && !getCoa().some(a => a.id === expenseAccount)) {
-    expenseAccount = EXPENSE_ACCOUNT_BY_CATEGORY[bill.category] || '5700';
+    expenseAccount = (typeof EXPENSE_ACCOUNT_BY_CATEGORY !== 'undefined' && EXPENSE_ACCOUNT_BY_CATEGORY[bill.category]) || '5700';
   }
+  bill.category = expenseAccount;
   const lines = [];
   if (expenseAccount === '3100') {
     lines.push({ accountId: '3100', debit: netRep, credit: 0 });
@@ -17465,6 +17865,19 @@ function paySupplierBill(billId, opts) {
   opts = opts || {};
   const bill = (db.bills || []).find(b => b.id === billId);
   if (!bill || bill.status === 'paid') return;
+  // Only pay after accountant has posted (status open). Pending never hits cash.
+  if (bill.status === 'pending_review' || bill.status === 'pending_approval') {
+    toast('Still in accountant queue — approve & post before marking paid');
+    return;
+  }
+  if (bill.status === 'rejected') {
+    toast('Rejected expenses cannot be paid');
+    return;
+  }
+  if (bill.status && bill.status !== 'open' && bill.status !== 'approved') {
+    toast('Bill must be open on the ledger before payment');
+    return;
+  }
   const amt = toRep(bill.amount, bill.currency);
   if (!(amt > 0)) { toast('Invalid bill amount'); return; }
   // Prefer selected bank / cash equivalent, else default cash
@@ -17530,13 +17943,37 @@ function openBillModal() {
     toast('Bill form missing — hard-refresh');
     return;
   }
+  const needsQueue = typeof approvalsEnabledExpenses === 'function' && approvalsEnabledExpenses();
+  const isAccountant = typeof canApproveExpense === 'function' && canApproveExpense();
+  const title = document.getElementById('billModalTitle');
+  const sub = document.getElementById('billModalSub');
+  const saveBtn = document.getElementById('billSave');
+  const catLabel = document.getElementById('billCategoryLabel');
+  const catHint = document.getElementById('billCategoryHint');
+  if (title) title.textContent = needsQueue && !isAccountant ? 'Expense request' : 'Supplier bill';
+  if (sub) {
+    sub.textContent = needsQueue && !isAccountant
+      ? 'Fill in who, how much, and attach the receipt. Your accountant will pick the ledger and post the journal.'
+      : (needsQueue
+        ? 'You can post now, or leave the ledger for the approver. Pending requests sit in the accountant queue under Money out.'
+        : 'Accrue expense + accounts payable. Pay later to clear the liability.');
+  }
+  if (saveBtn) {
+    saveBtn.textContent = needsQueue && !isAccountant ? 'Submit to accountant' : (needsQueue ? 'Submit / post bill' : 'Accrue bill');
+  }
+  if (catLabel) catLabel.textContent = isAccountant ? 'Category / expense ledger' : 'Suggested category (optional)';
+  if (catHint) {
+    catHint.textContent = isAccountant
+      ? 'This account is debited when the bill is posted.'
+      : 'Optional — accountant confirms the ledger on approval. You do not need to know journal codes.';
+  }
   const cat = document.getElementById('billCategory');
   if (cat) {
-    // Full ledger index — prefer expense accounts, then all others for flexibility
     const coa = typeof getCoa === 'function' ? getCoa() : [];
     const expenses = coa.filter(a => a.type === 'expense' || a.statement === 'pl' && /expense|cogs|cost/i.test(a.type || a.name || ''));
     const rest = coa.filter(a => !expenses.includes(a));
     const opts = [];
+    opts.push('<option value="">— Pick later / not sure —</option>');
     if (expenses.length) {
       opts.push('<option disabled value="">— Expense accounts —</option>');
       expenses.forEach(a => opts.push(`<option value="${a.id}">${a.id} · ${a.name}</option>`));
@@ -17545,12 +17982,8 @@ function openBillModal() {
       opts.push('<option disabled value="">— Other ledgers —</option>');
       rest.forEach(a => opts.push(`<option value="${a.id}">${a.id} · ${a.name}</option>`));
     }
-    cat.innerHTML = opts.join('') || (BOOKS_CATEGORIES.out || []).map(c =>
-      `<option value="${c.id}">${c.label}</option>`
-    ).join('');
-    // Default to first expense or 5700
-    if ([...cat.options].some(o => o.value === '5700')) cat.value = '5700';
-    else if (expenses[0]) cat.value = expenses[0].id;
+    cat.innerHTML = opts.join('') || '<option value="">—</option>';
+    cat.value = '';
   }
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
   set('billSupplier', '');
@@ -17576,10 +18009,15 @@ function renderBooksPayables() {
   if (!el) return;
   ensureBooksDb();
   const bills = db.bills || [];
+  // Show queue + open + rejected in list; "open AP" metrics only ledger-open bills
   const open = bills.filter(b => b.status !== 'paid');
   const paid = bills.filter(b => b.status === 'paid').slice(-15).reverse();
+  const ledgerOpen = bills.filter(b => {
+    const st = b.status || 'open';
+    return st === 'open' || st === 'approved';
+  });
   const rep = (db.profile && db.profile.reporting) || 'NGN';
-  const openTotal = open.reduce((n, b) => n + (typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0), 0);
+  const openTotal = ledgerOpen.reduce((n, b) => n + (typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0), 0);
   // GL AP balance for cross-check
   let glAp = 0;
   try {
@@ -17611,13 +18049,27 @@ function renderBooksPayables() {
     '<div style="padding:12px 16px;border:1px solid var(--line);border-radius:12px;min-width:140px">' +
     '<div style="font-size:11px;color:var(--muted);text-transform:uppercase">Open AP</div>' +
     '<div style="font-size:18px;font-weight:700">' + (typeof money === 'function' ? money(openTotal, rep) : openTotal) + '</div>' +
-    '<div style="font-size:11px;color:var(--muted)">' + open.length + ' bill' + (open.length === 1 ? '' : 's') + '</div></div>';
+    '<div style="font-size:11px;color:var(--muted)">' + ledgerOpen.length + ' on ledger · ' + open.filter(b => b.status === 'pending_review' || b.status === 'pending_approval').length + ' in queue</div></div>';
   if (Math.abs(glAp) > 0.02) {
     html += '<div style="padding:12px 16px;border:1px solid var(--line);border-radius:12px;min-width:140px">' +
       '<div style="font-size:11px;color:var(--muted);text-transform:uppercase">Ledger 2000 AP</div>' +
       '<div style="font-size:18px;font-weight:700">' + (typeof money === 'function' ? money(Math.abs(glAp), rep) : Math.abs(glAp)) + '</div></div>';
   }
-  html += '<button type="button" class="button primary" id="booksAddBillBtn">+ Supplier bill</button></div>';
+  html += '<button type="button" class="button primary" id="booksAddBillBtn">+ Expense request</button></div>';
+
+  // Accountant queue — requests waiting for review / post (requesters never touch journals)
+  const queue = bills.filter(b => b.status === 'pending_review' || b.status === 'pending_approval');
+  if (queue.length) {
+    const canAct = (typeof canReviewExpense === 'function' && canReviewExpense())
+      || (typeof canApproveExpense === 'function' && canApproveExpense());
+    html += '<div style="margin-bottom:14px;padding:12px 14px;border:1px solid #fcd34d;border-radius:12px;background:#fffbeb">';
+    html += '<div style="font-size:12px;font-weight:800;color:#92400e;margin-bottom:6px">Accountant queue · ' + queue.length + ' waiting</div>';
+    html += '<p class="section-sub" style="margin:0 0 8px">Staff submitted these without posting books. Review, pick the ledger if needed, then Approve &amp; post.</p>';
+    if (!canAct) {
+      html += '<p class="section-sub" style="margin:0">You submitted these — an approver will post them to the ledger.</p>';
+    }
+    html += '</div>';
+  }
 
   if (open.length) {
     
@@ -17674,18 +18126,39 @@ function renderBooksPayables() {
       let overdue = false;
       try { overdue = due && new Date(due + 'T12:00:00') < new Date(); } catch (_) {}
       const cat = (typeof booksCategoryLabel === 'function') ? booksCategoryLabel('out', b.category) : (b.category || '');
+      const st = b.status || 'open';
+      const statusLabel = st === 'pending_review' ? 'Needs review'
+        : st === 'pending_approval' ? 'Needs approval'
+        : st === 'rejected' ? 'Rejected'
+        : st === 'open' ? 'Open' : st;
+      const statusStyle = st === 'pending_review' ? 'background:#e0e7ff;color:#3730a3'
+        : st === 'pending_approval' ? 'background:#fef3c7;color:#92400e'
+        : st === 'rejected' ? 'background:#fee2e2;color:#991b1b'
+        : 'background:var(--panel-2);color:var(--muted)';
+      const canRev = typeof canReviewExpense === 'function' && canReviewExpense();
+      const canAppr = typeof canApproveExpense === 'function' && canApproveExpense();
+      let actions = '';
+      if (st === 'pending_review' && canRev) {
+        actions += '<button type="button" class="button small primary" data-review-bill="' + b.id + '">Review OK</button>';
+        actions += '<button type="button" class="button small danger" data-reject-bill="' + b.id + '">Reject</button>';
+      } else if (st === 'pending_approval' && canAppr) {
+        actions += '<button type="button" class="button small primary" data-approve-bill="' + b.id + '">Approve &amp; post</button>';
+        actions += '<button type="button" class="button small danger" data-reject-bill="' + b.id + '">Reject</button>';
+      } else if (st === 'open' || st === 'approved') {
+        actions += '<select data-pay-from="' + b.id + '" style="font-size:12px;max-width:180px" title="Pay from">' + bankOpts + '</select>';
+        actions += '<button type="button" class="button small primary" data-pay-bill="' + b.id + '">Mark paid</button>';
+      }
+      actions += '<button type="button" class="button small danger" data-del-bill="' + b.id + '">Delete</button>';
       return '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)">' +
         '<div style="flex:1;min-width:160px">' +
-        '<div style="font-weight:700;font-size:13px">' + String(b.supplier || 'Supplier').replace(/</g, '') + '</div>' +
+        '<div style="font-weight:700;font-size:13px">' + String(b.supplier || 'Supplier').replace(/</g, '') +
+        ' <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;' + statusStyle + '">' + statusLabel + '</span></div>' +
         '<div style="font-size:12px;color:var(--muted)">' + cat + ' · bill ' + (b.date || '—') +
-        ' · due ' + (due || '—') + (overdue ? ' · <span style="color:var(--red-text)">overdue</span>' : '') +
-        (b.note ? (' · ' + String(b.note).slice(0, 40).replace(/</g, '')) : '') + '</div>' +
-        '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">' +
-        '<select data-pay-from="' + b.id + '" style="font-size:12px;max-width:180px" title="Pay from">' + bankOpts + '</select>' +
-        '</div></div>' +
+        ' · due ' + (due || '—') + (overdue && st === 'open' ? ' · <span style="color:var(--red-text)">overdue</span>' : '') +
+        (b.note ? (' · ' + String(b.note).slice(0, 40).replace(/</g, '')) : '') +
+        (b.requested_by_email ? (' · by ' + String(b.requested_by_email).replace(/</g, '')) : '') + '</div>' +
+        '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">' + actions + '</div></div>' +
         '<b>' + (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) + '</b>' +
-        '<button type="button" class="button small primary" data-pay-bill="' + b.id + '">Mark paid</button>' +
-        '<button type="button" class="button small danger" data-del-bill="' + b.id + '">Delete</button>' +
         '</div>';
     }).join('');
   } else {
@@ -18298,7 +18771,18 @@ function renderBooksAttention() {
       run: () => setBooksPage('ar', 'receivables')
     });
   }
-  const openAP = (db.bills || []).filter(b => b.status !== 'paid').length;
+  const queueAP = (db.bills || []).filter(b => b.status === 'pending_review' || b.status === 'pending_approval').length;
+  if (queueAP > 0) {
+    items.push({
+      text: queueAP + ' expense' + (queueAP === 1 ? '' : 's') + ' in accountant queue',
+      action: 'Review',
+      run: () => setBooksPage('ap', 'payables')
+    });
+  }
+  const openAP = (db.bills || []).filter(b => {
+    const st = b.status || 'open';
+    return st === 'open' || st === 'approved';
+  }).length;
   if (openAP > 0) {
     items.push({
       text: openAP + ' open supplier bill' + (openAP === 1 ? '' : 's'),
@@ -23099,49 +23583,68 @@ document.getElementById('btnAddBill')?.addEventListener('click', openBillModal);
 document.getElementById('billCancel')?.addEventListener('click', closeBillModal);
 document.getElementById('billSave')?.addEventListener('click', async () => {
   ensureBooksDb();
+  if (typeof canRequestExpense === 'function' && !canRequestExpense()) {
+    toast('Your role cannot submit expenses');
+    return;
+  }
   const amount = Number(document.getElementById('billAmount')?.value || 0);
   if (!(amount > 0)) { toast('Enter bill amount'); return; }
   let docs = [];
   try { docs = await readSupportingDocsFromInput('billDocs'); } catch (_) {}
+  const status = typeof expenseSubmitStatus === 'function' ? expenseSubmitStatus(amount) : 'open';
+  // Receipt required when this amount goes through approval queue
+  if (status !== 'open' && typeof expenseRequireReceipt === 'function' && expenseRequireReceipt() && !(docs && docs.length)) {
+    toast('Attach a receipt or invoice before submitting to the accountant');
+    return;
+  }
+  const actor = typeof expenseActorMeta === 'function' ? expenseActorMeta() : {};
   const bill = {
     id: crypto.randomUUID(),
     supplier: (document.getElementById('billSupplier')?.value || '').trim() || 'Supplier',
-    category: document.getElementById('billCategory')?.value || 'other_out',
+    category: (document.getElementById('billCategory')?.value || '').trim() || '',
     amount,
     tax: Number(document.getElementById('billTax')?.value || 0),
     currency: String(document.getElementById('billCurrency')?.value || db.profile.reporting || 'USD').toUpperCase(),
     date: document.getElementById('billDate')?.value || today,
     due: document.getElementById('billDue')?.value || today,
     note: (document.getElementById('billNote')?.value || '').trim(),
-    status: 'open',
-    documents: docs
+    status,
+    documents: docs,
+    requested_by: actor.userId || null,
+    requested_by_email: actor.email || null,
+    requested_at: actor.at || new Date().toISOString()
   };
   db.bills = db.bills || [];
   db.bills.push(bill);
-  try {
-    accrueSupplierBill(bill);
-  } catch (err) {
-    console.warn(err);
-    db.bills = db.bills.filter(b => b.id !== bill.id);
-    toast('Could not post bill to ledger — ' + (err.message || 'error'));
-    return;
+  if (status === 'open') {
+    try {
+      accrueSupplierBill(bill);
+    } catch (err) {
+      console.warn(err);
+      db.bills = db.bills.filter(b => b.id !== bill.id);
+      toast('Could not post bill to ledger — ' + (err.message || 'error'));
+      return;
+    }
   }
   try {
     appendBooksAudit(
-      'bill.created',
+      status === 'open' ? 'bill.created' : 'bill.submitted',
       'bill',
       bill.id,
-      'Bill · ' + (bill.supplier || 'Supplier') + ' · ' + (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
+      (status === 'open' ? 'Bill accrued · ' : ('Bill submitted · ' + status + ' · ')) +
+        (bill.supplier || 'Supplier') + ' · ' + (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
         ((bill.documents || []).length ? (' · ' + bill.documents.length + ' file(s)') : ''),
       null,
-      { id: bill.id, supplier: bill.supplier, amount: bill.amount, currency: bill.currency, documents: bill.documents || [] },
-      { documents: bill.documents || [], documentCount: (bill.documents || []).length }
+      { id: bill.id, supplier: bill.supplier, amount: bill.amount, currency: bill.currency, status, documents: bill.documents || [] },
+      { documents: bill.documents || [], documentCount: (bill.documents || []).length, status }
     );
   } catch (_) {}
   save();
   try { queueBooksCloudSync(); } catch (_) {}
   closeBillModal();
-  toast('Bill accrued · AP open · see Money out');
+  if (status === 'pending_review') toast('Bill submitted for review');
+  else if (status === 'pending_approval') toast('Bill submitted for approval');
+  else toast('Bill accrued · AP open · see Money out');
   try {
     booksPage = 'ap';
     booksTab = 'payables';
@@ -23151,7 +23654,7 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
     booksTab = 'payables';
     booksView();
   }
-  try { track('bill_accrued', { category: bill.category }); } catch (_) {}
+  try { track('bill_accrued', { category: bill.category, status }); } catch (_) {}
 });
 
 document.getElementById('btnExportBooks')?.addEventListener('click', exportBooksCsv);
@@ -23176,6 +23679,10 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
   const amount = Number(document.getElementById('cashAmount')?.value || 0);
   if (!(amount > 0)) { toast('Enter an amount'); return; }
   const type = document.getElementById('cashType')?.value === 'out' ? 'out' : 'in';
+  if (type === 'out' && typeof canRequestExpense === 'function' && !canRequestExpense()) {
+    toast('Your role cannot submit expenses');
+    return;
+  }
   const category = document.getElementById('cashCategory')?.value || (type === 'in' ? 'other_in' : 'other_out');
   const currency = String(document.getElementById('cashCurrency')?.value || db.profile.reporting || 'USD').toUpperCase();
   const date = document.getElementById('cashDate')?.value || today;
@@ -23185,12 +23692,34 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
   let docs = [];
   try { docs = await readSupportingDocsFromInput('cashDocs'); } catch (_) {}
   const id = crypto.randomUUID();
-  db.cashEntries.push({ id, type, category, amount, currency, date, note, source: 'manual', documents: (typeof docs !== 'undefined' ? docs : []), bankAccountId: (typeof bankAccountId !== 'undefined' ? bankAccountId : null), offsetAccountId: (typeof offsetAccountId !== 'undefined' ? offsetAccountId : null) });
+  const actor = typeof expenseActorMeta === 'function' ? expenseActorMeta() : {};
+  const needsAppr = type === 'out' && typeof expenseNeedsApproval === 'function' && expenseNeedsApproval(amount);
+  if (needsAppr && typeof expenseRequireReceipt === 'function' && expenseRequireReceipt() && !(docs && docs.length)) {
+    toast('Attach a receipt before submitting this expense to the accountant');
+    return;
+  }
+  const status = needsAppr
+    ? (typeof expenseSubmitStatus === 'function' ? expenseSubmitStatus(amount) : 'pending_approval')
+    : 'posted';
+  db.cashEntries.push({
+    id, type, category, amount, currency, date, note, source: 'manual',
+    documents: docs,
+    bankAccountId, offsetAccountId,
+    status,
+    requested_by: actor.userId || null,
+    requested_by_email: actor.email || null,
+    requested_at: actor.at || null
+  });
   try {
-    appendBooksAudit('cash.manual', 'cash', id, (type === 'out' ? 'Cash out' : 'Cash in') + ' · ' + note + ((typeof docs !== 'undefined' && docs.length) ? (' · ' + docs.length + ' file(s)') : ''), null, { id, type, amount, currency, documents: (typeof docs !== 'undefined' ? docs : []) }, { documents: (typeof docs !== 'undefined' ? docs : []) });
+    appendBooksAudit(
+      needsAppr ? 'cash.submitted' : 'cash.manual',
+      'cash', id,
+      (type === 'out' ? 'Cash out' : 'Cash in') + (needsAppr ? (' · ' + status) : '') + ' · ' + note +
+        (docs.length ? (' · ' + docs.length + ' file(s)') : ''),
+      null, { id, type, amount, currency, status, documents: docs }, { documents: docs, status }
+    );
   } catch (_) {}
   const amt = toRep(amount, currency);
-  // Ledger selection: bank/cash account + offset (expense/income). Fall back to category maps.
   const cashId = bankAccountId || defaultCashAccountId() || '1000';
   let offsetId = offsetAccountId;
   if (!offsetId) {
@@ -23201,49 +23730,44 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
       offsetId = category === 'loan_in' ? '3000' : (category === 'sales_other' ? '4100' : '4100');
     }
   }
-  // Validate accounts exist on COA; keep best-effort fallbacks
   try {
     const coa = (typeof getCoa === 'function' ? getCoa() : []) || [];
-    const has = (id) => coa.some(a => a.id === id);
-    if (!has(cashId)) {
-      toast('Cash account ' + cashId + ' is not on the chart — using 1000');
-    }
-    if (!has(offsetId)) {
-      offsetId = type === 'out' ? '5700' : '4100';
-    }
+    const has = (x) => coa.some(a => a.id === x);
+    if (!has(cashId)) toast('Cash account ' + cashId + ' is not on the chart — using 1000');
+    if (!has(offsetId)) offsetId = type === 'out' ? '5700' : '4100';
   } catch (_) {}
 
   const cashAcct = (typeof getCoa === 'function' && getCoa().some(a => a.id === cashId)) ? cashId : '1000';
   const offsetAcct = offsetId;
 
-  if (type === 'out') {
-    // Expense (or drawings): Dr offset · Cr cash/bank
-    postJournal({
-      date,
-      memo: note,
-      source: 'manual_expense',
-      sourceKey: 'j:cash:' + id,
-      lines: [
-        { accountId: offsetAcct, debit: amt, credit: 0 },
-        { accountId: cashAcct, debit: 0, credit: amt }
-      ],
-      documents: docs
-    });
-  } else {
-    // Income: Dr cash/bank · Cr offset (income/equity)
-    postJournal({
-      date,
-      memo: note,
-      source: 'manual_income',
-      sourceKey: 'j:cash:' + id,
-      lines: [
-        { accountId: cashAcct, debit: amt, credit: 0 },
-        { accountId: offsetAcct, debit: 0, credit: amt }
-      ],
-      documents: docs
-    });
+  // Only post to GL when not waiting on approval
+  if (!needsAppr || status === 'posted' || status === 'open') {
+    if (type === 'out') {
+      postJournal({
+        date,
+        memo: note,
+        source: 'manual_expense',
+        sourceKey: 'j:cash:' + id,
+        lines: [
+          { accountId: offsetAcct, debit: amt, credit: 0 },
+          { accountId: cashAcct, debit: 0, credit: amt }
+        ],
+        documents: docs
+      });
+    } else {
+      postJournal({
+        date,
+        memo: note,
+        source: 'manual_income',
+        sourceKey: 'j:cash:' + id,
+        lines: [
+          { accountId: cashAcct, debit: amt, credit: 0 },
+          { accountId: offsetAcct, debit: 0, credit: amt }
+        ],
+        documents: docs
+      });
+    }
   }
-  // Refresh cash entry with resolved ledger ids
   try {
     const ce = (db.cashEntries || []).find(x => x.id === id);
     if (ce) {
@@ -23254,11 +23778,15 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
   } catch (_) {}
   save();
   closeCashModal();
-  const sideLabel = type === 'out' ? 'Expense' : 'Income';
-  toast(sideLabel + ' posted · ' + cashAcct + (type === 'out' ? ' credited' : ' debited') +
-    (docs.length ? (' · ' + docs.length + ' file(s)') : ''));
+  if (needsAppr) {
+    toast(status === 'pending_review' ? 'Expense submitted for review' : 'Expense submitted for approval');
+  } else {
+    const sideLabel = type === 'out' ? 'Expense' : 'Income';
+    toast(sideLabel + ' posted · ' + cashAcct + (type === 'out' ? ' credited' : ' debited') +
+      (docs.length ? (' · ' + docs.length + ' file(s)') : ''));
+  }
   try { booksView(); } catch (_) {}
-  try { track('cash_entry_added', { type, category, cashAcct, offsetAcct, docs: docs.length, accrual: true }); } catch (_) {}
+  try { track('cash_entry_added', { type, category, cashAcct, offsetAcct, docs: docs.length, status }); } catch (_) {}
 });
 
 /* ---------- Scheduled reminder nudges (local) ---------- */
