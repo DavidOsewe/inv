@@ -13910,12 +13910,12 @@ async function pushAllStoreStockToCloud() {
     }
   }
 
-  if (errors && /relation|does not exist|schema cache/i.test(errorSamples.join(' '))) {
-    toast('SQL missing: run product_location_stock_v1.sql in Supabase, then retry');
-    return { ok: false, pushed, skipped, errors, errorSamples };
-  }
+  const detail = errorSamples[0] || '';
   if (errors) {
-    toast('Pushed ' + pushed + ' rows · ' + errors + ' failed' + (errorSamples[0] ? ' · ' + errorSamples[0] : ''));
+    // Show the real PostgREST/Postgres message (not a generic SQL tip)
+    const short = String(detail).slice(0, 160);
+    toast('Stock push failed: ' + short);
+    console.error('pushAllStoreStockToCloud', { pushed, skipped, errors, errorSamples });
   } else {
     toast('Pushed ' + pushed + ' store stock row' + (pushed === 1 ? '' : 's') + ' to cloud' +
       (skipped ? ' · ' + skipped + ' skipped' : ''));
@@ -13946,18 +13946,14 @@ async function pushLocationStockToCloud(productId, locationId) {
     .eq('location_id', loc.cloudId)
     .maybeSingle();
   if (selErr) {
-    // Table missing or RLS — surface once so we know SQL is the issue
-    console.warn('product_location_stock select', selErr.message || selErr);
-    if (/relation|does not exist|schema cache/i.test(String(selErr.message || ''))) {
-      throw new Error(selErr.message || 'product_location_stock missing');
-    }
-    throw new Error(selErr.message || 'select failed');
+    console.warn('product_location_stock select', selErr);
+    throw new Error(selErr.message || selErr.code || 'select product_location_stock failed');
   }
   if (existing?.id) {
     const { error } = await cloud.client.from('product_location_stock')
       .update({ qty, updated_at: new Date().toISOString() })
       .eq('id', existing.id);
-    if (error) throw new Error(error.message || 'update failed');
+    if (error) throw new Error(error.message || error.code || 'update product_location_stock failed');
   } else {
     const { error } = await cloud.client.from('product_location_stock').insert({
       organization_id: cloud.organizationId,
@@ -13965,7 +13961,7 @@ async function pushLocationStockToCloud(productId, locationId) {
       location_id: loc.cloudId,
       qty
     });
-    if (error) throw new Error(error.message || 'insert failed');
+    if (error) throw new Error(error.message || error.code || 'insert product_location_stock failed');
   }
   return true;
 }
