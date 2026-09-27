@@ -3043,6 +3043,7 @@ input:focus:not(:focus-visible) {
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="button" type="button" id="btnManageLocations">Locations</button>
+          <button class="button" type="button" id="btnPushAllStock" title="Upload every product × store qty to the cloud so other devices match">Push stock to cloud</button>
           <button class="button" type="button" id="btnStockCount">Count stock</button>
           <a class="button" href="/pos.html" id="btnOpenPosFromProducts">Open POS</a>
           <button class="button primary" type="button" id="addProduct">+ Add product</button>
@@ -13796,11 +13797,89 @@ async function pullLocationsFromCloud() {
   try { await applyMemberLocationScope(); } catch (_) {}
 }
 
+/**
+ * Push every product × active store qty to product_location_stock.
+ * Run on the device that has the correct counts so outlets/Main converge.
+ */
+async function pushAllStoreStockToCloud() {
+  if (!cloud?.client || !cloud?.organizationId) {
+    toast('Sign in and open the app online first');
+    return { ok: false, reason: 'auth' };
+  }
+  ensurePosDb();
+  try { dedupeLocationsByName(); } catch (_) {}
+  try { migrateProductStockToLocations(); } catch (_) {}
+
+  const btn = document.getElementById('btnPushAllStock');
+  if (btn) { btn.disabled = true; btn.textContent = 'Pushing…'; }
+
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  const products = (db.products || []).filter(p => p.active !== false && p.track_stock !== false);
+  let pushed = 0;
+  let skipped = 0;
+  let errors = 0;
+  const errorSamples = [];
+
+  try {
+    // 1) Ensure every location is in cloud
+    for (const loc of locs) {
+      if (!loc.cloudId) {
+        try { await pushLocationToCloud(loc); } catch (e) {
+          errors++;
+          if (errorSamples.length < 3) errorSamples.push('Location ' + (loc.name || '') + ': ' + (e.message || e));
+        }
+      }
+    }
+    // 2) Ensure every product is in cloud
+    for (const p of products) {
+      if (!p.cloudId) {
+        try { await pushProductToCloud(p); } catch (e) {
+          errors++;
+          if (errorSamples.length < 3) errorSamples.push('Product ' + (p.name || '') + ': ' + (e.message || e));
+        }
+      }
+    }
+    // 3) Push stock grid
+    for (const p of products) {
+      for (const loc of locs) {
+        try {
+          const result = await pushLocationStockToCloud(p.id, loc.id);
+          if (result === false) skipped++;
+          else pushed++;
+        } catch (e) {
+          errors++;
+          if (errorSamples.length < 3) {
+            errorSamples.push((p.name || '') + '@' + (loc.name || '') + ': ' + (e.message || e));
+          }
+        }
+      }
+    }
+    persistDb();
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Push stock to cloud';
+    }
+  }
+
+  if (errors && /relation|does not exist|schema cache/i.test(errorSamples.join(' '))) {
+    toast('SQL missing: run product_location_stock_v1.sql in Supabase, then retry');
+    return { ok: false, pushed, skipped, errors, errorSamples };
+  }
+  if (errors) {
+    toast('Pushed ' + pushed + ' rows · ' + errors + ' failed' + (errorSamples[0] ? ' · ' + errorSamples[0] : ''));
+  } else {
+    toast('Pushed ' + pushed + ' store stock row' + (pushed === 1 ? '' : 's') + ' to cloud' +
+      (skipped ? ' · ' + skipped + ' skipped' : ''));
+  }
+  return { ok: errors === 0, pushed, skipped, errors, errorSamples };
+}
+
 async function pushLocationStockToCloud(productId, locationId) {
-  if (!cloud?.client || !cloud?.organizationId) return;
+  if (!cloud?.client || !cloud?.organizationId) return false;
   const p = db.products.find(x => x.id === productId);
   const loc = db.locations.find(x => x.id === locationId);
-  if (!p) return;
+  if (!p) return false;
   // Ensure product + location have cloud ids
   if (!p.cloudId) {
     try { await pushProductToCloud(p); } catch (e) { console.warn('push product before loc stock', e); }
@@ -13810,7 +13889,7 @@ async function pushLocationStockToCloud(productId, locationId) {
   }
   if (!p.cloudId || !loc?.cloudId) {
     console.warn('skip location stock push — missing cloudId', { product: p.name, loc: loc?.name });
-    return;
+    return false;
   }
   const qty = locationStockQty(productId, locationId);
   const { data: existing, error: selErr } = await cloud.client.from('product_location_stock')
@@ -13822,15 +13901,15 @@ async function pushLocationStockToCloud(productId, locationId) {
     // Table missing or RLS — surface once so we know SQL is the issue
     console.warn('product_location_stock select', selErr.message || selErr);
     if (/relation|does not exist|schema cache/i.test(String(selErr.message || ''))) {
-      try { toast('SQL missing: run product_location_stock_v1.sql in Supabase'); } catch (_) {}
+      throw new Error(selErr.message || 'product_location_stock missing');
     }
-    return;
+    throw new Error(selErr.message || 'select failed');
   }
   if (existing?.id) {
     const { error } = await cloud.client.from('product_location_stock')
       .update({ qty, updated_at: new Date().toISOString() })
       .eq('id', existing.id);
-    if (error) console.warn('product_location_stock update', error.message || error);
+    if (error) throw new Error(error.message || 'update failed');
   } else {
     const { error } = await cloud.client.from('product_location_stock').insert({
       organization_id: cloud.organizationId,
@@ -13838,13 +13917,9 @@ async function pushLocationStockToCloud(productId, locationId) {
       location_id: loc.cloudId,
       qty
     });
-    if (error) {
-      console.warn('product_location_stock insert', error.message || error);
-      if (/relation|does not exist|schema cache/i.test(String(error.message || ''))) {
-        try { toast('SQL missing: run product_location_stock_v1.sql in Supabase'); } catch (_) {}
-      }
-    }
+    if (error) throw new Error(error.message || 'insert failed');
   }
+  return true;
 }
 
 /** Per-store qty lines for one product (main-store visibility). */
@@ -22886,6 +22961,9 @@ document.getElementById('productSearch')?.addEventListener('input', () => render
 document.getElementById('productFilter')?.addEventListener('change', () => renderProductsList());
 document.getElementById('productLocationFilter')?.addEventListener('change', () => renderProductsList());
 document.getElementById('btnManageLocations')?.addEventListener('click', openLocationsModal);
+document.getElementById('btnPushAllStock')?.addEventListener('click', () => {
+  pushAllStoreStockToCloud().catch(e => toast(e.message || 'Push failed'));
+});
 
 document.getElementById('btnNewTransfer')?.addEventListener('click', openStockTransferModal);
 document.getElementById('transferDetailClose')?.addEventListener('click', () => document.getElementById('transferDetailModal')?.classList.remove('show'));
