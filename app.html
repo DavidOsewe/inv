@@ -7843,6 +7843,7 @@ function setInventoryTab(tab) {
     const on = panel.getAttribute('data-inv-panel') === tab;
     panel.hidden = !on;
   });
+  try { saveNavState('inventory'); } catch (_) {}
 }
 
 function inventoryView(tab) {
@@ -7885,6 +7886,85 @@ function updateInventoryNavBadge() {
   });
 }
 
+const NAV_STATE_KEY = 'invoicedey-nav-state-v1';
+const VALID_NAV_VIEWS = [
+  'dashboard', 'invoices', 'receipts', 'recurring', 'books', 'inventory',
+  'pos', 'clients', 'profile', 'plan', 'chat', 'editor'
+];
+
+function saveNavState(view) {
+  try {
+    const state = {
+      view: view || 'dashboard',
+      invTab: (typeof _invTab !== 'undefined' ? _invTab : 'today') || 'today',
+      booksPage: (typeof booksPage !== 'undefined' ? booksPage : 'home') || 'home',
+      booksTab: (typeof booksTab !== 'undefined' ? booksTab : 'overview') || 'overview',
+      at: Date.now()
+    };
+    sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(state));
+    // Keep URL hash in sync (refresh / share)
+    if (view && view !== 'editor' && view !== 'dashboard') {
+      const hash = view === 'inventory' && state.invTab && state.invTab !== 'today'
+        ? '#inventory/' + state.invTab
+        : '#' + view;
+      if (location.hash !== hash) {
+        history.replaceState(null, '', location.pathname + location.search + hash);
+      }
+    } else if (view === 'dashboard' && location.hash) {
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  } catch (_) {}
+}
+
+function loadNavState() {
+  // URL hash wins (e.g. #books, #inventory/catalog)
+  try {
+    const h = String(location.hash || '').replace(/^#/, '').trim();
+    if (h) {
+      const parts = h.split('/');
+      const view = parts[0];
+      if (VALID_NAV_VIEWS.includes(view)) {
+        if (view === 'inventory' && parts[1]) {
+          try { _invTab = parts[1]; } catch (_) {}
+        }
+        return { view, invTab: parts[1] || null, from: 'hash' };
+      }
+    }
+  } catch (_) {}
+  try {
+    const raw = sessionStorage.getItem(NAV_STATE_KEY);
+    if (!raw) return null;
+    const state = JSON.parse(raw);
+    if (!state || !VALID_NAV_VIEWS.includes(state.view)) return null;
+    return state;
+  } catch (_) {
+    return null;
+  }
+}
+
+function restoreNavOnBoot() {
+  const state = loadNavState();
+  if (!state || !state.view || state.view === 'dashboard') {
+    switchTo('dashboard');
+    return;
+  }
+  if (state.invTab) {
+    try { _invTab = state.invTab; } catch (_) {}
+  }
+  if (state.booksPage && typeof booksPage !== 'undefined') {
+    try { booksPage = state.booksPage; } catch (_) {}
+  }
+  if (state.booksTab && typeof booksTab !== 'undefined') {
+    try { booksTab = state.booksTab; } catch (_) {}
+  }
+  try {
+    switchTo(state.view);
+  } catch (err) {
+    console.warn('restore nav failed', err);
+    switchTo('dashboard');
+  }
+}
+
 function switchTo(v) {
   try { closeMoreSheet(); } catch (_) {}
   // Legacy inventory routes → spine
@@ -7917,6 +7997,7 @@ function switchTo(v) {
     const invActive = v === 'inventory' && (view === 'inventory' || LEGACY_TO_INV_TAB[view]);
     x.classList.toggle('active', view === v || !!invActive);
   });
+  try { saveNavState(v); } catch (_) {}
   const h = {
     dashboard: ['Invoice control centre', 'Know what has been paid and what needs attention.'],
     invoices: ['Invoices', 'Simple invoicing. Nothing you do not need.'],
@@ -16581,6 +16662,7 @@ function setBooksPage(page, tab) {
   try { toggleBooksCreateMenu(false); } catch {}
   if (!BOOKS_PAGES[page]) page = 'home';
   booksPage = page;
+  try { saveNavState('books'); } catch (_) {}
   document.querySelectorAll('[data-books-page]').forEach(btn => {
     btn.classList.toggle('primary', btn.getAttribute('data-books-page') === booksPage);
   });
@@ -26534,7 +26616,9 @@ try {
 } catch (_) {}
 try {
   try { applyRoleGates(); } catch (_) {}
-  switchTo('dashboard');
+  // Stay on the page the user was on (refresh / back) instead of always Home
+  if (typeof restoreNavOnBoot === 'function') restoreNavOnBoot();
+  else switchTo('dashboard');
 } catch (err) {
   console.error('init switchTo failed', err);
   try {
