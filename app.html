@@ -12214,6 +12214,7 @@ async function postStockCountSession() {
 
 async function pushProductToCloud(product) {
   if (!cloud?.client || !cloud?.organizationId) return;
+  // Base columns only — optional fields added if schema supports them
   const row = {
     organization_id: cloud.organizationId,
     local_id: product.id,
@@ -12225,20 +12226,39 @@ async function pushProductToCloud(product) {
     currency: product.currency || posCurrency(),
     stock_qty: product.stock_qty,
     low_stock_at: product.low_stock_at,
-    optimal_stock: product.optimal_stock != null ? product.optimal_stock : null,
-    primary_supplier_id: product.primary_supplier_id || null,
     track_stock: product.track_stock !== false,
     active: product.active !== false,
     updated_at: product.updated_at || new Date().toISOString()
   };
   if (product.expiry_date) row.expiry_date = product.expiry_date;
-  if (product.cloudId) {
-    const { error } = await cloud.client.from('products').update(row).eq('id', product.cloudId);
-    if (error) throw error;
-  } else {
-    const { data, error } = await cloud.client.from('products').insert(row).select('id').single();
-    if (error) throw error;
-    product.cloudId = data.id;
+  // Optional columns (may not exist on older products tables)
+  if (product.optimal_stock != null) row.optimal_stock = product.optimal_stock;
+  if (product.primary_supplier_id) row.primary_supplier_id = product.primary_supplier_id;
+
+  async function doPush(payload) {
+    if (product.cloudId) {
+      const { error } = await cloud.client.from('products').update(payload).eq('id', product.cloudId);
+      if (error) throw error;
+    } else {
+      const { data, error } = await cloud.client.from('products').insert(payload).select('id').single();
+      if (error) throw error;
+      product.cloudId = data.id;
+    }
+  }
+
+  try {
+    await doPush(row);
+  } catch (e) {
+    const msg = String(e?.message || e || '');
+    // Schema missing optional columns — strip and retry once
+    if (/optimal_stock|primary_supplier|schema cache|Could not find/i.test(msg)) {
+      delete row.optimal_stock;
+      delete row.primary_supplier_id;
+      delete row.expiry_date;
+      await doPush(row);
+      return;
+    }
+    throw e;
   }
 }
 
