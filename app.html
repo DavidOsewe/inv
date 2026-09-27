@@ -3044,6 +3044,7 @@ input:focus:not(:focus-visible) {
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="button" type="button" id="btnManageLocations">Locations</button>
           <button class="button" type="button" id="btnPushAllStock" title="Upload every product × store qty to the cloud so other devices match">Push stock to cloud</button>
+          <button class="button" type="button" id="btnPullAllStock" title="Download org stock ledger from cloud (overwrites local store qtys for synced products)">Pull stock from cloud</button>
           <button class="button" type="button" id="btnStockCount">Count stock</button>
           <a class="button" href="/pos.html" id="btnOpenPosFromProducts">Open POS</a>
           <button class="button primary" type="button" id="addProduct">+ Add product</button>
@@ -12478,152 +12479,93 @@ function renderDashboardLowStock() {
 }
 
 
-/**
- * Primary source of truth for multi-store qty: product.stock_by_location = { [locationId]: number }
- * Secondary mirror: db.locationStock[] (for cloud sync / older code paths)
- */
+/* =========================================================================
+ * STOCK ENGINE v2
+ * One rule: qty lives only in product.stock_by_location[locationId]
+ * product.stock_qty = sum of map (cache)
+ * db.locationStock[] = mirror for older UI / cloud rows
+ * All writes go through stockApplyDelta / stockSetQty
+ * ========================================================================= */
+
 function ensureProductStockMap(p) {
   if (!p) return {};
-  if (!p.stock_by_location || typeof p.stock_by_location !== 'object') {
-    p.stock_by_location = {};
-  }
+  if (!p.stock_by_location || typeof p.stock_by_location !== 'object') p.stock_by_location = {};
   return p.stock_by_location;
 }
 
-function ensureAllLocationStockRows() {
-  ensurePosDb();
-  if (!Array.isArray(db.locationStock)) db.locationStock = [];
-  const locs = (db.locations || []).filter(l => l.active !== false);
-  if (!locs.length) return;
-  (db.products || []).forEach(p => {
-    if (!p || p.track_stock === false) return;
-    const map = ensureProductStockMap(p);
-    locs.forEach(loc => {
-      if (map[loc.id] == null) map[loc.id] = 0;
-      let row = db.locationStock.find(s => s.product_id === p.id && s.location_id === loc.id);
-      if (!row) {
-        row = { product_id: p.id, location_id: loc.id, qty: Number(map[loc.id]) || 0 };
-        db.locationStock.push(row);
-      } else {
-        // Prefer map if it has been written; else keep row
-        if (map[loc.id] != null) row.qty = Number(map[loc.id]) || 0;
-        else map[loc.id] = Number(row.qty) || 0;
-      }
-    });
-  });
+function resolveLocationId(locationId) {
+  if (!locationId) return null;
+  const loc = (db.locations || []).find(l =>
+    (l.active !== false) && (l.id === locationId || l.cloudId === locationId)
+  );
+  return loc ? loc.id : locationId;
 }
 
-function migrateProductStockToLocations() {
-  ensurePosDb();
-  if (!Array.isArray(db.locationStock)) db.locationStock = [];
-  const locs = (db.locations || []).filter(l => l.active !== false);
-  if (!locs.length) return;
-  const def = locs.find(l => l.is_default) || locs[0];
-  (db.products || []).forEach(p => {
-    if (!p || p.track_stock === false) return;
-    const map = ensureProductStockMap(p);
-    // Merge locationStock rows into map (don't wipe map; fill missing + prefer non-zero row if map is 0)
-    const rows = (db.locationStock || []).filter(s => s.product_id === p.id);
-    rows.forEach(s => {
-      if (!s.location_id) return;
-      const fromRow = Number(s.qty) || 0;
-      if (map[s.location_id] == null || map[s.location_id] === '') {
-        map[s.location_id] = fromRow;
-      }
-    });
-    let mapSum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
-    const total = Number(p.stock_qty) || 0;
-    // Orphan total with no per-store qty → put on main
-    if (Math.abs(mapSum) < 0.0001 && Math.abs(total) > 0.0001 && def) {
-      map[def.id] = total;
-      mapSum = total;
-    }
-    // Sync locationStock array from map
-    locs.forEach(loc => {
-      if (map[loc.id] == null) map[loc.id] = 0;
-      let row = db.locationStock.find(s => s.product_id === p.id && s.location_id === loc.id);
-      if (!row) {
-        db.locationStock.push({ product_id: p.id, location_id: loc.id, qty: Number(map[loc.id]) || 0 });
-      } else {
-        row.qty = Number(map[loc.id]) || 0;
-      }
-    });
-    p.stock_qty = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
-  });
-}
-
-function resolveStockTargetLocationId() {
-  ensurePosDb();
-  const filter = document.getElementById('productLocationFilter')?.value || 'all';
-  if (filter && filter !== 'all' && db.locations.some(l => l.id === filter)) return filter;
-  const active = typeof getActiveLocation === 'function' ? getActiveLocation() : null;
-  if (active) return active.id;
-  const def = (db.locations || []).find(l => l.is_default && l.active !== false)
-    || (db.locations || []).find(l => l.active !== false);
-  return def ? def.id : null;
-}
-
-function totalProductStock(productId) {
-  ensurePosDb();
-  const p = (db.products || []).find(x => x.id === productId);
-  if (!p) return 0;
-  const map = ensureProductStockMap(p);
-  const locs = (db.locations || []).filter(l => l.active !== false);
-  if (locs.length) {
-    return locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
-  }
-  return Number(p.stock_qty) || 0;
-}
-
-function locationStockQty(productId, locationId) {
-  ensurePosDb();
-  const p = (db.products || []).find(x => x.id === productId);
-  if (!p) return 0;
-  const lid = locationId || resolveStockTargetLocationId() || db.activeLocationId;
-  if (!lid) return Number(p.stock_qty) || 0;
-  const map = ensureProductStockMap(p);
-  if (map[lid] != null && map[lid] !== '') return Number(map[lid]) || 0;
-  // One-time fallback from locationStock row
-  const row = (db.locationStock || []).find(s => s.product_id === productId && s.location_id === lid);
-  if (row) {
-    map[lid] = Number(row.qty) || 0;
-    return map[lid];
-  }
-  map[lid] = 0;
-  return 0;
-}
-
-function adjustLocationStock(productId, locationId, qtyChange, meta) {
-  meta = meta || {};
-  ensurePosDb();
-  if (!locationId) locationId = resolveStockTargetLocationId();
-  if (!locationId) throw new Error('No store selected for stock change');
-  const locObj = db.locations.find(l => l.id === locationId || l.cloudId === locationId);
-  if (locObj) locationId = locObj.id;
-  const p = db.products.find(x => x.id === productId);
-  if (!p) throw new Error('Product not found');
-  const map = ensureProductStockMap(p);
-  const prev = Number(map[locationId]) || 0;
-  const next = prev + (Number(qtyChange) || 0);
-  map[locationId] = next;
-  // Mirror to locationStock
+function stockMirrorRow(productId, locationId, qty) {
   if (!Array.isArray(db.locationStock)) db.locationStock = [];
   let row = db.locationStock.find(s => s.product_id === productId && s.location_id === locationId);
   if (!row) {
-    row = { product_id: productId, location_id: locationId, qty: next };
+    row = { product_id: productId, location_id: locationId, qty: 0 };
     db.locationStock.push(row);
-  } else {
-    row.qty = next;
   }
-  if (locObj?.name) row.location_name = locObj.name;
-  p.stock_qty = totalProductStock(productId);
+  row.qty = Number(qty) || 0;
+  const loc = (db.locations || []).find(l => l.id === locationId);
+  if (loc?.name) row.location_name = loc.name;
+  return row;
+}
+
+function stockRecalcTotal(p) {
+  if (!p) return 0;
+  const map = ensureProductStockMap(p);
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  const total = locs.length
+    ? locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0)
+    : Object.values(map).reduce((n, v) => n + (Number(v) || 0), 0);
+  p.stock_qty = total;
   p.updated_at = new Date().toISOString();
-  try { persistDb(); } catch (_) {}
+  return total;
+}
+
+/** Read qty at a store. */
+function stockGetQty(productId, locationId) {
+  ensurePosDb();
+  const p = (db.products || []).find(x => x.id === productId);
+  if (!p) return 0;
+  const lid = resolveLocationId(locationId) || resolveStockTargetLocationId() || db.activeLocationId;
+  if (!lid) return Number(p.stock_qty) || 0;
+  const map = ensureProductStockMap(p);
+  if (map[lid] != null && map[lid] !== '') return Number(map[lid]) || 0;
+  return 0;
+}
+
+/** Set absolute qty at a store (posts movement for the delta). */
+function stockSetQty(productId, locationId, qty, meta) {
+  const lid = resolveLocationId(locationId);
+  const prev = stockGetQty(productId, lid);
+  const next = Number(qty) || 0;
+  return stockApplyDelta(productId, lid, next - prev, meta);
+}
+
+/** Apply +/- qty at a store. Only write path for stock. */
+function stockApplyDelta(productId, locationId, qtyChange, meta) {
+  meta = meta || {};
+  ensurePosDb();
+  const lid = resolveLocationId(locationId) || resolveStockTargetLocationId();
+  if (!lid) throw new Error('No store selected for stock change');
+  const p = (db.products || []).find(x => x.id === productId);
+  if (!p) throw new Error('Product not found');
+  const map = ensureProductStockMap(p);
+  const prev = Number(map[lid]) || 0;
+  const delta = Number(qtyChange) || 0;
+  const next = prev + delta;
+  map[lid] = next;
+  const row = stockMirrorRow(productId, lid, next);
+  stockRecalcTotal(p);
   const mov = {
     id: crypto.randomUUID(),
     product_id: productId,
-    location_id: locationId,
-    qty_change: Number(qtyChange) || 0,
+    location_id: lid,
+    qty_change: delta,
     reason: meta.reason || 'adjustment',
     reference: meta.reference || null,
     note: meta.note || null,
@@ -12631,7 +12573,112 @@ function adjustLocationStock(productId, locationId, qtyChange, meta) {
   };
   if (!Array.isArray(db.stockMovements)) db.stockMovements = [];
   db.stockMovements.push(mov);
-  return { row, mov, product: p };
+  try { persistDb(); } catch (_) {}
+  return { row, mov, product: p, prev, next };
+}
+
+// ---- Compatibility aliases (existing call sites) ----
+function locationStockQty(productId, locationId) {
+  return stockGetQty(productId, locationId);
+}
+function totalProductStock(productId) {
+  ensurePosDb();
+  const p = (db.products || []).find(x => x.id === productId);
+  if (!p) return 0;
+  return stockRecalcTotal(p);
+}
+function adjustLocationStock(productId, locationId, qtyChange, meta) {
+  return stockApplyDelta(productId, locationId, qtyChange, meta);
+}
+function ensureAllLocationStockRows() {
+  ensurePosDb();
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  (db.products || []).forEach(p => {
+    if (!p || p.track_stock === false) return;
+    const map = ensureProductStockMap(p);
+    locs.forEach(loc => {
+      if (map[loc.id] == null) map[loc.id] = 0;
+      stockMirrorRow(p.id, loc.id, map[loc.id]);
+    });
+    stockRecalcTotal(p);
+  });
+}
+function migrateProductStockToLocations() {
+  ensurePosDb();
+  try { dedupeLocationsByName(); } catch (_) {}
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  if (!locs.length) return;
+  const def = locs.find(l => l.is_default) || locs[0];
+  (db.products || []).forEach(p => {
+    if (!p || p.track_stock === false) return;
+    const map = ensureProductStockMap(p);
+    // Import any legacy locationStock rows once
+    (db.locationStock || []).forEach(s => {
+      if (s.product_id !== p.id || !s.location_id) return;
+      if (map[s.location_id] == null) map[s.location_id] = Number(s.qty) || 0;
+    });
+    let sum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
+    const total = Number(p.stock_qty) || 0;
+    if (Math.abs(sum) < 0.0001 && Math.abs(total) > 0.0001 && def) {
+      map[def.id] = total;
+    }
+    locs.forEach(loc => {
+      if (map[loc.id] == null) map[loc.id] = 0;
+      stockMirrorRow(p.id, loc.id, map[loc.id]);
+    });
+    stockRecalcTotal(p);
+  });
+}
+
+function resolveStockTargetLocationId() {
+  ensurePosDb();
+  const filter = document.getElementById('productLocationFilter')?.value || 'all';
+  if (filter && filter !== 'all' && db.locations.some(l => l.id === filter && l.active !== false)) return filter;
+  const active = typeof getActiveLocation === 'function' ? getActiveLocation() : null;
+  if (active) return active.id;
+  const def = (db.locations || []).find(l => l.is_default && l.active !== false)
+    || (db.locations || []).find(l => l.active !== false);
+  return def ? def.id : null;
+}
+
+/**
+ * Replace local stock maps from cloud ledger (org-wide).
+ * Call after locations + products are synced.
+ */
+async function syncStockLedgerFromCloud() {
+  if (!cloud?.client || !cloud?.organizationId) return { ok: false, reason: 'auth' };
+  ensurePosDb();
+  const { data: stockRows, error } = await cloud.client
+    .from('product_location_stock')
+    .select('*')
+    .eq('organization_id', cloud.organizationId);
+  if (error) {
+    console.warn('syncStockLedgerFromCloud', error.message || error);
+    return { ok: false, error: error.message || String(error) };
+  }
+  if (!stockRows || !stockRows.length) return { ok: true, rows: 0 };
+
+  const productByCloud = new Map((db.products || []).filter(p => p.cloudId).map(p => [p.cloudId, p]));
+  const locationByCloud = new Map((db.locations || []).filter(l => l.cloudId).map(l => [l.cloudId, l]));
+
+  // Optional: zero maps only for products present in cloud rows (don't wipe pure-local products)
+  const touched = new Set();
+  stockRows.forEach(row => {
+    const p = productByCloud.get(row.product_id);
+    const loc = locationByCloud.get(row.location_id);
+    if (!p || !loc) return;
+    const map = ensureProductStockMap(p);
+    if (!touched.has(p.id)) {
+      // clear only keys that belong to known cloud-linked locations, keep pure-local loc keys
+      (db.locations || []).filter(l => l.cloudId).forEach(l => { delete map[l.id]; });
+      touched.add(p.id);
+    }
+    map[loc.id] = Number(row.qty) || 0;
+    stockMirrorRow(p.id, loc.id, map[loc.id]);
+    stockRecalcTotal(p);
+  });
+  persistDb();
+  return { ok: true, rows: stockRows.length, products: touched.size };
 }
 
 /** Weighted average cost after receiving qty at unitCost onto existing on-hand. */
@@ -13454,13 +13501,14 @@ function productsView() {
   // Paint local data first so Adjust results are visible immediately
   try { renderProductsList(); } catch (_) {}
   try { refreshInventoryOpsPanels(); } catch (_) {}
-  // Soft cloud refresh — must not wipe per-store rows
+  // Soft cloud refresh — v2: locations → products → stock ledger replace
   try {
     pullLocationsFromCloud()
       .then(() => pullProductsFromCloud())
       .then(async () => {
         try { await applyMemberLocationScope(); } catch (_) {}
-        try { repairLocationStockIds(); } catch (_) {}
+        try { dedupeLocationsByName(); } catch (_) {}
+        try { await syncStockLedgerFromCloud(); } catch (e) { console.warn(e); }
         try { migrateProductStockToLocations(); } catch (_) {}
         fillProductLocationFilter();
         const role = String(db.myOrgRole || currentOrgRole() || '').toLowerCase();
@@ -22963,6 +23011,26 @@ document.getElementById('productLocationFilter')?.addEventListener('change', () 
 document.getElementById('btnManageLocations')?.addEventListener('click', openLocationsModal);
 document.getElementById('btnPushAllStock')?.addEventListener('click', () => {
   pushAllStoreStockToCloud().catch(e => toast(e.message || 'Push failed'));
+});
+document.getElementById('btnPullAllStock')?.addEventListener('click', () => {
+  const btn = document.getElementById('btnPullAllStock');
+  if (btn) { btn.disabled = true; btn.textContent = 'Pulling…'; }
+  (async () => {
+    try {
+      await pullLocationsFromCloud();
+      await pullProductsFromCloud();
+      const r = await syncStockLedgerFromCloud();
+      migrateProductStockToLocations();
+      fillProductLocationFilter();
+      renderProductsList();
+      if (r && r.ok) toast('Pulled ' + (r.rows || 0) + ' stock rows from cloud');
+      else toast(r?.error || 'Pull finished — no cloud stock rows yet. Push from the correct device first.');
+    } catch (e) {
+      toast(e.message || 'Pull failed');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Pull stock from cloud'; }
+    }
+  })();
 });
 
 document.getElementById('btnNewTransfer')?.addEventListener('click', openStockTransferModal);
