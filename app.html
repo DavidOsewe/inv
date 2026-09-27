@@ -4496,7 +4496,7 @@ input:focus:not(:focus-visible) {
       <div class="field"><label>Cost</label><input id="productCost" type="number" min="0" step="0.01" placeholder="0"></div>
     </div>
     <div class="two">
-      <div class="field"><label>Starting / current stock</label><input id="productStock" type="number" step="any" placeholder="0"></div>
+      <div class="field"><label id="productStockLabel">Starting stock (new products only)</label><input id="productStock" type="number" step="any" placeholder="0"><div class="section-sub" id="productStockHint" style="margin-top:4px">To change stock later use Adjust, Receive, Transfer or Count — not this field.</div></div>
       <div class="field"><label>Low stock alert at</label><input id="productLowStock" type="number" min="0" step="any" placeholder="0"></div>
     </div>
     <div class="two">
@@ -9961,6 +9961,12 @@ async function applyTransferStockMovement(tr, mode) {
   const transfer_number = tr.transfer_number;
   const lines = tr.lines || [];
 
+  // Idempotent: never apply stock twice for the same transfer
+  if (tr._stock_shipped) {
+    console.warn('transfer stock already applied', transfer_number);
+    return;
+  }
+
   for (const line of lines) {
     const onHand = locationStockQty(line.product_id, fromId);
     if (onHand < (Number(line.qty_sent) || 0)) {
@@ -10008,9 +10014,12 @@ async function applyTransferStockMovement(tr, mode) {
     tr.status = 'received';
     tr.shipped_at = tr.shipped_at || new Date().toISOString();
     tr.received_at = new Date().toISOString();
+    tr._stock_shipped = true;
+    tr._stock_received = true;
   } else {
     tr.status = 'in_transit';
     tr.shipped_at = tr.shipped_at || new Date().toISOString();
+    tr._stock_shipped = true;
   }
   tr.updated_at = new Date().toISOString();
 }
@@ -10095,6 +10104,12 @@ async function confirmTransferReceive() {
   const id = document.getElementById('transferReceiveId').value;
   const tr = db.stockTransfers.find(t => t.id === id);
   if (!tr) return;
+  // Quick-ship already credited destination — do not receive again
+  if (tr._stock_received || tr.ship_mode === 'quick') {
+    toast('This transfer was already fully received (quick ship)');
+    closeTransferReceiveModal();
+    return;
+  }
   const rows = [...document.querySelectorAll('#transferReceiveLines .tr-recv-line')];
   const now = new Date().toISOString();
   let any = false;
@@ -10123,7 +10138,10 @@ async function confirmTransferReceive() {
   if (!any) { toast('Enter quantities to receive'); return; }
   const allDone = tr.lines.every(l => (Number(l.qty_received) || 0) >= (Number(l.qty_sent) || 0));
   tr.status = allDone ? 'received' : 'in_transit';
-  if (allDone) tr.received_at = now;
+  if (allDone) {
+    tr.received_at = now;
+    tr._stock_received = true;
+  }
   tr.updated_at = now;
   if (tr.cloudId && cloud?.client) {
     try {
@@ -11726,7 +11744,22 @@ function openProductModal(product) {
   document.getElementById('productBarcode').value = product?.barcode || '';
   document.getElementById('productPrice').value = product != null ? product.price : '';
   document.getElementById('productCost').value = product != null && product.cost != null ? product.cost : '';
-  document.getElementById('productStock').value = product != null ? product.stock_qty : '0';
+  const stockInput = document.getElementById('productStock');
+  const liveTot = product != null
+    ? (typeof totalProductStock === 'function' ? totalProductStock(product.id) : product.stock_qty)
+    : 0;
+  if (stockInput) {
+    stockInput.value = product != null ? liveTot : '0';
+    // Edit: stock is read-only (prevents double-count with purchase/transfer)
+    stockInput.readOnly = !!product;
+    stockInput.style.opacity = product ? '0.7' : '';
+  }
+  const stockLabel = document.getElementById('productStockLabel');
+  if (stockLabel) {
+    stockLabel.textContent = product
+      ? 'Total on hand (read-only — use Adjust / Receive / Transfer / Count)'
+      : 'Starting stock (new products only)';
+  }
   document.getElementById('productLowStock').value = product != null && product.low_stock_at != null ? product.low_stock_at : '0';
   document.getElementById('productOptimalStock').value = product != null && product.optimal_stock != null ? product.optimal_stock : '';
   const supSel = document.getElementById('productPrimarySupplier');
@@ -11775,47 +11808,22 @@ async function saveProductFromModal() {
   if (id) {
     const p = db.products.find(x => x.id === id);
     if (!p) { toast('Product not found'); return; }
-    const prevStock = Number(p.stock_qty) || 0;
-    Object.assign(p, { name, sku, barcode, price, cost: Number.isNaN(cost) ? 0 : cost, stock_qty: Number.isNaN(stock) ? prevStock : stock, low_stock_at: low, optimal_stock, primary_supplier_id, expiry_date, track_stock, active, currency, updated_at: now });
-    if (!Number.isNaN(stock) && stock !== prevStock) {
-      // Apply form stock change to the catalog-selected / active store
-      try {
-        const locId = typeof resolveStockTargetLocationId === 'function'
-          ? resolveStockTargetLocationId()
-          : null;
-        const loc = (locId && db.locations.find(l => l.id === locId))
-          || (typeof getActiveLocation === 'function' && getActiveLocation())
-          || (db.locations || []).find(l => l.is_default)
-          || (db.locations || [])[0];
-        if (loc && typeof adjustLocationStock === 'function') {
-          const formDelta = stock - prevStock;
-          adjustLocationStock(id, loc.id, formDelta, {
-            reason: 'adjustment',
-            note: 'Edited from product form @ ' + (loc.name || '')
-          });
-          try { pushLocationStockToCloud(id, loc.id); } catch (_) {}
-        } else {
-          db.stockMovements.push({
-            id: crypto.randomUUID(),
-            product_id: id,
-            qty_change: stock - prevStock,
-            reason: 'adjustment',
-            reference: null,
-            note: 'Edited from product form',
-            created_at: now
-          });
-        }
-      } catch (_) {
-        db.stockMovements.push({
-          id: crypto.randomUUID(),
-          product_id: id,
-          qty_change: stock - prevStock,
-          reason: 'adjustment',
-          reference: null,
-          note: 'Edited from product form',
-          created_at: now
-        });
-      }
+    // NEVER change stock from the product form on edit — that double-counted
+    // purchase/transfer/adjust. Stock only via Adjust / Receive / Transfer / Count.
+    const liveTotal = typeof totalProductStock === 'function' ? totalProductStock(id) : (Number(p.stock_qty) || 0);
+    Object.assign(p, {
+      name, sku, barcode, price,
+      cost: Number.isNaN(cost) ? 0 : cost,
+      stock_qty: liveTotal,
+      low_stock_at: low,
+      optimal_stock,
+      primary_supplier_id,
+      expiry_date,
+      track_stock, active, currency,
+      updated_at: now
+    });
+    if (!Number.isNaN(stock) && Math.abs(stock - liveTotal) > 0.0001) {
+      toast('Stock not changed from form — use Adjust, Receive, Transfer or Count');
     }
     try { await pushProductToCloud(p); } catch (e) { console.warn(e); }
     toast('Product updated');
