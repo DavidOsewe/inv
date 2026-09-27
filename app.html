@@ -14651,10 +14651,22 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
   db.posSales.push(sale);
   try { await pushPosSaleToCloud(sale); } catch (e) { console.warn(e); }
 
-  // Books: cash-in + COGS/inventory
+  // Books: cash-in + revenue + COGS/inventory (outlet tagged on every memo)
   try {
     const key = 'pos:' + saleId;
     const date = now.slice(0, 10);
+    const outletSlug = String(saleLoc?.name || 'store')
+      .trim()
+      .replace(/\s+/g, '_')
+      .replace(/[^\w\-]/g, '') || 'store';
+    const saleLabel = saleNumber + '_' + outletSlug; // e.g. POS-0004_Gbagada
+    sale.location_name = saleLoc?.name || null;
+    sale.books_label = saleLabel;
+
+    // Debit cash vs bank depending on tender
+    const payCash = !payment_method || payment_method === 'cash';
+    const debitAcct = payCash ? '1000' : (typeof findBankAccountId === 'function' ? (findBankAccountId() || '1000') : '1000');
+
     if (!db.cashEntries.some(e => e.sourceKey === key)) {
       db.cashEntries.push({
         id: crypto.randomUUID(),
@@ -14663,26 +14675,32 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
         amount: total,
         currency,
         date,
-        note: 'POS sale ' + saleNumber,
+        note: 'POS sale ' + saleLabel,
         source: 'pos_sale',
-        sourceKey: key
+        sourceKey: key,
+        location_id: saleLoc?.id || null,
+        location_name: saleLoc?.name || null
       });
     }
-    postJournal({
+    const rev = postJournal({
       date,
-      memo: 'POS sale ' + saleNumber,
+      memo: 'POS sale ' + saleLabel,
       source: 'pos_sale',
       sourceKey: 'j:' + key,
       currency,
       lines: [
-        { accountId: '1000', debit: total, credit: 0 },
+        { accountId: debitAcct, debit: total, credit: 0 },
         { accountId: '4000', debit: 0, credit: total }
       ]
     });
+    if (rev) {
+      rev.location_id = saleLoc?.id || null;
+      rev.location_name = saleLoc?.name || null;
+    }
     if (costTotal > 0.0001) {
-      postJournal({
+      const cogs = postJournal({
         date,
-        memo: 'COGS · POS sale ' + saleNumber,
+        memo: 'COGS · POS sale ' + saleLabel,
         source: 'pos_cogs',
         sourceKey: 'j:pos_cogs:' + saleId,
         currency,
@@ -14691,6 +14709,10 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
           { accountId: '1300', debit: 0, credit: costTotal }
         ]
       });
+      if (cogs) {
+        cogs.location_id = saleLoc?.id || null;
+        cogs.location_name = saleLoc?.name || null;
+      }
     } else {
       console.info('POS sale COGS skipped — set product Cost to post inventory journals');
     }
@@ -14717,6 +14739,89 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
   document.getElementById('posSuccessModal').classList.add('show');
   renderPosCart();
   renderPosProductGrid();
+}
+
+/**
+ * Backfill books journals for POS sales that reduced stock but never posted GL.
+ * Idempotent via sourceKey. Call when opening Journals.
+ */
+function backfillPosSalesToBooks() {
+  ensurePosDb();
+  ensureBooksDb();
+  let n = 0;
+  (db.posSales || []).forEach(sale => {
+    if (!sale || !sale.id) return;
+    const key = 'pos:' + sale.id;
+    const jKey = 'j:' + key;
+    if (db.journals.some(j => j.sourceKey === jKey)) return;
+    const total = Number(sale.total) || 0;
+    if (total <= 0) return;
+    const date = String(sale.sold_at || '').slice(0, 10) || (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+    const loc = (db.locations || []).find(l => l.id === sale.location_id);
+    const outletName = sale.location_name || loc?.name || '';
+    const outletSlug = String(outletName || 'store').trim().replace(/\s+/g, '_').replace(/[^\w\-]/g, '') || 'store';
+    const saleLabel = (sale.sale_number || 'POS') + '_' + outletSlug;
+    const currency = sale.currency || posCurrency();
+    if (!db.cashEntries.some(e => e.sourceKey === key)) {
+      db.cashEntries.push({
+        id: crypto.randomUUID(),
+        type: 'in',
+        category: 'pos',
+        amount: total,
+        currency,
+        date,
+        note: 'POS sale ' + saleLabel,
+        source: 'pos_sale',
+        sourceKey: key,
+        location_id: sale.location_id || null,
+        location_name: outletName || null
+      });
+    }
+    const rev = postJournal({
+      date,
+      memo: 'POS sale ' + saleLabel,
+      source: 'pos_sale',
+      sourceKey: jKey,
+      currency,
+      lines: [
+        { accountId: '1000', debit: total, credit: 0 },
+        { accountId: '4000', debit: 0, credit: total }
+      ]
+    });
+    if (rev) {
+      rev.location_id = sale.location_id || null;
+      rev.location_name = outletName || null;
+      n++;
+    }
+    const costTotal = Number(sale.cost_total) || (sale.lines || []).reduce((s, l) => {
+      const c = Number(l.cost) || 0;
+      const q = Number(l.qty) || 0;
+      return s + (c > 0 ? c * q : 0);
+    }, 0);
+    if (costTotal > 0.0001) {
+      const cogs = postJournal({
+        date,
+        memo: 'COGS · POS sale ' + saleLabel,
+        source: 'pos_cogs',
+        sourceKey: 'j:pos_cogs:' + sale.id,
+        currency,
+        lines: [
+          { accountId: '5000', debit: costTotal, credit: 0 },
+          { accountId: '1300', debit: 0, credit: costTotal }
+        ]
+      });
+      if (cogs) {
+        cogs.location_id = sale.location_id || null;
+        cogs.location_name = outletName || null;
+      }
+    }
+  });
+  if (n > 0) {
+    try { persistDb(); } catch (_) {}
+    try { queueBooksCloudSync(); } catch (_) {}
+    try { toast('Posted ' + n + ' POS sale(s) to books'); } catch (_) {}
+  }
+  return n;
 }
 
 async function pushPosSaleToCloud(sale) {
@@ -16740,12 +16845,14 @@ function renderBooksJournal() {
   let list = journalsInPeriod().sort((a, b) => String(b.date || b.entry_date || '').localeCompare(String(a.date || a.entry_date || '')));
   // Normalize legacy pos.html journals that used entry_date
   list.forEach(j => { if (!j.date && j.entry_date) j.date = j.entry_date; });
+  try { backfillPosSalesToBooks(); } catch (_) {}
   if (q) {
     list = list.filter(j => {
       const memo = String(j.memo || '').toLowerCase();
       const source = String(j.source || '').toLowerCase();
+      const loc = String(j.location_name || '').toLowerCase();
       const accounts = (j.lines || []).map(l => String(coaName(l.accountId) || l.accountId || '').toLowerCase()).join(' ');
-      return memo.includes(q) || source.includes(q) || accounts.includes(q) || String(j.date || '').includes(q);
+      return memo.includes(q) || source.includes(q) || accounts.includes(q) || loc.includes(q) || String(j.date || '').includes(q);
     });
   }
   if (!list.length) {
@@ -16764,6 +16871,7 @@ function renderBooksJournal() {
     const badges = [];
     if (j.reversed) badges.push('<span class="badge">Reversed</span>');
     if (j.reverseOf) badges.push('<span class="badge">Reversal</span>');
+    if (j.location_name) badges.push('<span class="badge">' + String(j.location_name).replace(/</g, '') + '</span>');
     const actor = j.createdByEmail || (j.createdBy ? String(j.createdBy).slice(0, 8) : '');
     const canReverse = !j.reversed && !j.reverseOf;
     return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
