@@ -1523,18 +1523,26 @@ function saleCostTotal(lines) {
 function postLocalBooks(sale) {
   const key = 'pos:' + sale.id;
   const date = (sale.sold_at || new Date().toISOString()).slice(0, 10);
-  // Prefer real store name from the sale — never invent Main from "active"
+  // Prefer real store name from the sale
   let outletName = String(sale.location_name || '').trim();
   if (!outletName || /^(store|unknown)$/i.test(outletName)) {
     const loc = (db.locations || []).find(l => l.id === sale.location_id || l.cloudId === sale.location_id);
-    outletName = String(loc?.name || loc?.code || '').trim() || 'Unknown';
-    sale.location_name = outletName;
+    outletName = String(loc?.name || loc?.code || '').trim();
+    if (outletName) sale.location_name = outletName;
   }
-  // "Main store" → Main (never ends with _store — that caused Main_Main_… loops)
-  let outletSlug = outletName.replace(/\s+(store|shop|outlet|branch|warehouse)$/i, '').trim() || outletName;
-  outletSlug = outletSlug.replace(/\s+/g, '_').replace(/[^\w\-]/g, '') || 'Unknown';
-  const saleLabel = (sale.sale_number || 'POS') + '_' + outletSlug; // e.g. POS-0004_Gbagada
+  // "Main store" → Main (never ends with _store)
+  let outletSlug = '';
+  if (outletName) {
+    outletSlug = outletName.replace(/\s+(store|shop|outlet|branch|warehouse)$/i, '').trim() || outletName;
+    outletSlug = outletSlug.replace(/\s+/g, '_').replace(/[^\w\-]/g, '');
+  }
+  const saleLabel = outletSlug
+    ? ((sale.sale_number || 'POS') + '_' + outletSlug)
+    : (sale.sale_number || 'POS');
   sale.books_label = saleLabel;
+  if (!db.profile) db.profile = { reporting: 'NGN', name: '' };
+  if (!Array.isArray(db.journals)) db.journals = [];
+  if (!Array.isArray(db.cashEntries)) db.cashEntries = [];
 
   const payCash = !sale.payment_method || sale.payment_method === 'cash';
   const debitAcct = payCash ? '1000' : '1000'; // bank mapping can be refined later
@@ -1619,11 +1627,17 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
   const saleNumber = await nextSaleNumber();
   const saleId = crypto.randomUUID();
   const now = new Date().toISOString();
+  ensurePosLocation();
   let saleLoc = getActiveLocation();
+  // Re-resolve from list so we always get the latest name
+  if (saleLoc) {
+    const fresh = (db.locations || []).find(l => l.id === saleLoc.id || l.cloudId === saleLoc.id);
+    if (fresh) saleLoc = fresh;
+  }
   if (saleLoc && (!saleLoc.name || !String(saleLoc.name).trim())) {
     saleLoc.name = saleLoc.code || 'Main store';
   }
-  const outletName = String(saleLoc?.name || saleLoc?.code || '').trim() || 'store';
+  const outletName = String(saleLoc?.name || saleLoc?.code || '').trim();
   const sale = {
     id: saleId,
     sale_number: saleNumber,
@@ -1637,7 +1651,7 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
     payment_note: payment_note || null,
     lines,
     location_id: saleLoc?.id || null,
-    location_name: outletName,
+    location_name: outletName || null,
     cloudId: null,
     synced: false
   };

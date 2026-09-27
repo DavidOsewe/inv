@@ -14663,9 +14663,9 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
 
   // Books: cash-in + revenue + COGS/inventory (outlet tagged on every memo)
   try {
+    ensureBooksDb();
     const key = 'pos:' + saleId;
     const date = now.slice(0, 10);
-    // Use the location this sale was sold from — never active-location fallback
     const outletName = String(
       sale.location_name
       || saleLoc.name
@@ -14675,13 +14675,12 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
     sale.location_name = outletName;
     const outletSlug = (typeof outletSlugFromName === 'function'
       ? outletSlugFromName(outletName)
-      : outletName.replace(/\s+/g, '_').replace(/[^\w\-]/g, '')) || 'Unknown';
-    const saleLabel = saleNumber + '_' + outletSlug; // e.g. POS-0004_Gbagada
+      : outletName.replace(/\s+(store|shop|outlet|branch|warehouse)$/i, '').trim().replace(/\s+/g, '_').replace(/[^\w\-]/g, '')) || 'Unknown';
+    const saleLabel = saleNumber + (outletSlug && outletSlug !== 'Unknown' ? '_' + outletSlug : '');
     sale.books_label = saleLabel;
 
-    // Debit cash vs bank depending on tender
     const payCash = !payment_method || payment_method === 'cash';
-    const debitAcct = payCash ? '1000' : (typeof findBankAccountId === 'function' ? (findBankAccountId() || '1000') : '1000');
+    const debitAcct = payCash ? '1000' : '1000';
 
     if (!db.cashEntries.some(e => e.sourceKey === key)) {
       db.cashEntries.push({
@@ -14694,8 +14693,8 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
         note: 'POS sale ' + saleLabel,
         source: 'pos_sale',
         sourceKey: key,
-        location_id: saleLoc?.id || null,
-        location_name: saleLoc?.name || null
+        location_id: saleLoc.id || null,
+        location_name: outletName
       });
     }
     const rev = postJournal({
@@ -14710,8 +14709,10 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
       ]
     });
     if (rev) {
-      rev.location_id = saleLoc?.id || null;
-      rev.location_name = saleLoc?.name || null;
+      rev.location_id = saleLoc.id || null;
+      rev.location_name = outletName;
+    } else {
+      console.warn('POS revenue journal not posted', saleLabel, total);
     }
     if (costTotal > 0.0001) {
       const cogs = postJournal({
@@ -14726,14 +14727,18 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
         ]
       });
       if (cogs) {
-        cogs.location_id = saleLoc?.id || null;
-        cogs.location_name = saleLoc?.name || null;
+        cogs.location_id = saleLoc.id || null;
+        cogs.location_name = outletName;
       }
-    } else {
-      console.info('POS sale COGS skipped — set product Cost to post inventory journals');
     }
     try { queueBooksCloudSync(); } catch (_) {}
-  } catch (e) { console.warn('pos books', e); }
+    if (rev) {
+      try { toast('Books · ' + saleLabel); } catch (_) {}
+    }
+  } catch (e) {
+    console.error('pos books failed', e);
+    try { toast('Sale saved but books failed: ' + (e.message || e)); } catch (_) {}
+  }
 
   db.posCart = [];
   persistDb();
@@ -14804,23 +14809,31 @@ function cleanPosJournalMemo(j) {
   if (!m) return;
   const prefix = m[1];
   const num = m[2];
-  // Find sale by number first (most reliable)
   const sale = (db.posSales || []).find(s =>
     String(s.sale_number || '') === num ||
     j.sourceKey === 'j:pos:' + s.id ||
     j.sourceKey === 'j:pos_cogs:' + s.id
   );
   let outletName = sale ? resolveSaleOutletName(sale) : '';
-  if (!outletName && j.location_name) outletName = String(j.location_name).trim();
+  if (!outletName && j.location_name && !/^(store|unknown)$/i.test(String(j.location_name).trim())) {
+    outletName = String(j.location_name).trim();
+  }
   if (!outletName && j.location_id) {
     const loc = (db.locations || []).find(l => l.id === j.location_id || l.cloudId === j.location_id);
     if (loc?.name) outletName = String(loc.name).trim();
   }
-  const slug = outletSlugFromName(outletName || 'Unknown');
+  // Corrupt suffixes only — never invent "Unknown" over a good label
+  const corrupt = /_Main(_Main)+|_store$|_Unknown$/i.test(memo) || /Main_Main/i.test(memo);
+  if (!outletName) {
+    if (corrupt) j.memo = prefix + num; // strip garbage, leave POS-0013
+    return;
+  }
+  const slug = outletSlugFromName(outletName);
+  if (!slug || slug === 'Unknown') return;
   const next = prefix + num + '_' + slug;
   if (next !== memo) {
     j.memo = next;
-    if (outletName) j.location_name = outletName;
+    j.location_name = outletName;
     if (sale?.location_id) j.location_id = sale.location_id;
   }
 }
@@ -15826,6 +15839,11 @@ function ensureBooksDb() {
   if (!Array.isArray(db.bankRules)) db.bankRules = [];
   if (!Array.isArray(db.bankImportMaps)) db.bankImportMaps = [];
   if (!Array.isArray(db.auditEvents)) db.auditEvents = [];
+  // postJournal reads db.profile.reporting — must never throw
+  if (!db.profile || typeof db.profile !== 'object') {
+    db.profile = { reporting: 'NGN', name: '' };
+  }
+  if (!db.profile.reporting) db.profile.reporting = 'NGN';
   // Existing bank rules without explicit autoApply=false should auto-run on import
   if (Array.isArray(db.bankRules) && !db._bankRulesAutoMigrated) {
     db.bankRules.forEach(r => {
@@ -16081,7 +16099,7 @@ function appendBooksAudit(action, entityType, entityId, summary, before, after, 
 function postJournal({ date, memo, source, sourceKey, lines, currency, reversedFrom, reverseOf, documents }) {
   ensureBooksDb();
   if (sourceKey && db.journals.some(j => j.sourceKey === sourceKey)) return null;
-  const rep = db.profile.reporting || 'USD';
+  const rep = (db.profile && db.profile.reporting) || 'NGN';
   const cur = currency || rep;
   const normalized = (lines || []).map(l => ({
     accountId: String(l.accountId || '').trim(),
