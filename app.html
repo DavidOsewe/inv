@@ -13758,7 +13758,7 @@ async function pullLocationsFromCloud() {
       active: row.active !== false
     });
   });
-  // Pull location stock — merge; never wipe local with empty cloud
+  // Pull location stock into locationStock AND product.stock_by_location (UI source of truth)
   try {
     const { data: stockRows } = await cloud.client.from('product_location_stock')
       .select('*')
@@ -13770,19 +13770,23 @@ async function pullLocationsFromCloud() {
         const p = productByCloud.get(row.product_id);
         const loc = locationByCloud.get(row.location_id);
         if (!p || !loc) return;
+        if (row.qty == null || row.qty === '') return;
+        const qty = Number(row.qty) || 0;
         let s = db.locationStock.find(x => x.product_id === p.id && x.location_id === loc.id);
         if (!s) {
           s = { product_id: p.id, location_id: loc.id, qty: 0 };
           db.locationStock.push(s);
         }
-        // Prefer cloud when it has a finite qty (including 0 that was deliberately set)
-        if (row.qty != null && row.qty !== '') {
-          s.qty = Number(row.qty) || 0;
+        s.qty = qty;
+        if (!p.stock_by_location || typeof p.stock_by_location !== 'object') p.stock_by_location = {};
+        p.stock_by_location[loc.id] = qty;
+      });
+      db.products.forEach(p => {
+        if (p.stock_by_location) {
+          p.stock_qty = Object.values(p.stock_by_location).reduce((n, v) => n + (Number(v) || 0), 0);
         }
       });
     }
-    try { migrateProductStockToLocations(); } catch (_) {}
-    db.products.forEach(p => { p.stock_qty = totalProductStock(p.id); });
   } catch (e) { console.warn('location stock pull', e); }
   try { dedupeLocationsByName(); } catch (_) {}
   try { migrateProductStockToLocations(); } catch (_) {}
