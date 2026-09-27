@@ -14714,8 +14714,9 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
     } else {
       console.warn('POS revenue journal not posted', saleLabel, total);
     }
+    let cogs = null;
     if (costTotal > 0.0001) {
-      const cogs = postJournal({
+      cogs = postJournal({
         date,
         memo: 'COGS · POS sale ' + saleLabel,
         source: 'pos_cogs',
@@ -14731,7 +14732,19 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
         cogs.location_name = outletName;
       }
     }
+    // Local ledger is instant; push these two rows to cloud immediately (no bulk lag)
+    try {
+      if (rev) await pushJournalToCloudImmediate(rev);
+      if (cogs) await pushJournalToCloudImmediate(cogs);
+    } catch (e) { console.warn('pos books immediate push', e); }
     try { queueBooksCloudSync(); } catch (_) {}
+    // Refresh Books UI if user is looking at it
+    try {
+      if (document.getElementById('view-books') && !document.getElementById('view-books').hidden) {
+        if (typeof renderBooksJournal === 'function') renderBooksJournal();
+        if (typeof booksView === 'function') booksView();
+      }
+    } catch (_) {}
     if (rev) {
       try { toast('Books · ' + saleLabel); } catch (_) {}
     }
@@ -20069,34 +20082,35 @@ function renderBooksRecurringJ() {
 }
 
 function queueBooksCloudSync() {
-  if (!cloud.client || !cloud.user) return;
+  if (!cloud?.client || !cloud?.user) return;
   clearTimeout(cloud.booksTimer);
+  // Debounce bulk sync; POS sales also call pushJournalToCloudImmediate for zero lag
   cloud.booksTimer = setTimeout(() => {
     pushBooksToCloud().catch(e => console.warn('books push', e.message || e));
-  }, 800);
+  }, 400);
 }
 
-async function pushBooksToCloud() {
-  if (!cloud.client || !cloud.user) return;
-  ensureBooksDb();
-  const organizationId = await ensureCloudOrganization();
-  // Journals by source_key upsert
-  for (const j of db.journals || []) {
+/** Push a single journal now (POS / invoice) — avoids waiting for full books sync. */
+async function pushJournalToCloudImmediate(j) {
+  if (!j || !cloud?.client || !cloud?.user) return false;
+  try {
+    ensureBooksDb();
+    const organizationId = cloud.organizationId || await ensureCloudOrganization();
+    if (!organizationId) return false;
     const payload = {
       organization_id: organizationId,
       local_id: j.id,
-      entry_date: j.date || today,
+      entry_date: j.date || (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10)),
       memo: j.memo || null,
       source: j.source || null,
       source_key: j.sourceKey || ('local:' + j.id),
-      currency: j.currency || db.profile.reporting || 'USD',
+      currency: j.currency || (db.profile && db.profile.reporting) || 'NGN',
       lines: j.lines || [],
       updated_at: new Date().toISOString()
     };
     const { error } = await cloud.client.from('books_journals').upsert(payload, {
       onConflict: 'organization_id,source_key'
     });
-    // unique index is partial — fallback insert/select
     if (error) {
       const { data: existing } = await cloud.client.from('books_journals')
         .select('id').eq('organization_id', organizationId).eq('source_key', payload.source_key).maybeSingle();
@@ -20104,8 +20118,62 @@ async function pushBooksToCloud() {
         await cloud.client.from('books_journals').update(payload).eq('id', existing.id);
       } else {
         const ins = await cloud.client.from('books_journals').insert(payload);
-        if (ins.error) console.warn('books_journals', ins.error.message);
+        if (ins.error) {
+          console.warn('books_journals immediate', ins.error.message);
+          return false;
+        }
       }
+    }
+    j._booksPushedAt = new Date().toISOString();
+    return true;
+  } catch (e) {
+    console.warn('pushJournalToCloudImmediate', e.message || e);
+    return false;
+  }
+}
+
+async function pushBooksToCloud() {
+  if (!cloud.client || !cloud.user) return;
+  ensureBooksDb();
+  const organizationId = await ensureCloudOrganization();
+  // Prefer recent / not-yet-pushed journals first so POS sales land fast
+  const all = (db.journals || []).slice();
+  all.sort((a, b) => {
+    const ap = a._booksPushedAt ? 1 : 0;
+    const bp = b._booksPushedAt ? 1 : 0;
+    if (ap !== bp) return ap - bp; // unpushed first
+    return String(b.createdAt || b.date || '').localeCompare(String(a.createdAt || a.date || ''));
+  });
+  // Cap bulk pass — full history still catches up over successive syncs
+  const batch = all.slice(0, 40);
+  for (const j of batch) {
+    const payload = {
+      organization_id: organizationId,
+      local_id: j.id,
+      entry_date: j.date || today,
+      memo: j.memo || null,
+      source: j.source || null,
+      source_key: j.sourceKey || ('local:' + j.id),
+      currency: j.currency || (db.profile && db.profile.reporting) || 'NGN',
+      lines: j.lines || [],
+      updated_at: new Date().toISOString()
+    };
+    const { error } = await cloud.client.from('books_journals').upsert(payload, {
+      onConflict: 'organization_id,source_key'
+    });
+    if (error) {
+      const { data: existing } = await cloud.client.from('books_journals')
+        .select('id').eq('organization_id', organizationId).eq('source_key', payload.source_key).maybeSingle();
+      if (existing?.id) {
+        await cloud.client.from('books_journals').update(payload).eq('id', existing.id);
+        j._booksPushedAt = new Date().toISOString();
+      } else {
+        const ins = await cloud.client.from('books_journals').insert(payload);
+        if (ins.error) console.warn('books_journals', ins.error.message);
+        else j._booksPushedAt = new Date().toISOString();
+      }
+    } else {
+      j._booksPushedAt = new Date().toISOString();
     }
   }
   // Bills

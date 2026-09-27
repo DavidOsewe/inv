@@ -1520,6 +1520,43 @@ function saleCostTotal(lines) {
   }, 0);
 }
 
+/** Push the POS revenue (+ COGS) journal(s) for this sale to cloud right away. */
+async function pushRecentBooksJournals(sale) {
+  if (!sale || !isOnline() || !sb || !organizationId) return;
+  const keys = ['j:pos:' + sale.id, 'j:pos_cogs:' + sale.id];
+  const rows = (db.journals || []).filter(j => keys.includes(j.sourceKey));
+  for (const j of rows) {
+    const payload = {
+      organization_id: organizationId,
+      local_id: j.id,
+      entry_date: j.date || j.entry_date || (sale.sold_at || '').slice(0, 10),
+      memo: j.memo || null,
+      source: j.source || 'pos_sale',
+      source_key: j.sourceKey || ('local:' + j.id),
+      currency: j.currency || (db.profile && db.profile.reporting) || 'NGN',
+      lines: j.lines || [],
+      updated_at: new Date().toISOString()
+    };
+    try {
+      const { error } = await sb.from('books_journals').upsert(payload, {
+        onConflict: 'organization_id,source_key'
+      });
+      if (error) {
+        const { data: existing } = await sb.from('books_journals')
+          .select('id').eq('organization_id', organizationId).eq('source_key', payload.source_key).maybeSingle();
+        if (existing?.id) {
+          await sb.from('books_journals').update(payload).eq('id', existing.id);
+        } else {
+          const ins = await sb.from('books_journals').insert(payload);
+          if (ins.error) console.warn('books_journals pos', ins.error.message);
+        }
+      }
+    } catch (e) {
+      console.warn('pushRecentBooksJournals', e.message || e);
+    }
+  }
+}
+
 function postLocalBooks(sale) {
   const key = 'pos:' + sale.id;
   const date = (sale.sold_at || new Date().toISOString()).slice(0, 10);
@@ -1693,6 +1730,8 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
   db.posSales.push(sale);
   postLocalBooks(sale);
   enqueueSync({ type: 'sale', sale: Object.assign({}, sale) });
+  // Push ledger rows to cloud immediately so Books sees them without lag
+  try { pushRecentBooksJournals(sale); } catch (e) { console.warn('books push', e); }
 
   db.posCart = [];
   persistDb();
