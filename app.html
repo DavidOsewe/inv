@@ -14665,15 +14665,17 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
   try {
     const key = 'pos:' + saleId;
     const date = now.slice(0, 10);
+    // Use the location this sale was sold from — never active-location fallback
     const outletName = String(
       sale.location_name
       || saleLoc.name
       || saleLoc.code
-      || (typeof getActiveLocation === 'function' && getActiveLocation()?.name)
       || ''
-    ).trim() || 'store';
+    ).trim() || 'Unknown';
     sale.location_name = outletName;
-    const outletSlug = outletName.replace(/\s+/g, '_').replace(/[^\w\-]/g, '') || 'store';
+    const outletSlug = (typeof outletSlugFromName === 'function'
+      ? outletSlugFromName(outletName)
+      : outletName.replace(/\s+/g, '_').replace(/[^\w\-]/g, '')) || 'Unknown';
     const saleLabel = saleNumber + '_' + outletSlug; // e.g. POS-0004_Gbagada
     sale.books_label = saleLabel;
 
@@ -14759,9 +14761,30 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
  * Backfill books journals for POS sales that reduced stock but never posted GL.
  * Idempotent via sourceKey. Call when opening Journals.
  */
+/** "Main store" → "Main", "Gbagada" → "Gbagada" (never ends with _store). */
+function outletSlugFromName(name) {
+  let s = String(name || '').trim();
+  if (!s) return 'Unknown';
+  // Drop trailing generic word so slug never ends with "_store"
+  s = s.replace(/\s+(store|shop|outlet|branch|warehouse)$/i, '').trim() || s;
+  s = s.replace(/\s+/g, '_').replace(/[^\w\-]/g, '');
+  // Collapse accidental Main_Main_Main from older bug
+  s = s.replace(/^(Main_){2,}/i, 'Main_').replace(/(_Main)+$/i, '').replace(/_+/g, '_').replace(/^_|_$/g, '');
+  return s || 'Unknown';
+}
+
+/**
+ * Resolve outlet for a sale. Prefer sale.location_name / location_id only.
+ * Do NOT fall back to active location (that wrongly tagged every sale as Main).
+ */
 function resolveSaleOutletName(sale) {
-  if (!sale) return 'store';
-  if (sale.location_name && String(sale.location_name).trim()) return String(sale.location_name).trim();
+  if (!sale) return '';
+  const raw = String(sale.location_name || '').trim();
+  // Ignore corrupted / placeholder names from earlier bugs
+  if (raw && !/^(store|unknown)$/i.test(raw) && !/^(Main_)+store$/i.test(raw.replace(/\s/g, '_'))) {
+    // Clean "Main_Main_Main_store" style garbage
+    if (!/_Main_|Main_Main/i.test(raw.replace(/\s/g, '_'))) return raw;
+  }
   const lid = sale.location_id;
   if (lid) {
     const loc = (db.locations || []).find(l =>
@@ -14770,31 +14793,55 @@ function resolveSaleOutletName(sale) {
     if (loc && loc.name && String(loc.name).trim()) return String(loc.name).trim();
     if (loc && loc.code) return String(loc.code).trim();
   }
-  try {
-    const active = typeof getActiveLocation === 'function' ? getActiveLocation() : null;
-    if (active?.name) return String(active.name).trim();
-  } catch (_) {}
-  return 'store';
+  return '';
+}
+
+function cleanPosJournalMemo(j) {
+  if (!j || (j.source !== 'pos_sale' && j.source !== 'pos_cogs')) return;
+  const memo = String(j.memo || '');
+  // Match "POS sale POS-0013_...." or "COGS · POS sale POS-0013_...."
+  const m = memo.match(/^(.*POS sale\s+)(POS-\d+)(?:_.*)?$/i);
+  if (!m) return;
+  const prefix = m[1];
+  const num = m[2];
+  // Find sale by number first (most reliable)
+  const sale = (db.posSales || []).find(s =>
+    String(s.sale_number || '') === num ||
+    j.sourceKey === 'j:pos:' + s.id ||
+    j.sourceKey === 'j:pos_cogs:' + s.id
+  );
+  let outletName = sale ? resolveSaleOutletName(sale) : '';
+  if (!outletName && j.location_name) outletName = String(j.location_name).trim();
+  if (!outletName && j.location_id) {
+    const loc = (db.locations || []).find(l => l.id === j.location_id || l.cloudId === j.location_id);
+    if (loc?.name) outletName = String(loc.name).trim();
+  }
+  const slug = outletSlugFromName(outletName || 'Unknown');
+  const next = prefix + num + '_' + slug;
+  if (next !== memo) {
+    j.memo = next;
+    if (outletName) j.location_name = outletName;
+    if (sale?.location_id) j.location_id = sale.location_id;
+  }
 }
 
 function backfillPosSalesToBooks() {
   ensurePosDb();
   ensureBooksDb();
   let n = 0;
-  // Relabel existing POS journals that fell back to "_store" when we now know the outlet
+  // One-shot cleanup of corrupted / _store / Main_Main_… labels
   (db.journals || []).forEach(j => {
-    if (!j || !j.sourceKey || !/_store$/.test(String(j.memo || ''))) return;
-    if (j.source !== 'pos_sale' && j.source !== 'pos_cogs') return;
-    const saleId = String(j.sourceKey).replace(/^j:(pos_cogs:)?/, '').replace(/^pos:/, '');
-    const sale = (db.posSales || []).find(s => s.id === saleId || j.sourceKey === 'j:pos:' + s.id || j.sourceKey === 'j:pos_cogs:' + s.id);
-    if (!sale) return;
-    const outletName = resolveSaleOutletName(sale);
-    if (!outletName || outletName === 'store') return;
-    const slug = outletName.replace(/\s+/g, '_').replace(/[^\w\-]/g, '') || 'store';
-    if (slug === 'store') return;
-    j.memo = String(j.memo).replace(/_store$/, '_' + slug);
-    j.location_id = sale.location_id || j.location_id || null;
-    j.location_name = outletName;
+    try { cleanPosJournalMemo(j); } catch (_) {}
+  });
+  (db.cashEntries || []).forEach(e => {
+    if (e.source !== 'pos_sale' || !e.note) return;
+    const m = String(e.note).match(/^(POS sale\s+)(POS-\d+)(?:_.*)?$/i);
+    if (!m) return;
+    const sale = (db.posSales || []).find(s => String(s.sale_number || '') === m[2]);
+    const outletName = sale ? resolveSaleOutletName(sale) : (e.location_name || '');
+    const slug = outletSlugFromName(outletName || 'Unknown');
+    e.note = m[1] + m[2] + '_' + slug;
+    if (outletName) e.location_name = outletName;
   });
   (db.posSales || []).forEach(sale => {
     if (!sale || !sale.id) return;
@@ -14804,9 +14851,9 @@ function backfillPosSalesToBooks() {
     const total = Number(sale.total) || 0;
     if (total <= 0) return;
     const date = String(sale.sold_at || '').slice(0, 10) || (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
-    const outletName = resolveSaleOutletName(sale);
-    sale.location_name = outletName;
-    const outletSlug = outletName.replace(/\s+/g, '_').replace(/[^\w\-]/g, '') || 'store';
+    const outletName = resolveSaleOutletName(sale) || 'Unknown';
+    if (outletName && outletName !== 'Unknown') sale.location_name = outletName;
+    const outletSlug = outletSlugFromName(outletName);
     const saleLabel = (sale.sale_number || 'POS') + '_' + outletSlug;
     const currency = sale.currency || posCurrency();
     if (!db.cashEntries.some(e => e.sourceKey === key)) {
