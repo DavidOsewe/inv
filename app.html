@@ -4073,43 +4073,24 @@ input:focus:not(:focus-visible) {
             <span>Require approval for expenses &amp; supplier bills</span>
           </label>
           <div id="expenseApprovalRolesBox" style="margin:10px 0 4px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
-            <div style="font-size:12px;font-weight:700;margin-bottom:8px">Expense workflow roles</div>
-            <p class="section-sub" style="margin:0 0 10px">Who can request, review, and finally approve money out. Review is optional for small amounts.</p>
-            <div class="two" style="gap:10px">
-              <div class="field" style="margin:0">
-                <label>Requester (can submit)</label>
-                <select id="expenseRequesterRole" data-p="expenseRequesterRole">
-                  <option value="member">Member + above</option>
-                  <option value="manager">Manager + owner only</option>
-                  <option value="owner">Owner only</option>
-                </select>
-              </div>
-              <div class="field" style="margin:0">
-                <label>Reviewer (checks request)</label>
-                <select id="expenseReviewerRole" data-p="expenseReviewerRole">
-                  <option value="manager">Manager + owner</option>
-                  <option value="owner">Owner only</option>
-                  <option value="none">Skip review (straight to approval)</option>
-                </select>
-              </div>
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px">Odoo-style amount matrix (expense / bills)</div>
+            <p class="section-sub" style="margin:0 0 10px">
+              Sequential levels by amount. A request only needs levels where amount ≥ that level’s minimum.
+              The <b>last</b> required level posts to the ledger (accountant). Requesters never post journals.
+            </p>
+            <div class="field" style="margin:0 0 10px">
+              <label>Requester (can submit)</label>
+              <select id="expenseRequesterRole" data-p="expenseRequesterRole">
+                <option value="member">Member + above</option>
+                <option value="manager">Manager + owner only</option>
+                <option value="owner">Owner only</option>
+              </select>
             </div>
-            <div class="two" style="gap:10px;margin-top:8px">
-              <div class="field" style="margin:0">
-                <label>Approver (posts to books)</label>
-                <select id="expenseApproverRole" data-p="expenseApproverRole">
-                  <option value="manager">Manager + owner</option>
-                  <option value="owner">Owner only</option>
-                </select>
-              </div>
-              <div class="field" style="margin:0">
-                <label>Auto-approve under (₦ / reporting currency)</label>
-                <input type="number" min="0" step="1" id="expenseApprovalThreshold" data-p="expenseApprovalThreshold" placeholder="0 = all need approval">
-              </div>
-            </div>
-            <p class="section-sub" style="margin:8px 0 0">
-              Flow: <b>Requester</b> submits plain details (no journal skills needed) →
-              <b>Reviewer</b> checks → <b>Approver / accountant</b> assigns ledger and posts books.
-              Below the threshold, expenses post immediately.
+            <div id="expenseMatrixLevels" style="display:flex;flex-direction:column;gap:8px"></div>
+            <button type="button" class="button small" id="expenseMatrixAddLevel" style="margin-top:8px">+ Add level</button>
+            <p class="section-sub" style="margin:10px 0 0">
+              Example: Level 1 min 0 · Manager · Level 2 min 50,000 · Owner.
+              ₦30k stops after manager; ₦120k needs manager then owner (posts).
             </p>
             <label style="display:flex;align-items:center;gap:10px;margin:10px 0 0;cursor:pointer">
               <input type="checkbox" data-p="expenseBlockSelfApprove" id="expenseBlockSelfApprove" checked>
@@ -6913,8 +6894,8 @@ function applyRoleGates() {
   // --- Explicit controls ---
   [
     'requireTransferApproval', 'requirePurchaseApproval', 'requireExpenseApproval',
-    'expenseRequesterRole', 'expenseReviewerRole', 'expenseApproverRole',
-    'expenseApprovalThreshold', 'expenseBlockSelfApprove', 'expenseRequireReceipt'
+    'expenseRequesterRole', 'expenseBlockSelfApprove', 'expenseRequireReceipt',
+    'expenseMatrixAddLevel'
   ].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -9846,9 +9827,108 @@ async function refreshCloudMemberRole() {
 /* ---------- Approvals (transfers + POs + expenses) ---------- */
 const APPROVAL_SETTING_KEYS = [
   'requireTransferApproval', 'requirePurchaseApproval', 'requireExpenseApproval',
-  'expenseRequesterRole', 'expenseReviewerRole', 'expenseApproverRole',
-  'expenseApprovalThreshold', 'expenseBlockSelfApprove', 'expenseRequireReceipt'
+  'expenseRequesterRole', 'expenseBlockSelfApprove', 'expenseRequireReceipt'
 ];
+
+/** Default Odoo-style sequential levels (min_amount triggers inclusion). */
+function defaultExpenseMatrixLevels() {
+  return [
+    { level: 1, min_amount: 0, role: 'manager', label: 'Manager review' },
+    { level: 2, min_amount: 50000, role: 'owner', label: 'Owner / accountant posts' }
+  ];
+}
+
+function getExpenseMatrixLevels() {
+  restoreApprovalSettingsMirror();
+  let levels = db.profile && db.profile.expenseMatrixLevels;
+  if (!Array.isArray(levels) || !levels.length) {
+    // Migrate legacy single-threshold + reviewer/approver roles
+    const thr = Number(db.profile && db.profile.expenseApprovalThreshold) || 0;
+    const rev = (db.profile && db.profile.expenseReviewerRole) || 'manager';
+    const appr = (db.profile && db.profile.expenseApproverRole) || 'owner';
+    if (thr > 0 && rev !== 'none') {
+      levels = [
+        { level: 1, min_amount: thr, role: rev === 'none' ? 'manager' : rev, label: 'Review' },
+        { level: 2, min_amount: thr, role: appr || 'owner', label: 'Approve & post' }
+      ];
+    } else if (rev && rev !== 'none') {
+      levels = [
+        { level: 1, min_amount: 0, role: rev, label: 'Review' },
+        { level: 2, min_amount: 0, role: appr || 'owner', label: 'Approve & post' }
+      ];
+    } else {
+      levels = defaultExpenseMatrixLevels();
+    }
+  }
+  return levels
+    .map((l, i) => ({
+      level: Number(l.level) || (i + 1),
+      min_amount: Math.max(0, Number(l.min_amount) || 0),
+      role: (l.role === 'owner' || l.role === 'manager' || l.role === 'member') ? l.role : 'manager',
+      label: String(l.label || ('Level ' + (i + 1))).trim() || ('Level ' + (i + 1))
+    }))
+    .sort((a, b) => a.level - b.level || a.min_amount - b.min_amount);
+}
+
+/** Levels required for this amount (Odoo: amount ≥ level.min_amount). */
+function expenseLevelsForAmount(amount) {
+  const amt = Number(amount) || 0;
+  const levels = getExpenseMatrixLevels().filter(l => amt >= l.min_amount);
+  return levels.length ? levels : getExpenseMatrixLevels().slice(0, 1);
+}
+
+function renderExpenseMatrixEditor() {
+  const host = document.getElementById('expenseMatrixLevels');
+  if (!host) return;
+  const levels = getExpenseMatrixLevels();
+  host.innerHTML = levels.map((l, i) =>
+    '<div class="two" data-matrix-row="' + i + '" style="gap:8px;align-items:end;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel)">' +
+    '<div class="field" style="margin:0"><label>Level</label><input type="number" min="1" step="1" data-mx="level" value="' + l.level + '" style="max-width:70px"></div>' +
+    '<div class="field" style="margin:0"><label>Min amount</label><input type="number" min="0" step="1" data-mx="min_amount" value="' + l.min_amount + '"></div>' +
+    '<div class="field" style="margin:0"><label>Approver role</label><select data-mx="role">' +
+    '<option value="manager"' + (l.role === 'manager' ? ' selected' : '') + '>Manager + owner</option>' +
+    '<option value="owner"' + (l.role === 'owner' ? ' selected' : '') + '>Owner only</option>' +
+    '<option value="member"' + (l.role === 'member' ? ' selected' : '') + '>Member + above</option>' +
+    '</select></div>' +
+    '<div class="field" style="margin:0"><label>Label</label><input data-mx="label" value="' + String(l.label).replace(/"/g, '&quot;') + '" placeholder="e.g. Manager review"></div>' +
+    '<button type="button" class="button small danger" data-mx-remove="' + i + '" title="Remove">×</button>' +
+    '</div>'
+  ).join('') || '<p class="section-sub">No levels — add at least one.</p>';
+  host.querySelectorAll('[data-mx-remove]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const levelsNow = readExpenseMatrixFromEditor();
+      const idx = Number(btn.getAttribute('data-mx-remove'));
+      levelsNow.splice(idx, 1);
+      db.profile.expenseMatrixLevels = levelsNow.length ? levelsNow : defaultExpenseMatrixLevels();
+      try { persistApprovalSettingsFromForm(); } catch (_) {}
+      renderExpenseMatrixEditor();
+      save();
+    });
+  });
+}
+
+function readExpenseMatrixFromEditor() {
+  const host = document.getElementById('expenseMatrixLevels');
+  if (!host) return getExpenseMatrixLevels();
+  const rows = [...host.querySelectorAll('[data-matrix-row]')];
+  return rows.map((row, i) => ({
+    level: Number(row.querySelector('[data-mx="level"]')?.value) || (i + 1),
+    min_amount: Math.max(0, Number(row.querySelector('[data-mx="min_amount"]')?.value) || 0),
+    role: row.querySelector('[data-mx="role"]')?.value || 'manager',
+    label: (row.querySelector('[data-mx="label"]')?.value || '').trim() || ('Level ' + (i + 1))
+  })).sort((a, b) => a.level - b.level);
+}
+
+function saveExpenseMatrixFromEditor() {
+  if (!db.profile) db.profile = {};
+  db.profile.expenseMatrixLevels = readExpenseMatrixFromEditor();
+  try {
+    const payload = {};
+    APPROVAL_SETTING_KEYS.forEach(k => { payload[k] = db.profile[k]; });
+    payload.expenseMatrixLevels = db.profile.expenseMatrixLevels;
+    localStorage.setItem(approvalSettingsStorageKey(), JSON.stringify(payload));
+  } catch (_) {}
+}
 
 function approvalSettingsStorageKey() {
   const org = (typeof cloud !== 'undefined' && cloud.organizationId) || 'local';
@@ -9863,16 +9943,15 @@ function persistApprovalSettingsFromForm() {
     const el = document.querySelector('[data-p="' + key + '"]') || document.getElementById(key);
     if (!el) return;
     if (el.type === 'checkbox') db.profile[key] = !!el.checked;
-    else if (key === 'expenseApprovalThreshold') {
-      const n = Number(el.value);
-      db.profile[key] = Number.isFinite(n) && n > 0 ? n : 0;
-    } else {
-      db.profile[key] = el.value;
-    }
+    else db.profile[key] = el.value;
   });
+  try { saveExpenseMatrixFromEditor(); } catch (_) {
+    if (!db.profile.expenseMatrixLevels) db.profile.expenseMatrixLevels = defaultExpenseMatrixLevels();
+  }
   try {
     const payload = {};
     APPROVAL_SETTING_KEYS.forEach(k => { payload[k] = db.profile[k]; });
+    payload.expenseMatrixLevels = db.profile.expenseMatrixLevels || defaultExpenseMatrixLevels();
     localStorage.setItem(approvalSettingsStorageKey(), JSON.stringify(payload));
   } catch (_) {}
   try { syncExpenseApprovalRolesVisibility(); } catch (_) {}
@@ -9886,11 +9965,13 @@ function restoreApprovalSettingsMirror() {
     const payload = JSON.parse(raw);
     if (!payload || typeof payload !== 'object') return;
     APPROVAL_SETTING_KEYS.forEach(k => {
-      // Only fill if profile missing the key (don't clobber explicit false)
       if (db.profile[k] === undefined && payload[k] !== undefined) {
         db.profile[k] = payload[k];
       }
     });
+    if (db.profile.expenseMatrixLevels === undefined && Array.isArray(payload.expenseMatrixLevels)) {
+      db.profile.expenseMatrixLevels = payload.expenseMatrixLevels;
+    }
   } catch (_) {}
 }
 
@@ -9952,37 +10033,57 @@ function canRequestExpense() {
   return roleMeetsMinimum(need);
 }
 function canReviewExpense() {
+  // Any matrix level this user can act on
   if (!approvalsEnabledExpenses()) return false;
-  const need = (db.profile && db.profile.expenseReviewerRole) || 'manager';
-  if (need === 'none') return false;
-  // Org role floor + permission
-  if (!roleMeetsMinimum(need)) return false;
-  return can('expenses.review') || currentOrgRole() === 'owner';
+  return getExpenseMatrixLevels().some(l => roleMeetsMinimum(l.role) && (can('expenses.review') || can('expenses.approve') || currentOrgRole() === 'owner' || roleMeetsMinimum(l.role)));
 }
 function canApproveExpense() {
   if (!approvalsEnabledExpenses()) return can('books.write');
-  const need = (db.profile && db.profile.expenseApproverRole) || 'manager';
-  if (!roleMeetsMinimum(need)) return false;
-  return can('expenses.approve') || currentOrgRole() === 'owner';
+  return getExpenseMatrixLevels().some(l => roleMeetsMinimum(l.role));
 }
-/** Does this amount need the full approval chain? */
+/** Can current user act on this bill's current matrix level? */
+function canActOnExpenseLevel(bill) {
+  if (!bill) return false;
+  const levels = bill.approval_chain || expenseLevelsForAmount(bill.amount);
+  const idx = Math.max(0, Number(bill.approval_level_index) || 0);
+  const cur = levels[idx];
+  if (!cur) return canApproveExpense();
+  if (!roleMeetsMinimum(cur.role)) return false;
+  return can('expenses.approve') || can('expenses.review') || roleMeetsMinimum(cur.role);
+}
+/** Does this amount need the approval chain? */
 function expenseNeedsApproval(amount, currency) {
   if (!approvalsEnabledExpenses()) return false;
-  const amt = Number(amount) || 0;
-  const thr = expenseApprovalThreshold();
-  if (thr > 0 && amt < thr) return false;
-  return true;
+  const levels = expenseLevelsForAmount(amount);
+  // If only one level and min is very high and amount below — still need if any level matches
+  return levels.length > 0;
 }
 function expenseReviewRequired() {
-  if (!approvalsEnabledExpenses()) return false;
-  const need = (db.profile && db.profile.expenseReviewerRole) || 'manager';
-  return need !== 'none';
+  return expenseNeedsApproval(0) && expenseLevelsForAmount(0).length > 1;
 }
 /** Initial status when requester submits an expense/bill */
 function expenseSubmitStatus(amount) {
-  if (!expenseNeedsApproval(amount)) return 'open'; // post immediately
-  if (expenseReviewRequired()) return 'pending_review';
+  if (!approvalsEnabledExpenses()) return 'open';
+  const levels = expenseLevelsForAmount(amount);
+  if (!levels.length) return 'open';
   return 'pending_approval';
+}
+/** Attach matrix chain metadata on submit */
+function attachExpenseApprovalChain(entity, amount) {
+  const levels = expenseLevelsForAmount(amount);
+  entity.approval_chain = levels.map(l => ({
+    level: l.level,
+    min_amount: l.min_amount,
+    role: l.role,
+    label: l.label,
+    status: 'pending',
+    at: null,
+    by: null,
+    by_email: null
+  }));
+  entity.approval_level_index = 0;
+  entity.approval_level = levels[0] ? levels[0].level : 1;
+  return entity;
 }
 function expenseActorMeta() {
   try {
@@ -10050,22 +10151,22 @@ function listPendingApprovalItems() {
   try {
     (db.bills || []).forEach(b => {
       if (b.status === 'pending_review' || b.status === 'pending_approval') {
+        const chain = b.approval_chain || [];
+        const idx = Math.max(0, Number(b.approval_level_index) || 0);
+        const cur = chain[idx];
+        const levelLabel = cur ? (cur.label || ('Level ' + cur.level)) : 'Approval';
         items.push({
           kind: 'bill',
           id: b.id,
           status: b.status,
+          amount: b.amount,
+          currency: b.currency,
+          levelLabel,
           label: (b.supplier || 'Expense') + ' · ' +
             (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) +
-            (b.status === 'pending_review' ? ' · needs review' : ' · accountant queue'),
-          go: () => {
-            try {
-              switchTo('books');
-              booksPage = 'ap';
-              booksTab = 'payables';
-              setBooksPage('ap', 'payables');
-              renderBooksPayables();
-            } catch (_) { switchTo('books'); }
-          }
+            ' · ' + levelLabel,
+          canAct: canActOnExpenseLevel(b),
+          go: () => openApprovalsInbox()
         });
       }
     });
@@ -10079,21 +10180,100 @@ function listPendingApprovalItems() {
           status: c.status,
           label: (c.note || 'Cash expense') + ' · ' +
             (typeof money === 'function' ? money(c.amount, c.currency) : c.amount) +
-            ' · accountant queue',
-          go: () => {
-            try {
-              switchTo('books');
-              booksPage = 'ap';
-              booksTab = 'payables';
-              setBooksPage('ap', 'payables');
-            } catch (_) { switchTo('books'); }
-          }
+            ' · pending',
+          go: () => openApprovalsInbox()
         });
       }
     });
   } catch (_) {}
   return items;
 }
+
+function openApprovalsInbox() {
+  let m = document.getElementById('approvalsInboxModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.className = 'modalback';
+    m.id = 'approvalsInboxModal';
+    m.innerHTML = '<div class="modal" style="max-width:560px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+      '<h2 style="margin:0">Approvals inbox</h2>' +
+      '<button type="button" class="button small" id="approvalsInboxClose">Close</button></div>' +
+      '<p class="section-sub">Odoo-style queue — transfers, POs, and expenses waiting on the current matrix level.</p>' +
+      '<div id="approvalsInboxList"></div></div>';
+    document.body.appendChild(m);
+    m.addEventListener('click', (e) => { if (e.target === m) { m.classList.remove('show'); m.style.display = ''; } });
+    document.getElementById('approvalsInboxClose')?.addEventListener('click', () => {
+      m.classList.remove('show'); m.style.display = '';
+    });
+  }
+  renderApprovalsInbox();
+  m.classList.add('show');
+  m.style.display = 'grid';
+}
+
+function renderApprovalsInbox() {
+  const el = document.getElementById('approvalsInboxList');
+  if (!el) return;
+  const items = listPendingApprovalItems();
+  if (!items.length) {
+    el.innerHTML = '<div class="empty" style="padding:16px"><h3>Queue clear</h3><p>No pending approvals.</p></div>';
+    return;
+  }
+  el.innerHTML = items.map(it => {
+    let actions = '';
+    if (it.kind === 'bill' && it.canAct) {
+      actions =
+        '<button type="button" class="button small primary" data-inbox-approve-bill="' + it.id + '">Approve level</button>' +
+        '<button type="button" class="button small danger" data-inbox-reject-bill="' + it.id + '">Reject</button>';
+    } else if (it.kind === 'transfer') {
+      actions = '<button type="button" class="button small" data-inbox-go-transfer="' + it.id + '">Open transfer</button>';
+    } else if (it.kind === 'purchase') {
+      actions = '<button type="button" class="button small" data-inbox-go-po="' + it.id + '">Open PO</button>';
+    } else {
+      actions = '<button type="button" class="button small" data-inbox-go-books>Open Money out</button>';
+    }
+    return '<div style="padding:12px 0;border-bottom:1px solid var(--line)">' +
+      '<div style="font-weight:700;font-size:13px">' + String(it.label).replace(/</g, '') + '</div>' +
+      '<div class="section-sub" style="margin:4px 0 8px">' + String(it.kind).toUpperCase() +
+      (it.levelLabel ? ' · ' + String(it.levelLabel).replace(/</g, '') : '') + '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px">' + actions + '</div></div>';
+  }).join('');
+  el.querySelectorAll('[data-inbox-approve-bill]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      approveExpenseBill(btn.getAttribute('data-inbox-approve-bill'));
+      renderApprovalsInbox();
+    });
+  });
+  el.querySelectorAll('[data-inbox-reject-bill]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      rejectExpenseBill(btn.getAttribute('data-inbox-reject-bill'));
+      renderApprovalsInbox();
+    });
+  });
+  el.querySelectorAll('[data-inbox-go-transfer]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('approvalsInboxModal')?.classList.remove('show');
+      try { _invTab = 'move'; switchTo('inventory'); } catch (_) { switchTo('inventory'); }
+    });
+  });
+  el.querySelectorAll('[data-inbox-go-po]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('approvalsInboxModal')?.classList.remove('show');
+      try { _invTab = 'buy'; switchTo('inventory'); } catch (_) { switchTo('inventory'); }
+    });
+  });
+  el.querySelectorAll('[data-inbox-go-books]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('approvalsInboxModal')?.classList.remove('show');
+      try {
+        switchTo('books');
+        setBooksPage('ap', 'payables');
+      } catch (_) { switchTo('books'); }
+    });
+  });
+}
+
 function renderDashboardApprovals() {
   const el = document.getElementById('dashboardApprovals');
   if (!el) return;
@@ -10103,38 +10283,43 @@ function renderDashboardApprovals() {
     el.innerHTML = '';
     return;
   }
-  const canAct = (typeof canApproveApprovals === 'function' && canApproveApprovals())
-    || (typeof canReviewExpense === 'function' && canReviewExpense())
-    || (typeof canApproveExpense === 'function' && canApproveExpense());
+  const canAct = items.some(i => i.canAct) ||
+    (typeof canApproveApprovals === 'function' && canApproveApprovals());
   el.style.display = '';
   el.innerHTML =
     '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:flex-start">' +
-    '<div><div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#92400e">Needs approval</div>' +
-    '<div style="font-weight:700;margin-top:4px">' + items.length + ' item' + (items.length === 1 ? '' : 's') + ' in queue</div>' +
+    '<div><div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#92400e">Approvals inbox</div>' +
+    '<div style="font-weight:700;margin-top:4px">' + items.length + ' item' + (items.length === 1 ? '' : 's') + ' pending</div>' +
     '<div class="section-sub" style="margin:4px 0 0">' +
     (canAct
-      ? 'Review and post from the queue — requesters do not touch the ledger.'
-      : 'Submitted — waiting for a reviewer or accountant.') +
+      ? 'Multi-level matrix — approve the current level or open the full inbox.'
+      : 'Submitted — waiting on the next role in the matrix.') +
     '</div></div>' +
-    '<button type="button" class="button small primary" id="dashApprovalsOpen">Open queue</button></div>' +
+    '<button type="button" class="button small primary" id="dashApprovalsOpen">Open inbox</button></div>' +
     '<ul style="margin:10px 0 0;padding:0;list-style:none">' +
     items.slice(0, 5).map(it =>
       '<li style="padding:6px 0;border-top:1px solid rgba(146,64,14,.15);font-size:13px;display:flex;justify-content:space-between;gap:8px">' +
       '<span>' + String(it.label).replace(/</g, '') + '</span>' +
-      '<button type="button" class="button text" data-dash-approval="' + it.kind + ':' + it.id + '" style="flex-shrink:0">Open</button></li>'
+      (it.kind === 'bill' && it.canAct
+        ? '<button type="button" class="button text" data-dash-approve-bill="' + it.id + '">Approve</button>'
+        : '<button type="button" class="button text" data-dash-approval="' + it.kind + ':' + it.id + '">Open</button>') +
+      '</li>'
     ).join('') +
     (items.length > 5 ? '<li class="section-sub" style="padding-top:6px">+' + (items.length - 5) + ' more</li>' : '') +
     '</ul>';
-  document.getElementById('dashApprovalsOpen')?.addEventListener('click', () => {
-    const first = items[0];
-    if (first && first.go) first.go();
-    else switchTo('books');
+  document.getElementById('dashApprovalsOpen')?.addEventListener('click', () => openApprovalsInbox());
+  el.querySelectorAll('[data-dash-approve-bill]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      approveExpenseBill(btn.getAttribute('data-dash-approve-bill'));
+      renderDashboardApprovals();
+    });
   });
   el.querySelectorAll('[data-dash-approval]').forEach(btn => {
     btn.addEventListener('click', () => {
       const key = btn.getAttribute('data-dash-approval') || '';
       const it = items.find(x => (x.kind + ':' + x.id) === key);
       if (it && it.go) it.go();
+      else openApprovalsInbox();
     });
   });
 }
@@ -15834,6 +16019,7 @@ function profile() {
     e.value = val;
   });
   try { syncExpenseApprovalRolesVisibility(); } catch (_) {}
+  try { renderExpenseMatrixEditor(); } catch (_) {}
   $('#logoPreview').src = db.profile.logo ||
     'data:image/svg+xml,' + encodeURIComponent(
       '<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="100%" height="100%" fill="#E8F0FE"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#2467E3" font-size="16" font-family="system-ui" font-weight="700">ID</text></svg>'
@@ -17805,63 +17991,76 @@ function renderBooksAuditTrail() {
 
 /** Accrue supplier bill: Dr Expense (+ input tax) / Cr AP */
 function reviewExpenseBill(billId) {
-  ensureBooksDb();
-  if (!canReviewExpense()) { toast('Your role cannot review expenses'); return; }
-  const bill = (db.bills || []).find(b => b.id === billId);
-  if (!bill || bill.status !== 'pending_review') { toast('Not waiting for review'); return; }
-  if (expenseBlockSelfApprove() && isSelfExpenseRequest(bill)) {
-    toast('You cannot review your own expense request');
-    return;
-  }
-  const actor = expenseActorMeta();
-  bill.status = 'pending_approval';
-  bill.reviewed_by = actor.userId;
-  bill.reviewed_by_email = actor.email;
-  bill.reviewed_at = actor.at;
-  try {
-    appendBooksAudit('bill.reviewed', 'bill', bill.id,
-      'Reviewed · ' + (bill.supplier || 'Supplier') + ' · ' + (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount),
-      null, { status: bill.status }, { status: bill.status });
-  } catch (_) {}
-  save();
-  try { queueBooksCloudSync(); } catch (_) {}
-  toast('Reviewed — waiting for final approval');
-  try { refreshApprovalsUI(); } catch (_) {}
-  try { renderBooksPayables(); } catch (_) { booksView(); }
+  // Odoo matrix: "review" advances current level without posting (same as intermediate approve)
+  advanceExpenseBillLevel(billId, { postIfFinal: false });
 }
 
-function approveExpenseBill(billId) {
+function advanceExpenseBillLevel(billId, opts) {
+  opts = opts || {};
   ensureBooksDb();
-  if (!canApproveExpense()) { toast('Your role cannot approve expenses'); return; }
   const bill = (db.bills || []).find(b => b.id === billId);
   if (!bill || (bill.status !== 'pending_approval' && bill.status !== 'pending_review')) {
     toast('Not waiting for approval');
     return;
   }
+  if (!bill.approval_chain || !bill.approval_chain.length) {
+    attachExpenseApprovalChain(bill, bill.amount);
+  }
   if (expenseBlockSelfApprove() && isSelfExpenseRequest(bill)) {
-    toast('You cannot approve your own expense — another approver must post it');
+    toast('You cannot approve your own expense — another approver must act');
     return;
   }
-  if (bill.status === 'pending_review' && expenseReviewRequired() && !canReviewExpense()) {
-    toast('Needs review first');
+  if (!canActOnExpenseLevel(bill)) {
+    toast('Your role cannot approve this level');
     return;
   }
-  if (expenseRequireReceipt() && expenseNeedsApproval(bill.amount) && !expenseHasReceipt(bill)) {
-    toast('Receipt required before posting — ask requester to re-submit with attachment');
+  if (expenseRequireReceipt() && !expenseHasReceipt(bill)) {
+    toast('Receipt required before approval');
     return;
   }
-  // Accountant picks ledger if requester left it blank
+  const actor = expenseActorMeta();
+  const idx = Math.max(0, Number(bill.approval_level_index) || 0);
+  const chain = bill.approval_chain;
+  const cur = chain[idx];
+  if (cur) {
+    cur.status = 'approved';
+    cur.at = actor.at;
+    cur.by = actor.userId;
+    cur.by_email = actor.email;
+  }
+  const isLast = idx >= chain.length - 1;
+  if (!isLast) {
+    bill.approval_level_index = idx + 1;
+    bill.approval_level = chain[idx + 1].level;
+    bill.status = 'pending_approval';
+    try {
+      appendBooksAudit('bill.level_approved', 'bill', bill.id,
+        'Level ' + (cur && cur.label ? cur.label : (idx + 1)) + ' OK · ' + (bill.supplier || 'Supplier') +
+          ' · next: ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)),
+        null, { level: idx + 1 }, { status: bill.status });
+    } catch (_) {}
+    save();
+    try { queueBooksCloudSync(); } catch (_) {}
+    toast('Level approved — next: ' + (chain[idx + 1].label || 'final approval'));
+    try { refreshApprovalsUI(); } catch (_) {}
+    try { renderBooksPayables(); renderApprovalsInbox(); } catch (_) { booksView(); }
+    return;
+  }
+  // Final level → post ledger (Odoo: last stage unlocks document)
+  if (opts.postIfFinal === false) {
+    toast('Final level — use Approve & post to hit the ledger');
+    return;
+  }
   if (!bill.category || bill.category === 'other_out' || bill.category === '') {
     const coa = (typeof getCoa === 'function' ? getCoa() : []).filter(a => a.type === 'expense');
     const hint = coa.slice(0, 8).map(a => a.id + ' ' + a.name).join('\n');
     const picked = (prompt(
-      'Accountant: which expense ledger code should this hit?\n\nExamples:\n' + (hint || '5700 Operating expense') + '\n\nEnter account code:',
+      'Final approval — which expense ledger?\n\n' + (hint || '5700 Operating expense') + '\n\nAccount code:',
       bill.category || '5700'
     ) || '').trim();
     if (!picked) { toast('Ledger required to post'); return; }
     bill.category = picked;
   }
-  const actor = expenseActorMeta();
   try {
     accrueSupplierBill(bill);
   } catch (err) {
@@ -17876,7 +18075,8 @@ function approveExpenseBill(billId) {
   bill.posted_at = actor.at;
   try {
     appendBooksAudit('bill.approved', 'bill', bill.id,
-      'Accountant posted · ' + (bill.supplier || 'Supplier') + ' · ' + (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
+      'Final approval · posted · ' + (bill.supplier || 'Supplier') + ' · ' +
+        (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
         ' · ledger ' + (bill.category || ''),
       null, { status: bill.status, category: bill.category }, { status: bill.status });
   } catch (_) {}
@@ -17884,7 +18084,11 @@ function approveExpenseBill(billId) {
   try { queueBooksCloudSync(); } catch (_) {}
   toast('Posted to books · AP open');
   try { refreshApprovalsUI(); } catch (_) {}
-  try { renderBooksPayables(); } catch (_) { booksView(); }
+  try { renderBooksPayables(); renderApprovalsInbox(); } catch (_) { booksView(); }
+}
+
+function approveExpenseBill(billId) {
+  advanceExpenseBillLevel(billId, { postIfFinal: true });
 }
 
 function rejectExpenseBill(billId) {
@@ -18217,22 +18421,25 @@ function renderBooksPayables() {
       try { overdue = due && new Date(due + 'T12:00:00') < new Date(); } catch (_) {}
       const cat = (typeof booksCategoryLabel === 'function') ? booksCategoryLabel('out', b.category) : (b.category || '');
       const st = b.status || 'open';
-      const statusLabel = st === 'pending_review' ? 'Needs review'
-        : st === 'pending_approval' ? 'Needs approval'
+      if ((st === 'pending_approval' || st === 'pending_review') && (!b.approval_chain || !b.approval_chain.length)) {
+        try { attachExpenseApprovalChain(b, b.amount); } catch (_) {}
+      }
+      const chain = b.approval_chain || [];
+      const lvlIdx = Math.max(0, Number(b.approval_level_index) || 0);
+      const curLvl = chain[lvlIdx];
+      const isLastLvl = chain.length ? lvlIdx >= chain.length - 1 : true;
+      const statusLabel = st === 'pending_review' || st === 'pending_approval'
+        ? (curLvl ? (curLvl.label || ('Level ' + curLvl.level)) : 'Needs approval')
         : st === 'rejected' ? 'Rejected'
         : st === 'open' ? 'Open' : st;
-      const statusStyle = st === 'pending_review' ? 'background:#e0e7ff;color:#3730a3'
-        : st === 'pending_approval' ? 'background:#fef3c7;color:#92400e'
+      const statusStyle = st === 'pending_review' || st === 'pending_approval' ? 'background:#fef3c7;color:#92400e'
         : st === 'rejected' ? 'background:#fee2e2;color:#991b1b'
         : 'background:var(--panel-2);color:var(--muted)';
-      const canRev = typeof canReviewExpense === 'function' && canReviewExpense();
-      const canAppr = typeof canApproveExpense === 'function' && canApproveExpense();
+      const canActLvl = typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(b);
       let actions = '';
-      if (st === 'pending_review' && canRev) {
-        actions += '<button type="button" class="button small primary" data-review-bill="' + b.id + '">Review OK</button>';
-        actions += '<button type="button" class="button small danger" data-reject-bill="' + b.id + '">Reject</button>';
-      } else if (st === 'pending_approval' && canAppr) {
-        actions += '<button type="button" class="button small primary" data-approve-bill="' + b.id + '">Approve &amp; post</button>';
+      if ((st === 'pending_review' || st === 'pending_approval') && canActLvl) {
+        actions += '<button type="button" class="button small primary" data-approve-bill="' + b.id + '">' +
+          (isLastLvl ? 'Approve &amp; post' : 'Approve level') + '</button>';
         actions += '<button type="button" class="button small danger" data-reject-bill="' + b.id + '">Reject</button>';
       } else if (st === 'open' || st === 'approved') {
         actions += '<select data-pay-from="' + b.id + '" style="font-size:12px;max-width:180px" title="Pay from">' + bankOpts + '</select>';
@@ -23704,6 +23911,9 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
     requested_by_email: actor.email || null,
     requested_at: actor.at || new Date().toISOString()
   };
+  if (status === 'pending_approval' || status === 'pending_review') {
+    try { attachExpenseApprovalChain(bill, amount); } catch (_) {}
+  }
   db.bills = db.bills || [];
   db.bills.push(bill);
   if (status === 'open') {
@@ -24633,12 +24843,28 @@ document.addEventListener('input', (e) => {
   }
 });
 
+document.getElementById('expenseMatrixAddLevel')?.addEventListener('click', () => {
+  if (!db.profile) db.profile = {};
+  const levels = readExpenseMatrixFromEditor();
+  const next = (levels.reduce((m, l) => Math.max(m, l.level), 0) || 0) + 1;
+  levels.push({
+    level: next,
+    min_amount: levels.length ? (Number(levels[levels.length - 1].min_amount) || 0) * 2 || 100000 : 0,
+    role: next > 1 ? 'owner' : 'manager',
+    label: next > 1 ? 'Owner / accountant posts' : 'Manager review'
+  });
+  db.profile.expenseMatrixLevels = levels;
+  renderExpenseMatrixEditor();
+  try { saveExpenseMatrixFromEditor(); save(); } catch (_) {}
+});
+
 document.getElementById('saveProfile')?.addEventListener('click', async () => {
   // Flush every data-p field from the form into db.profile
   document.querySelectorAll('[data-p]').forEach(el => {
     try { saveProfileField(el); } catch {}
   });
   try { persistApprovalSettingsFromForm(); } catch (_) {}
+  try { saveExpenseMatrixFromEditor(); } catch (_) {}
   const taxReg = document.getElementById('taxRegistered');
   if (taxReg && db?.profile) {
     db.profile.taxRegistered = taxReg.value === 'true' || taxReg.value === true;
@@ -24649,7 +24875,7 @@ document.getElementById('saveProfile')?.addEventListener('click', async () => {
     if (db.profile.requireTransferApproval) bits.push('transfers');
     if (db.profile.requirePurchaseApproval) bits.push('POs');
     if (db.profile.requireExpenseApproval) bits.push('expenses');
-    if (bits.length) console.info('Approvals enabled:', bits.join(', '), db.profile);
+    if (bits.length) console.info('Approvals enabled:', bits.join(', '), db.profile.expenseMatrixLevels);
   } catch (_) {}
   const btn = document.getElementById('saveProfile');
   const prev = btn ? btn.textContent : '';
