@@ -2932,6 +2932,7 @@ input:focus:not(:focus-visible) {
           <p class="dash-sub" id="dashSub">Create invoices, track payments, stay on top of what’s due.</p>
         </div>
         <div class="dash-hero-actions">
+          <button class="button" type="button" id="dashRequestExpenseBtn" data-role-gate="expenses.request">+ Expense request</button>
           <button class="button" type="button" onclick="switchTo('clients')">Clients</button>
         </div>
       </div>
@@ -3449,8 +3450,8 @@ input:focus:not(:focus-visible) {
             <div id="booksCreateMenu" class="books-create-menu" hidden style="position:absolute;right:0;top:calc(100% + 6px);z-index:40;min-width:220px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-lg);padding:8px">
               <button type="button" class="button small" data-create="invoice" style="justify-content:flex-start;border:0;background:transparent">Invoice</button>
               <button type="button" class="button small" data-create="payment" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Receive payment</button>
-              <button type="button" class="button small" data-create="expense" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Expense</button>
-              <button type="button" class="button small" data-create="bill" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Supplier bill</button>
+              <button type="button" class="button small" data-create="expense" data-role-gate="expenses.request" style="justify-content:flex-start;border:0;background:transparent">Expense request</button>
+              <button type="button" class="button small" data-create="bill" data-role-gate="expenses.request" style="justify-content:flex-start;border:0;background:transparent">Supplier bill / request</button>
               <button type="button" class="button small" data-create="journal" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Journal entry</button>
               <button type="button" class="button small" data-create="recurring-journal" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Recurring journal</button>
               <button type="button" class="button small" data-create="journal-csv" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Bulk journals (CSV)</button>
@@ -8515,6 +8516,14 @@ function dashboard() {
 
   try { renderCollectionsPanel(); } catch (e) { console.warn('collections', e.message || e); }
   try { renderDashboardApprovals(); } catch (e) { console.warn('approvals strip', e); }
+  try {
+    const reqBtn = document.getElementById('dashRequestExpenseBtn');
+    if (reqBtn) {
+      const ok = typeof canRequestExpense === 'function' ? canRequestExpense() : true;
+      reqBtn.style.display = ok ? '' : 'none';
+      reqBtn.onclick = () => { try { openBillModal(); } catch (err) { toast(err.message || 'Could not open request'); } };
+    }
+  } catch (_) {}
 
   if (!all.length) {
     $('#insightText').innerHTML = `<b style="color:var(--text)">Welcome to invoicedey</b><br>
@@ -9754,11 +9763,11 @@ const ROLE_PERMISSIONS = {
     'expenses.request', 'expenses.review', 'expenses.approve',
     'pos.sell', 'invoices.write', 'locations.manage'
   ],
+  // SoD: members submit requisitions only — no Books / ledger access
   member: [
-    'books.view', 'books.write',
     'transfers.create', // submit; approve gated separately
     'purchases.create',
-    'expenses.request', // submit only — review/approve gated by settings
+    'expenses.request', // submit + track status — never posts journals
     'pos.sell', 'invoices.write'
   ]
 };
@@ -10134,6 +10143,39 @@ function expenseHasReceipt(entity) {
   const docs = entity && (entity.documents || entity.docs);
   return Array.isArray(docs) && docs.length > 0;
 }
+
+/** HTML progress chips for matrix levels (requester + approver visibility). */
+function expenseChainProgressHtml(entity) {
+  if (!entity) return '';
+  let chain = entity.approval_chain;
+  if ((!chain || !chain.length) && (entity.status === 'pending_approval' || entity.status === 'pending_review')) {
+    try { attachExpenseApprovalChain(entity, entity.amount); chain = entity.approval_chain; } catch (_) {}
+  }
+  if (!chain || !chain.length) {
+    if (entity.status === 'open' || entity.status === 'posted') {
+      return '<div style="font-size:11px;color:#166534;margin-top:4px">✓ Posted to books</div>';
+    }
+    if (entity.status === 'rejected') {
+      return '<div style="font-size:11px;color:#991b1b;margin-top:4px">✗ Rejected' +
+        (entity.rejection_note ? (' · ' + String(entity.rejection_note).slice(0, 60).replace(/</g, '')) : '') + '</div>';
+    }
+    return '';
+  }
+  const idx = Math.max(0, Number(entity.approval_level_index) || 0);
+  const done = entity.status === 'open' || entity.status === 'posted';
+  const rejected = entity.status === 'rejected';
+  const chips = chain.map((l, i) => {
+    let bg = '#f1f5f9'; let color = '#64748b'; let mark = '○';
+    if (rejected && i === idx) { bg = '#fee2e2'; color = '#991b1b'; mark = '✗'; }
+    else if (done || l.status === 'approved' || i < idx) { bg = '#dcfce7'; color = '#166534'; mark = '✓'; }
+    else if (i === idx && !done && !rejected) { bg = '#fef3c7'; color = '#92400e'; mark = '●'; }
+    return '<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:' +
+      bg + ';color:' + color + ';margin:2px 4px 2px 0">' + mark + ' ' +
+      String(l.label || ('L' + l.level)).replace(/</g, '') + '</span>';
+  }).join('');
+  return '<div style="margin-top:6px;line-height:1.6">' + chips + '</div>';
+}
+
 /** Unified pending items for Home + Books attention */
 function listPendingApprovalItems() {
   const items = [];
@@ -10143,6 +10185,7 @@ function listPendingApprovalItems() {
         items.push({
           kind: 'transfer',
           id: t.id,
+          isMine: isSelfExpenseRequest(t),
           label: (t.transfer_number || 'Transfer') + ' · waiting for manager',
           go: () => { try { _invTab = 'move'; switchTo('inventory'); } catch (_) { switchTo('inventory'); } }
         });
@@ -10155,6 +10198,7 @@ function listPendingApprovalItems() {
         items.push({
           kind: 'purchase',
           id: p.id,
+          isMine: isSelfExpenseRequest(p),
           label: (p.purchase_number || 'PO') + ' · waiting for approval',
           go: () => { try { _invTab = 'buy'; switchTo('inventory'); } catch (_) { switchTo('inventory'); } }
         });
@@ -10164,10 +10208,14 @@ function listPendingApprovalItems() {
   try {
     (db.bills || []).forEach(b => {
       if (b.status === 'pending_review' || b.status === 'pending_approval') {
+        if (!b.approval_chain || !b.approval_chain.length) {
+          try { attachExpenseApprovalChain(b, b.amount); } catch (_) {}
+        }
         const chain = b.approval_chain || [];
         const idx = Math.max(0, Number(b.approval_level_index) || 0);
         const cur = chain[idx];
         const levelLabel = cur ? (cur.label || ('Level ' + cur.level)) : 'Approval';
+        const mine = isSelfExpenseRequest(b);
         items.push({
           kind: 'bill',
           id: b.id,
@@ -10175,10 +10223,11 @@ function listPendingApprovalItems() {
           amount: b.amount,
           currency: b.currency,
           levelLabel,
-          label: (b.supplier || 'Expense') + ' · ' +
+          isMine: mine,
+          label: (mine ? 'My request · ' : '') + (b.supplier || 'Expense') + ' · ' +
             (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) +
             ' · ' + levelLabel,
-          canAct: canActOnExpenseLevel(b),
+          canAct: !mine && (typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(b)),
           go: () => openApprovalsInbox()
         });
       }
@@ -10194,6 +10243,7 @@ function listPendingApprovalItems() {
         const idx = Math.max(0, Number(c.approval_level_index) || 0);
         const cur = chain[idx];
         const levelLabel = cur ? (cur.label || ('Level ' + cur.level)) : 'Approval';
+        const mine = isSelfExpenseRequest(c);
         items.push({
           kind: 'cash',
           id: c.id,
@@ -10201,10 +10251,11 @@ function listPendingApprovalItems() {
           amount: c.amount,
           currency: c.currency,
           levelLabel,
-          label: (c.note || 'Cash expense') + ' · ' +
+          isMine: mine,
+          label: (mine ? 'My request · ' : '') + (c.note || 'Cash expense') + ' · ' +
             (typeof money === 'function' ? money(c.amount, c.currency) : c.amount) +
             ' · ' + levelLabel,
-          canAct: typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(c),
+          canAct: !mine && (typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(c)),
           go: () => openApprovalsInbox()
         });
       }
@@ -10213,18 +10264,49 @@ function listPendingApprovalItems() {
   return items;
 }
 
+/** Requester history: own pending + recently decided expenses */
+function listMyExpenseRequests() {
+  const mine = [];
+  const push = (kind, e, title) => {
+    if (!isSelfExpenseRequest(e)) return;
+    mine.push({
+      kind,
+      id: e.id,
+      status: e.status,
+      title,
+      amount: e.amount,
+      currency: e.currency,
+      entity: e,
+      at: e.approved_at || e.rejected_at || e.requested_at || e.date || ''
+    });
+  };
+  try {
+    (db.bills || []).forEach(b => {
+      push('bill', b, b.supplier || 'Expense bill');
+    });
+  } catch (_) {}
+  try {
+    (db.cashEntries || []).forEach(c => {
+      if (c.type !== 'out') return;
+      push('cash', c, c.note || 'Cash expense');
+    });
+  } catch (_) {}
+  return mine.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 12);
+}
+
 function openApprovalsInbox() {
   let m = document.getElementById('approvalsInboxModal');
   if (!m) {
     m = document.createElement('div');
     m.className = 'modalback';
     m.id = 'approvalsInboxModal';
-    m.innerHTML = '<div class="modal" style="max-width:560px">' +
+    m.innerHTML = '<div class="modal" style="max-width:620px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
       '<h2 style="margin:0">Approvals inbox</h2>' +
       '<button type="button" class="button small" id="approvalsInboxClose">Close</button></div>' +
-      '<p class="section-sub">Odoo-style queue — transfers, POs, and expenses waiting on the current matrix level.</p>' +
-      '<div id="approvalsInboxList"></div></div>';
+      '<p class="section-sub">Queue for approvers · requesters can track their own requests below.</p>' +
+      '<div id="approvalsInboxList"></div>' +
+      '<div id="approvalsMyRequests" style="margin-top:16px"></div></div>';
     document.body.appendChild(m);
     m.addEventListener('click', (e) => { if (e.target === m) { m.classList.remove('show'); m.style.display = ''; } });
     document.getElementById('approvalsInboxClose')?.addEventListener('click', () => {
@@ -10240,45 +10322,103 @@ function renderApprovalsInbox() {
   const el = document.getElementById('approvalsInboxList');
   if (!el) return;
   const items = listPendingApprovalItems();
+  const actionItems = items.filter(i => i.canAct);
+  const waitingItems = items.filter(i => !i.canAct);
+
+  let html = '';
   if (!items.length) {
-    el.innerHTML = '<div class="empty" style="padding:16px"><h3>Queue clear</h3><p>No pending approvals.</p></div>';
-    return;
-  }
-  el.innerHTML = items.map(it => {
-    let actions = '';
-    if (it.kind === 'bill' && it.canAct) {
-      const entity = (db.bills || []).find(b => b.id === it.id);
-      const idx = entity ? Math.max(0, Number(entity.approval_level_index) || 0) : 0;
-      const chain = (entity && entity.approval_chain) || [];
-      const isLast = chain.length ? idx >= chain.length - 1 : true;
-      actions =
-        '<button type="button" class="button small primary" data-inbox-approve-bill="' + it.id + '">' +
-        (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>' +
-        '<button type="button" class="button small danger" data-inbox-reject-bill="' + it.id + '">Reject</button>';
-    } else if (it.kind === 'cash' && it.canAct) {
-      const entity = (db.cashEntries || []).find(c => c.id === it.id);
-      const idx = entity ? Math.max(0, Number(entity.approval_level_index) || 0) : 0;
-      const chain = (entity && entity.approval_chain) || [];
-      const isLast = chain.length ? idx >= chain.length - 1 : true;
-      actions =
-        '<button type="button" class="button small primary" data-inbox-approve-cash="' + it.id + '">' +
-        (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>' +
-        '<button type="button" class="button small danger" data-inbox-reject-cash="' + it.id + '">Reject</button>';
-    } else if (it.kind === 'cash' || it.kind === 'bill') {
-      actions = '<span class="section-sub">Waiting on ' + String(it.levelLabel || 'approver').replace(/</g, '') + '</span>';
-    } else if (it.kind === 'transfer') {
-      actions = '<button type="button" class="button small" data-inbox-go-transfer="' + it.id + '">Open transfer</button>';
-    } else if (it.kind === 'purchase') {
-      actions = '<button type="button" class="button small" data-inbox-go-po="' + it.id + '">Open PO</button>';
-    } else {
-      actions = '<button type="button" class="button small" data-inbox-go-books>Open Money out</button>';
+    html = '<div class="empty" style="padding:12px 0"><h3 style="margin:0 0 4px;font-size:15px">Nothing waiting on you</h3>' +
+      '<p class="section-sub" style="margin:0">No pending approvals for your role right now.</p></div>';
+  } else {
+    if (actionItems.length) {
+      html += '<div style="font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#92400e;margin-bottom:6px">Needs your action · ' +
+        actionItems.length + '</div>';
+      html += actionItems.map(it => inboxItemHtml(it)).join('');
     }
-    return '<div style="padding:12px 0;border-bottom:1px solid var(--line)">' +
-      '<div style="font-weight:700;font-size:13px">' + String(it.label).replace(/</g, '') + '</div>' +
-      '<div class="section-sub" style="margin:4px 0 8px">' + String(it.kind).toUpperCase() +
-      (it.levelLabel ? ' · ' + String(it.levelLabel).replace(/</g, '') : '') + '</div>' +
-      '<div style="display:flex;flex-wrap:wrap;gap:6px">' + actions + '</div></div>';
-  }).join('');
+    if (waitingItems.length) {
+      html += '<div style="font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px">In progress · ' +
+        waitingItems.length + '</div>';
+      html += waitingItems.map(it => inboxItemHtml(it)).join('');
+    }
+  }
+  el.innerHTML = html;
+  bindApprovalsInboxActions(el);
+
+  // Requester visibility block
+  const mineEl = document.getElementById('approvalsMyRequests');
+  if (mineEl) {
+    const mine = listMyExpenseRequests();
+    if (!mine.length) {
+      mineEl.innerHTML = '';
+    } else {
+      mineEl.innerHTML =
+        '<div style="border-top:1px solid var(--line);padding-top:14px">' +
+        '<div style="font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">My requests</div>' +
+        '<p class="section-sub" style="margin:0 0 8px">Track where each of your submissions sits in the matrix.</p>' +
+        mine.map(r => {
+          const st = r.status || '';
+          const badge = st === 'pending_approval' || st === 'pending_review'
+            ? '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:#fef3c7;color:#92400e">Pending</span>'
+            : st === 'rejected'
+            ? '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:#fee2e2;color:#991b1b">Rejected</span>'
+            : st === 'open' || st === 'posted'
+            ? '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:#dcfce7;color:#166534">Posted</span>'
+            : '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--panel-2)">' + String(st).replace(/</g, '') + '</span>';
+          return '<div style="padding:10px 0;border-bottom:1px solid var(--line)">' +
+            '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">' +
+            '<div><div style="font-weight:700;font-size:13px">' + String(r.title).replace(/</g, '') + '</div>' +
+            '<div class="section-sub">' + String(r.kind).toUpperCase() + ' · ' +
+            (typeof money === 'function' ? money(r.amount, r.currency) : r.amount) + '</div></div>' + badge + '</div>' +
+            expenseChainProgressHtml(r.entity) + '</div>';
+        }).join('') + '</div>';
+    }
+  }
+}
+
+function inboxItemHtml(it) {
+  let actions = '';
+  if (it.kind === 'bill' && it.canAct) {
+    const entity = (db.bills || []).find(b => b.id === it.id);
+    const idx = entity ? Math.max(0, Number(entity.approval_level_index) || 0) : 0;
+    const chain = (entity && entity.approval_chain) || [];
+    const isLast = chain.length ? idx >= chain.length - 1 : true;
+    actions =
+      '<button type="button" class="button small primary" data-inbox-approve-bill="' + it.id + '">' +
+      (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>' +
+      '<button type="button" class="button small danger" data-inbox-reject-bill="' + it.id + '">Reject</button>';
+  } else if (it.kind === 'cash' && it.canAct) {
+    const entity = (db.cashEntries || []).find(c => c.id === it.id);
+    const idx = entity ? Math.max(0, Number(entity.approval_level_index) || 0) : 0;
+    const chain = (entity && entity.approval_chain) || [];
+    const isLast = chain.length ? idx >= chain.length - 1 : true;
+    actions =
+      '<button type="button" class="button small primary" data-inbox-approve-cash="' + it.id + '">' +
+      (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>' +
+      '<button type="button" class="button small danger" data-inbox-reject-cash="' + it.id + '">Reject</button>';
+  } else if (it.kind === 'cash' || it.kind === 'bill') {
+    actions = it.isMine
+      ? '<span class="section-sub">You submitted this · waiting on <b>' + String(it.levelLabel || 'approver').replace(/</g, '') + '</b></span>'
+      : '<span class="section-sub">Waiting on ' + String(it.levelLabel || 'approver').replace(/</g, '') + '</span>';
+  } else if (it.kind === 'transfer') {
+    actions = '<button type="button" class="button small" data-inbox-go-transfer="' + it.id + '">Open transfer</button>';
+  } else if (it.kind === 'purchase') {
+    actions = '<button type="button" class="button small" data-inbox-go-po="' + it.id + '">Open PO</button>';
+  } else {
+    actions = '<button type="button" class="button small" data-inbox-go-books>Open Money out</button>';
+  }
+  const entity = it.kind === 'bill'
+    ? (db.bills || []).find(b => b.id === it.id)
+    : it.kind === 'cash' ? (db.cashEntries || []).find(c => c.id === it.id) : null;
+  return '<div style="padding:12px 0;border-bottom:1px solid var(--line)">' +
+    '<div style="font-weight:700;font-size:13px">' + String(it.label).replace(/</g, '') + '</div>' +
+    '<div class="section-sub" style="margin:4px 0 0">' + String(it.kind).toUpperCase() +
+    (it.isMine ? ' · submitted by you' : '') + '</div>' +
+    (entity ? expenseChainProgressHtml(entity) : '') +
+    '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">' + actions + '</div></div>';
+}
+
+function bindApprovalsInboxActions(el) {
+  if (!el) return;
   el.querySelectorAll('[data-inbox-approve-bill]').forEach(btn => {
     btn.addEventListener('click', () => {
       approveExpenseBill(btn.getAttribute('data-inbox-approve-bill'));
@@ -10330,7 +10470,12 @@ function renderDashboardApprovals() {
   const el = document.getElementById('dashboardApprovals');
   if (!el) return;
   const items = listPendingApprovalItems();
-  if (!items.length) {
+  const myPending = items.filter(i => i.isMine);
+  const myRecent = listMyExpenseRequests().filter(r =>
+    r.status === 'open' || r.status === 'posted' || r.status === 'rejected'
+  ).slice(0, 3);
+
+  if (!items.length && !myRecent.length) {
     el.style.display = 'none';
     el.innerHTML = '';
     return;
@@ -10338,29 +10483,52 @@ function renderDashboardApprovals() {
   const canAct = items.some(i => i.canAct) ||
     (typeof canApproveApprovals === 'function' && canApproveApprovals());
   el.style.display = '';
-  el.innerHTML =
+
+  let body =
     '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:flex-start">' +
-    '<div><div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#92400e">Approvals inbox</div>' +
-    '<div style="font-weight:700;margin-top:4px">' + items.length + ' item' + (items.length === 1 ? '' : 's') + ' pending</div>' +
+    '<div><div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#92400e">Approvals</div>' +
+    '<div style="font-weight:700;margin-top:4px">' +
+    (items.length
+      ? (items.length + ' pending' + (myPending.length ? (' · ' + myPending.length + ' of yours') : ''))
+      : 'Your recent requests') +
+    '</div>' +
     '<div class="section-sub" style="margin:4px 0 0">' +
     (canAct
-      ? 'Multi-level matrix — approve the current level or open the full inbox.'
-      : 'Submitted — waiting on the next role in the matrix.') +
+      ? 'Items waiting on your role — open inbox to approve.'
+      : myPending.length
+        ? 'You can track progress on each request you submitted.'
+        : 'Open inbox to see request status.') +
     '</div></div>' +
-    '<button type="button" class="button small primary" id="dashApprovalsOpen">Open inbox</button></div>' +
-    '<ul style="margin:10px 0 0;padding:0;list-style:none">' +
-    items.slice(0, 5).map(it =>
-      '<li style="padding:6px 0;border-top:1px solid rgba(146,64,14,.15);font-size:13px;display:flex;justify-content:space-between;gap:8px">' +
-      '<span>' + String(it.label).replace(/</g, '') + '</span>' +
-      (it.kind === 'bill' && it.canAct
-        ? '<button type="button" class="button text" data-dash-approve-bill="' + it.id + '">Approve</button>'
-        : (it.kind === 'cash' && it.canAct
-          ? '<button type="button" class="button text" data-dash-approve-cash="' + it.id + '">Approve</button>'
-          : '<button type="button" class="button text" data-dash-approval="' + it.kind + ':' + it.id + '">Open</button>')) +
-      '</li>'
-    ).join('') +
-    (items.length > 5 ? '<li class="section-sub" style="padding-top:6px">+' + (items.length - 5) + ' more</li>' : '') +
-    '</ul>';
+    '<button type="button" class="button small primary" id="dashApprovalsOpen">Open inbox</button></div>';
+
+  if (items.length) {
+    body += '<ul style="margin:10px 0 0;padding:0;list-style:none">' +
+      items.slice(0, 5).map(it =>
+        '<li style="padding:6px 0;border-top:1px solid rgba(146,64,14,.15);font-size:13px;display:flex;justify-content:space-between;gap:8px;align-items:center">' +
+        '<span>' + String(it.label).replace(/</g, '') +
+        (it.isMine ? ' <span style="font-size:10px;color:#92400e">(yours)</span>' : '') + '</span>' +
+        (it.canAct
+          ? (it.kind === 'bill'
+            ? '<button type="button" class="button text" data-dash-approve-bill="' + it.id + '">Approve</button>'
+            : it.kind === 'cash'
+            ? '<button type="button" class="button text" data-dash-approve-cash="' + it.id + '">Approve</button>'
+            : '<button type="button" class="button text" data-dash-approval="' + it.kind + ':' + it.id + '">Open</button>')
+          : '<button type="button" class="button text" data-dash-approval="' + it.kind + ':' + it.id + '">Status</button>') +
+        '</li>'
+      ).join('') +
+      (items.length > 5 ? '<li class="section-sub" style="padding-top:6px">+' + (items.length - 5) + ' more</li>' : '') +
+      '</ul>';
+  } else if (myRecent.length) {
+    body += '<ul style="margin:10px 0 0;padding:0;list-style:none">' +
+      myRecent.map(r =>
+        '<li style="padding:6px 0;border-top:1px solid rgba(146,64,14,.15);font-size:13px">' +
+        String(r.title).replace(/</g, '') + ' · ' +
+        (typeof money === 'function' ? money(r.amount, r.currency) : r.amount) +
+        ' · <b>' + (r.status === 'rejected' ? 'Rejected' : 'Posted') + '</b></li>'
+      ).join('') + '</ul>';
+  }
+
+  el.innerHTML = body;
   document.getElementById('dashApprovalsOpen')?.addEventListener('click', () => openApprovalsInbox());
   el.querySelectorAll('[data-dash-approve-bill]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -18450,6 +18618,10 @@ function paySupplierBill(billId, opts) {
 
 function openBillModal() {
   ensureBooksDb();
+  if (typeof canRequestExpense === 'function' && !canRequestExpense()) {
+    toast('Your role cannot submit expense requests');
+    return;
+  }
   try { wireDocsPreview('billDocs', 'billDocsList'); } catch (_) {}
   const m = document.getElementById('billModal');
   if (!m) {
@@ -18457,29 +18629,36 @@ function openBillModal() {
     return;
   }
   const needsQueue = typeof approvalsEnabledExpenses === 'function' && approvalsEnabledExpenses();
-  const isAccountant = typeof canApproveExpense === 'function' && canApproveExpense();
+  const isAccountant = (typeof canApproveExpense === 'function' && canApproveExpense())
+    || (typeof can === 'function' && can('books.write'));
+  const isRequesterOnly = needsQueue && !isAccountant;
   const title = document.getElementById('billModalTitle');
   const sub = document.getElementById('billModalSub');
   const saveBtn = document.getElementById('billSave');
   const catLabel = document.getElementById('billCategoryLabel');
   const catHint = document.getElementById('billCategoryHint');
-  if (title) title.textContent = needsQueue && !isAccountant ? 'Expense request' : 'Supplier bill';
+  if (title) title.textContent = isRequesterOnly ? 'Expense request' : 'Supplier bill';
   if (sub) {
-    sub.textContent = needsQueue && !isAccountant
-      ? 'Fill in who, how much, and attach the receipt. Your accountant will pick the ledger and post the journal.'
+    sub.textContent = isRequesterOnly
+      ? 'Who · amount · receipt. No journal skills needed. Track progress on Home → Approvals → My requests.'
       : (needsQueue
-        ? 'You can post now, or leave the ledger for the approver. Pending requests sit in the accountant queue under Money out.'
+        ? 'You can post now, or leave the ledger for the next approver. Queue lives under Books → Money out.'
         : 'Accrue expense + accounts payable. Pay later to clear the liability.');
   }
   if (saveBtn) {
-    saveBtn.textContent = needsQueue && !isAccountant ? 'Submit to accountant' : (needsQueue ? 'Submit / post bill' : 'Accrue bill');
+    saveBtn.textContent = isRequesterOnly ? 'Submit request' : (needsQueue ? 'Submit / post bill' : 'Accrue bill');
   }
-  if (catLabel) catLabel.textContent = isAccountant ? 'Category / expense ledger' : 'Suggested category (optional)';
+  if (catLabel) catLabel.textContent = isAccountant ? 'Category / expense ledger' : 'Category (optional)';
   if (catHint) {
     catHint.textContent = isAccountant
       ? 'This account is debited when the bill is posted.'
-      : 'Optional — accountant confirms the ledger on approval. You do not need to know journal codes.';
+      : 'Leave blank if unsure — the accountant picks the ledger when they approve.';
   }
+  // Hide COA pickers from pure requesters (SoD)
+  try {
+    const catField = document.getElementById('billCategory')?.closest('.field') || document.getElementById('billCategory')?.parentElement;
+    if (catField) catField.style.display = isRequesterOnly ? 'none' : '';
+  } catch (_) {}
   const cat = document.getElementById('billCategory');
   if (cat) {
     const coa = typeof getCoa === 'function' ? getCoa() : [];
@@ -19593,6 +19772,10 @@ function booksView() {
 function openCashModal() {
   const m = document.getElementById('cashModal');
   if (!m) return;
+  if (typeof canRequestExpense === 'function' && !canRequestExpense() && !can('books.write')) {
+    toast('Your role cannot record cash expenses');
+    return;
+  }
   document.getElementById('cashType').value = 'out';
   try { fillCashLedgerSelects(); } catch (_) {}
   fillCashCategoryOptions('out');
@@ -19607,7 +19790,19 @@ function openCashModal() {
     if (docsList) docsList.innerHTML = '';
   } catch (_) {}
   try { wireDocsPreview('cashDocs', 'cashDocsList'); } catch (_) {}
+  // SoD: requesters without books.write don't see ledger account pickers
+  try {
+    const needsQueue = typeof approvalsEnabledExpenses === 'function' && approvalsEnabledExpenses();
+    const isAccountant = can('books.write') || (typeof canApproveExpense === 'function' && canApproveExpense());
+    const hideLedgers = needsQueue && !isAccountant;
+    ['cashBankAccount', 'cashOffsetAccount', 'cashCategory'].forEach(id => {
+      const el = document.getElementById(id);
+      const wrap = el && (el.closest('.field') || el.parentElement);
+      if (wrap) wrap.style.display = hideLedgers ? 'none' : '';
+    });
+  } catch (_) {}
   if (typeof showModal === 'function') showModal('cashModal');
+  else { m.classList.add('show'); m.style.display = 'grid'; }
   else m.classList.add('show');
   try { initSearchableSelects(m); } catch (_) {}
 }
@@ -24343,8 +24538,10 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
   save();
   try { queueBooksCloudSync(); } catch (_) {}
   closeBillModal();
-  if (status === 'pending_review') toast('Bill submitted for review — waiting in accountant queue');
-  else if (status === 'pending_approval') toast('Bill submitted for approval — waiting in accountant queue');
+  if (status === 'pending_review' || status === 'pending_approval') {
+    toast('Request submitted — track it on Home → Approvals → My requests');
+    try { refreshApprovalsUI(); renderDashboardApprovals(); } catch (_) {}
+  }
   else toast('Bill accrued · AP open · see Money out');
   try { refreshApprovalsUI(); } catch (_) {}
   try {
@@ -24485,13 +24682,17 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
   save();
   closeCashModal();
   if (needsAppr) {
-    toast(status === 'pending_review' ? 'Expense submitted for review' : 'Expense submitted for approval');
+    toast('Request submitted — track it on Home → Approvals → My requests');
+    try { refreshApprovalsUI(); renderDashboardApprovals(); } catch (_) {}
   } else {
     const sideLabel = type === 'out' ? 'Expense' : 'Income';
     toast(sideLabel + ' posted · ' + cashAcct + (type === 'out' ? ' credited' : ' debited') +
       (docs.length ? (' · ' + docs.length + ' file(s)') : ''));
   }
-  try { booksView(); } catch (_) {}
+  // Only accountants need Books refresh after post
+  if (!needsAppr || can('books.view')) {
+    try { booksView(); } catch (_) {}
+  }
   try { track('cash_entry_added', { type, category, cashAcct, offsetAcct, docs: docs.length, status }); } catch (_) {}
 });
 
