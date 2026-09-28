@@ -6533,6 +6533,7 @@ function loadUserLocalDb(userId) {
     loadDefaultDb();
   }
   normalizeDbProfile();
+  try { restoreApprovalSettingsMirror(); } catch (_) {}
 }
 
 function pruneBooksForStorage() {
@@ -6910,13 +6911,18 @@ function applyRoleGates() {
   const role = currentOrgRole();
 
   // --- Explicit controls ---
-  ['requireTransferApproval', 'requirePurchaseApproval'].forEach(id => {
+  [
+    'requireTransferApproval', 'requirePurchaseApproval', 'requireExpenseApproval',
+    'expenseRequesterRole', 'expenseReviewerRole', 'expenseApproverRole',
+    'expenseApprovalThreshold', 'expenseBlockSelfApprove', 'expenseRequireReceipt'
+  ].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     const allow = can('approvals.settings');
     el.disabled = !allow;
     el.title = allow ? '' : roleGateMessage('approvals.settings');
   });
+  try { syncExpenseApprovalRolesVisibility(); } catch (_) {}
 
   const inviteForm = document.getElementById('teamInviteForm');
   if (inviteForm) inviteForm.hidden = !can('team.manage');
@@ -9838,18 +9844,95 @@ async function refreshCloudMemberRole() {
 }
 
 /* ---------- Approvals (transfers + POs + expenses) ---------- */
+const APPROVAL_SETTING_KEYS = [
+  'requireTransferApproval', 'requirePurchaseApproval', 'requireExpenseApproval',
+  'expenseRequesterRole', 'expenseReviewerRole', 'expenseApproverRole',
+  'expenseApprovalThreshold', 'expenseBlockSelfApprove', 'expenseRequireReceipt'
+];
+
+function approvalSettingsStorageKey() {
+  const org = (typeof cloud !== 'undefined' && cloud.organizationId) || 'local';
+  const uid = (typeof activeUserId !== 'undefined' && activeUserId) || 'anon';
+  return 'invoicedey-approval-settings-' + org + '-' + uid;
+}
+
+/** Push approval flags into profile + durable localStorage mirror */
+function persistApprovalSettingsFromForm() {
+  if (!db.profile) db.profile = {};
+  APPROVAL_SETTING_KEYS.forEach(key => {
+    const el = document.querySelector('[data-p="' + key + '"]') || document.getElementById(key);
+    if (!el) return;
+    if (el.type === 'checkbox') db.profile[key] = !!el.checked;
+    else if (key === 'expenseApprovalThreshold') {
+      const n = Number(el.value);
+      db.profile[key] = Number.isFinite(n) && n > 0 ? n : 0;
+    } else {
+      db.profile[key] = el.value;
+    }
+  });
+  try {
+    const payload = {};
+    APPROVAL_SETTING_KEYS.forEach(k => { payload[k] = db.profile[k]; });
+    localStorage.setItem(approvalSettingsStorageKey(), JSON.stringify(payload));
+  } catch (_) {}
+  try { syncExpenseApprovalRolesVisibility(); } catch (_) {}
+}
+
+function restoreApprovalSettingsMirror() {
+  if (!db.profile) db.profile = {};
+  try {
+    const raw = localStorage.getItem(approvalSettingsStorageKey());
+    if (!raw) return;
+    const payload = JSON.parse(raw);
+    if (!payload || typeof payload !== 'object') return;
+    APPROVAL_SETTING_KEYS.forEach(k => {
+      // Only fill if profile missing the key (don't clobber explicit false)
+      if (db.profile[k] === undefined && payload[k] !== undefined) {
+        db.profile[k] = payload[k];
+      }
+    });
+  } catch (_) {}
+}
+
 function approvalsEnabledTransfers() {
+  restoreApprovalSettingsMirror();
   return !!(db.profile && db.profile.requireTransferApproval);
 }
 function approvalsEnabledPurchases() {
+  restoreApprovalSettingsMirror();
   return !!(db.profile && db.profile.requirePurchaseApproval);
 }
 function approvalsEnabledExpenses() {
+  restoreApprovalSettingsMirror();
   return !!(db.profile && db.profile.requireExpenseApproval);
 }
 function expenseApprovalThreshold() {
+  restoreApprovalSettingsMirror();
   const n = Number(db.profile && db.profile.expenseApprovalThreshold);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+function syncExpenseApprovalRolesVisibility() {
+  const box = document.getElementById('expenseApprovalRolesBox');
+  const on = !!(document.getElementById('requireExpenseApproval')?.checked
+    || (db.profile && db.profile.requireExpenseApproval));
+  if (box) box.style.display = on ? '' : 'none';
+}
+function refreshApprovalsUI() {
+  try { renderDashboardApprovals(); } catch (_) {}
+  try { updateInventoryNavBadge(); } catch (_) {}
+  try {
+    if (document.getElementById('view-books') && !document.getElementById('view-books')?.hidden) {
+      if (typeof renderBooksPayables === 'function') renderBooksPayables();
+      if (typeof renderBooksAttention === 'function') renderBooksAttention();
+    }
+  } catch (_) {}
+  try {
+    const booksViewEl = document.getElementById('books');
+    if (booksViewEl && booksViewEl.classList.contains('active')) {
+      if (typeof renderBooksPayables === 'function') renderBooksPayables();
+      if (typeof renderBooksAttention === 'function') renderBooksAttention();
+    }
+  } catch (_) {}
 }
 /** role rank: owner > manager > member */
 function roleRank(role) {
@@ -15735,18 +15818,22 @@ async function planView() {
 }
 
 function profile() {
+  try { restoreApprovalSettingsMirror(); } catch (_) {}
   document.querySelectorAll('[data-p]').forEach(e => {
     const key = e.dataset.p;
     let val = db.profile[key];
     if (e.type === 'checkbox') {
-      // low-stock alerts default ON
+      // Defaults ON when never set
       if (key === 'lowStockAlertsEnabled' && val === undefined) val = true;
+      if (key === 'expenseBlockSelfApprove' && val === undefined) val = true;
+      if (key === 'expenseRequireReceipt' && val === undefined) val = true;
       e.checked = !!val;
       return;
     }
     if (val === undefined || val === null) val = '';
     e.value = val;
   });
+  try { syncExpenseApprovalRolesVisibility(); } catch (_) {}
   $('#logoPreview').src = db.profile.logo ||
     'data:image/svg+xml,' + encodeURIComponent(
       '<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="100%" height="100%" fill="#E8F0FE"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#2467E3" font-size="16" font-family="system-ui" font-weight="700">ID</text></svg>'
@@ -17739,6 +17826,7 @@ function reviewExpenseBill(billId) {
   save();
   try { queueBooksCloudSync(); } catch (_) {}
   toast('Reviewed — waiting for final approval');
+  try { refreshApprovalsUI(); } catch (_) {}
   try { renderBooksPayables(); } catch (_) { booksView(); }
 }
 
@@ -17795,6 +17883,7 @@ function approveExpenseBill(billId) {
   save();
   try { queueBooksCloudSync(); } catch (_) {}
   toast('Posted to books · AP open');
+  try { refreshApprovalsUI(); } catch (_) {}
   try { renderBooksPayables(); } catch (_) { booksView(); }
 }
 
@@ -17820,6 +17909,7 @@ function rejectExpenseBill(billId) {
   save();
   try { queueBooksCloudSync(); } catch (_) {}
   toast('Expense rejected');
+  try { refreshApprovalsUI(); } catch (_) {}
   try { renderBooksPayables(); } catch (_) { booksView(); }
 }
 
@@ -23642,9 +23732,10 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
   save();
   try { queueBooksCloudSync(); } catch (_) {}
   closeBillModal();
-  if (status === 'pending_review') toast('Bill submitted for review');
-  else if (status === 'pending_approval') toast('Bill submitted for approval');
+  if (status === 'pending_review') toast('Bill submitted for review — waiting in accountant queue');
+  else if (status === 'pending_approval') toast('Bill submitted for approval — waiting in accountant queue');
   else toast('Bill accrued · AP open · see Money out');
+  try { refreshApprovalsUI(); } catch (_) {}
   try {
     booksPage = 'ap';
     booksTab = 'payables';
@@ -24465,15 +24556,29 @@ function saveProfileField(el) {
   if (!el || !el.dataset || !el.dataset.p || !db?.profile) return;
   const key = el.dataset.p;
   let val = el.type === 'checkbox' ? el.checked : el.value;
-  if (key === 'defaultTax' || key === 'nextInvoiceNumber') {
+  if (key === 'defaultTax' || key === 'nextInvoiceNumber' || key === 'expenseApprovalThreshold') {
     const n = Number(val);
-    val = Number.isFinite(n) ? n : (key === 'defaultTax' ? 0 : 1);
+    if (key === 'expenseApprovalThreshold') val = Number.isFinite(n) && n > 0 ? n : 0;
+    else val = Number.isFinite(n) ? n : (key === 'defaultTax' ? 0 : 1);
   }
   if (key === 'taxCountry' || key === 'reporting') {
     val = String(val || '').toUpperCase();
   }
   db.profile[key] = val;
+  try {
+    if (typeof APPROVAL_SETTING_KEYS !== 'undefined' && APPROVAL_SETTING_KEYS.includes(key)) {
+      persistApprovalSettingsFromForm();
+    }
+  } catch (_) {}
   save();
+  if (key === 'requireExpenseApproval') {
+    try { syncExpenseApprovalRolesVisibility(); } catch (_) {}
+    try {
+      toast(val
+        ? 'Expense approval ON — requests go to accountant queue'
+        : 'Expense approval OFF — bills post to ledger immediately');
+    } catch (_) {}
+  }
   if (key === 'reporting') {
     const label = document.getElementById('reportingLabel');
     if (label) label.textContent = 'Reported in ' + val;
@@ -24533,11 +24638,19 @@ document.getElementById('saveProfile')?.addEventListener('click', async () => {
   document.querySelectorAll('[data-p]').forEach(el => {
     try { saveProfileField(el); } catch {}
   });
+  try { persistApprovalSettingsFromForm(); } catch (_) {}
   const taxReg = document.getElementById('taxRegistered');
   if (taxReg && db?.profile) {
     db.profile.taxRegistered = taxReg.value === 'true' || taxReg.value === true;
   }
   save();
+  try {
+    const bits = [];
+    if (db.profile.requireTransferApproval) bits.push('transfers');
+    if (db.profile.requirePurchaseApproval) bits.push('POs');
+    if (db.profile.requireExpenseApproval) bits.push('expenses');
+    if (bits.length) console.info('Approvals enabled:', bits.join(', '), db.profile);
+  } catch (_) {}
   const btn = document.getElementById('saveProfile');
   const prev = btn ? btn.textContent : '';
   if (btn) {
