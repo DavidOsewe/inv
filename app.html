@@ -10247,14 +10247,24 @@ function renderApprovalsInbox() {
   el.innerHTML = items.map(it => {
     let actions = '';
     if (it.kind === 'bill' && it.canAct) {
+      const entity = (db.bills || []).find(b => b.id === it.id);
+      const idx = entity ? Math.max(0, Number(entity.approval_level_index) || 0) : 0;
+      const chain = (entity && entity.approval_chain) || [];
+      const isLast = chain.length ? idx >= chain.length - 1 : true;
       actions =
-        '<button type="button" class="button small primary" data-inbox-approve-bill="' + it.id + '">Approve level</button>' +
+        '<button type="button" class="button small primary" data-inbox-approve-bill="' + it.id + '">' +
+        (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>' +
         '<button type="button" class="button small danger" data-inbox-reject-bill="' + it.id + '">Reject</button>';
     } else if (it.kind === 'cash' && it.canAct) {
+      const entity = (db.cashEntries || []).find(c => c.id === it.id);
+      const idx = entity ? Math.max(0, Number(entity.approval_level_index) || 0) : 0;
+      const chain = (entity && entity.approval_chain) || [];
+      const isLast = chain.length ? idx >= chain.length - 1 : true;
       actions =
-        '<button type="button" class="button small primary" data-inbox-approve-cash="' + it.id + '">Approve level</button>' +
+        '<button type="button" class="button small primary" data-inbox-approve-cash="' + it.id + '">' +
+        (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>' +
         '<button type="button" class="button small danger" data-inbox-reject-cash="' + it.id + '">Reject</button>';
-    } else if (it.kind === 'cash') {
+    } else if (it.kind === 'cash' || it.kind === 'bill') {
       actions = '<span class="section-sub">Waiting on ' + String(it.levelLabel || 'approver').replace(/</g, '') + '</span>';
     } else if (it.kind === 'transfer') {
       actions = '<button type="button" class="button small" data-inbox-go-transfer="' + it.id + '">Open transfer</button>';
@@ -18057,8 +18067,12 @@ function advanceExpenseBillLevel(billId, opts) {
     attachExpenseApprovalChain(bill, bill.amount);
   }
   if (expenseBlockSelfApprove() && isSelfExpenseRequest(bill)) {
-    toast('You cannot approve your own expense — another approver must act');
-    return;
+    // Solo-owner orgs: allow explicit override so workflow is testable
+    const isOwner = currentOrgRole() === 'owner';
+    if (!isOwner || !confirm('This is your own request. Override self-approve block and continue?')) {
+      toast('You cannot approve your own expense — another approver must act');
+      return;
+    }
   }
   if (!canActOnExpenseLevel(bill)) {
     toast('Your role cannot approve this level');
@@ -18090,8 +18104,8 @@ function advanceExpenseBillLevel(billId, opts) {
         null, { level: idx + 1 }, { status: bill.status });
     } catch (_) {}
     save();
-    try { queueBooksCloudSync(); } catch (_) {}
-    toast('Level approved — next: ' + (chain[idx + 1].label || 'final approval'));
+    try { queueBooksCloudSync(); pushBooksApprovalsImmediate(); } catch (_) {}
+    toast('Level ' + (idx + 1) + ' approved → now waiting: ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)));
     try { refreshApprovalsUI(); } catch (_) {}
     try { renderBooksPayables(); renderApprovalsInbox(); } catch (_) { booksView(); }
     return;
@@ -18188,8 +18202,11 @@ function advanceExpenseCashLevel(cashId, opts) {
     attachExpenseApprovalChain(entry, entry.amount);
   }
   if (expenseBlockSelfApprove() && isSelfExpenseRequest(entry)) {
-    toast('You cannot approve your own expense — another approver must act');
-    return;
+    const isOwner = currentOrgRole() === 'owner';
+    if (!isOwner || !confirm('This is your own request. Override self-approve block and continue?')) {
+      toast('You cannot approve your own expense — another approver must act');
+      return;
+    }
   }
   if (!canActOnExpenseLevel(entry)) {
     toast('Your role cannot approve this level');
@@ -18221,8 +18238,8 @@ function advanceExpenseCashLevel(cashId, opts) {
         null, { level: idx + 1 }, { status: entry.status });
     } catch (_) {}
     save();
-    try { queueBooksCloudSync(); } catch (_) {}
-    toast('Level approved — next: ' + (chain[idx + 1].label || 'final approval'));
+    try { queueBooksCloudSync(); pushBooksApprovalsImmediate(); } catch (_) {}
+    toast('Level ' + (idx + 1) + ' approved → now waiting: ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)));
     try { refreshApprovalsUI(); } catch (_) {}
     try { renderApprovalsInbox(); renderBooksPayables(); } catch (_) {}
     return;
@@ -21199,6 +21216,16 @@ function queueBooksCloudSync() {
   }, 400);
 }
 
+/** Immediate push of pending bills + cash so other approvers see level advances. */
+async function pushBooksApprovalsImmediate() {
+  if (!cloud?.client || !cloud?.user) return;
+  try {
+    await pushBooksToCloud();
+  } catch (e) {
+    console.warn('approvals push', e.message || e);
+  }
+}
+
 /** Push a single journal now (POS / invoice) — avoids waiting for full books sync. */
 async function pushJournalToCloudImmediate(j) {
   if (!j || !cloud?.client || !cloud?.user) return false;
@@ -21285,7 +21312,7 @@ async function pushBooksToCloud() {
       j._booksPushedAt = new Date().toISOString();
     }
   }
-  // Bills
+  // Bills (include approval matrix so other members see the queue)
   for (const b of db.bills || []) {
     const payload = {
       organization_id: organizationId,
@@ -21300,14 +21327,79 @@ async function pushBooksToCloud() {
       note: b.note || null,
       status: b.status || 'open',
       paid_at: b.paidAt || null,
+      requested_by: b.requested_by || null,
+      requested_by_email: b.requested_by_email || null,
+      documents: b.documents || [],
+      approval_meta: {
+        approval_chain: b.approval_chain || null,
+        approval_level_index: b.approval_level_index || 0,
+        approval_level: b.approval_level || null,
+        reviewed_by: b.reviewed_by || null,
+        approved_by: b.approved_by || null,
+        approved_at: b.approved_at || null
+      },
       updated_at: new Date().toISOString()
     };
     const { data: existing } = await cloud.client.from('books_bills')
       .select('id').eq('organization_id', organizationId).eq('local_id', b.id).maybeSingle();
-    if (existing?.id) await cloud.client.from('books_bills').update(payload).eq('id', existing.id);
-    else {
+    if (existing?.id) {
+      const up = await cloud.client.from('books_bills').update(payload).eq('id', existing.id);
+      if (up.error) {
+        // Fallback without new columns if migration not run yet
+        const slim = Object.assign({}, payload);
+        delete slim.approval_meta; delete slim.requested_by; delete slim.requested_by_email; delete slim.documents;
+        await cloud.client.from('books_bills').update(slim).eq('id', existing.id);
+      }
+    } else {
       const ins = await cloud.client.from('books_bills').insert(payload);
-      if (ins.error) console.warn('books_bills', ins.error.message);
+      if (ins.error) {
+        const slim = Object.assign({}, payload);
+        delete slim.approval_meta; delete slim.requested_by; delete slim.requested_by_email; delete slim.documents;
+        const ins2 = await cloud.client.from('books_bills').insert(slim);
+        if (ins2.error) console.warn('books_bills', ins2.error.message);
+      }
+    }
+  }
+  // Cash entries (pending approval + posted)
+  for (const c of db.cashEntries || []) {
+    if (c.source && c.source !== 'manual' && c.status === 'posted') continue; // skip auto-generated noise in bulk
+    const payload = {
+      organization_id: organizationId,
+      local_id: c.id,
+      entry_type: c.type || 'out',
+      category: c.category || null,
+      amount: Number(c.amount) || 0,
+      currency: c.currency || 'USD',
+      entry_date: c.date || null,
+      note: c.note || null,
+      bank_account_id: c.bankAccountId || null,
+      offset_account_id: c.offsetAccountId || null,
+      status: c.status || 'posted',
+      source: c.source || 'manual',
+      documents: c.documents || [],
+      requested_by: c.requested_by || null,
+      requested_by_email: c.requested_by_email || null,
+      approved_by: c.approved_by || null,
+      approved_at: c.approved_at || null,
+      approval_meta: {
+        approval_chain: c.approval_chain || null,
+        approval_level_index: c.approval_level_index || 0,
+        approval_level: c.approval_level || null
+      },
+      updated_at: new Date().toISOString()
+    };
+    try {
+      const { data: existing } = await cloud.client.from('books_cash_entries')
+        .select('id').eq('organization_id', organizationId).eq('local_id', c.id).maybeSingle();
+      if (existing?.id) await cloud.client.from('books_cash_entries').update(payload).eq('id', existing.id);
+      else {
+        const ins = await cloud.client.from('books_cash_entries').insert(payload);
+        if (ins.error && !/does not exist|schema cache/i.test(ins.error.message || '')) {
+          console.warn('books_cash_entries', ins.error.message);
+        }
+      }
+    } catch (e) {
+      if (!/does not exist|schema cache/i.test(String(e.message || e))) console.warn('cash push', e.message || e);
     }
   }
   // COA extra
@@ -21459,9 +21551,22 @@ async function pullBooksFromCloud() {
   });
   const { data: bills } = await cloud.client.from('books_bills').select('*').eq('organization_id', organizationId);
   (bills || []).forEach(row => {
-    if (row.local_id && db.bills.some(b => b.id === row.local_id)) return;
+    const lid = row.local_id || row.id;
+    const meta = row.approval_meta || {};
+    const existing = (db.bills || []).find(b => b.id === lid);
+    if (existing) {
+      // Merge status / matrix from cloud so other members' advances land here
+      if (row.status && row.status !== existing.status) existing.status = row.status;
+      if (meta.approval_chain) existing.approval_chain = meta.approval_chain;
+      if (meta.approval_level_index != null) existing.approval_level_index = meta.approval_level_index;
+      if (meta.approval_level != null) existing.approval_level = meta.approval_level;
+      if (row.requested_by && !existing.requested_by) existing.requested_by = row.requested_by;
+      if (row.requested_by_email && !existing.requested_by_email) existing.requested_by_email = row.requested_by_email;
+      if (row.paid_at) existing.paidAt = row.paid_at;
+      return;
+    }
     db.bills.push({
-      id: row.local_id || row.id,
+      id: lid,
       supplier: row.supplier,
       category: row.category,
       amount: Number(row.amount) || 0,
@@ -21471,9 +21576,59 @@ async function pullBooksFromCloud() {
       due: row.due_date,
       note: row.note,
       status: row.status || 'open',
-      paidAt: row.paid_at
+      paidAt: row.paid_at,
+      requested_by: row.requested_by || null,
+      requested_by_email: row.requested_by_email || null,
+      documents: row.documents || [],
+      approval_chain: meta.approval_chain || null,
+      approval_level_index: meta.approval_level_index || 0,
+      approval_level: meta.approval_level || null,
+      approved_by: meta.approved_by || null,
+      approved_at: meta.approved_at || null
     });
   });
+  // Cash entries from cloud
+  try {
+    const { data: cashRows, error: cashErr } = await cloud.client.from('books_cash_entries')
+      .select('*').eq('organization_id', organizationId);
+    if (!cashErr && cashRows) {
+      cashRows.forEach(row => {
+        const lid = row.local_id || row.id;
+        const meta = row.approval_meta || {};
+        const existing = (db.cashEntries || []).find(c => c.id === lid);
+        if (existing) {
+          if (row.status && row.status !== existing.status) existing.status = row.status;
+          if (meta.approval_chain) existing.approval_chain = meta.approval_chain;
+          if (meta.approval_level_index != null) existing.approval_level_index = meta.approval_level_index;
+          if (meta.approval_level != null) existing.approval_level = meta.approval_level;
+          if (row.requested_by && !existing.requested_by) existing.requested_by = row.requested_by;
+          if (row.requested_by_email && !existing.requested_by_email) existing.requested_by_email = row.requested_by_email;
+          return;
+        }
+        db.cashEntries.push({
+          id: lid,
+          type: row.entry_type || 'out',
+          category: row.category,
+          amount: Number(row.amount) || 0,
+          currency: row.currency,
+          date: row.entry_date,
+          note: row.note,
+          bankAccountId: row.bank_account_id,
+          offsetAccountId: row.offset_account_id,
+          status: row.status || 'posted',
+          source: row.source || 'manual',
+          documents: row.documents || [],
+          requested_by: row.requested_by || null,
+          requested_by_email: row.requested_by_email || null,
+          approval_chain: meta.approval_chain || null,
+          approval_level_index: meta.approval_level_index || 0,
+          approval_level: meta.approval_level || null,
+          approved_by: row.approved_by || null,
+          approved_at: row.approved_at || null
+        });
+      });
+    }
+  } catch (_) {}
   const { data: coa } = await cloud.client.from('books_coa_extra').select('*').eq('organization_id', organizationId);
   (coa || []).forEach(row => {
     if (db.coaExtra.some(a => a.id === row.code)) return;
