@@ -7131,6 +7131,18 @@ document.addEventListener('click', (e) => {
     try { rejectExpenseBill(rejectBill.getAttribute('data-reject-bill')); } catch (err) { toast(err.message || 'Reject failed'); }
     return;
   }
+  const approveCash = e.target.closest('[data-approve-cash]');
+  if (approveCash) {
+    e.preventDefault();
+    try { approveExpenseCash(approveCash.getAttribute('data-approve-cash')); } catch (err) { toast(err.message || 'Approve failed'); }
+    return;
+  }
+  const rejectCash = e.target.closest('[data-reject-cash]');
+  if (rejectCash) {
+    e.preventDefault();
+    try { rejectExpenseCash(rejectCash.getAttribute('data-reject-cash')); } catch (err) { toast(err.message || 'Reject failed'); }
+    return;
+  }
   const bankMatch = e.target.closest('[data-bank-match]');
   if (bankMatch) { e.preventDefault(); matchBankTx(bankMatch.getAttribute('data-bank-match')); return; }
   const bankAdd = e.target.closest('[data-bank-add]');
@@ -9988,9 +10000,10 @@ function approvalsEnabledExpenses() {
   return !!(db.profile && db.profile.requireExpenseApproval);
 }
 function expenseApprovalThreshold() {
-  restoreApprovalSettingsMirror();
-  const n = Number(db.profile && db.profile.expenseApprovalThreshold);
-  return Number.isFinite(n) && n > 0 ? n : 0;
+  // Legacy helper: lowest non-zero min_amount in matrix (or 0)
+  const levels = getExpenseMatrixLevels();
+  const mins = levels.map(l => Number(l.min_amount) || 0).filter(n => n > 0);
+  return mins.length ? Math.min(...mins) : 0;
 }
 function syncExpenseApprovalRolesVisibility() {
   const box = document.getElementById('expenseApprovalRolesBox');
@@ -10174,13 +10187,24 @@ function listPendingApprovalItems() {
   try {
     (db.cashEntries || []).forEach(c => {
       if (c.type === 'out' && (c.status === 'pending_review' || c.status === 'pending_approval')) {
+        if (!c.approval_chain || !c.approval_chain.length) {
+          try { attachExpenseApprovalChain(c, c.amount); } catch (_) {}
+        }
+        const chain = c.approval_chain || [];
+        const idx = Math.max(0, Number(c.approval_level_index) || 0);
+        const cur = chain[idx];
+        const levelLabel = cur ? (cur.label || ('Level ' + cur.level)) : 'Approval';
         items.push({
           kind: 'cash',
           id: c.id,
           status: c.status,
+          amount: c.amount,
+          currency: c.currency,
+          levelLabel,
           label: (c.note || 'Cash expense') + ' · ' +
             (typeof money === 'function' ? money(c.amount, c.currency) : c.amount) +
-            ' · pending',
+            ' · ' + levelLabel,
+          canAct: typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(c),
           go: () => openApprovalsInbox()
         });
       }
@@ -10226,6 +10250,12 @@ function renderApprovalsInbox() {
       actions =
         '<button type="button" class="button small primary" data-inbox-approve-bill="' + it.id + '">Approve level</button>' +
         '<button type="button" class="button small danger" data-inbox-reject-bill="' + it.id + '">Reject</button>';
+    } else if (it.kind === 'cash' && it.canAct) {
+      actions =
+        '<button type="button" class="button small primary" data-inbox-approve-cash="' + it.id + '">Approve level</button>' +
+        '<button type="button" class="button small danger" data-inbox-reject-cash="' + it.id + '">Reject</button>';
+    } else if (it.kind === 'cash') {
+      actions = '<span class="section-sub">Waiting on ' + String(it.levelLabel || 'approver').replace(/</g, '') + '</span>';
     } else if (it.kind === 'transfer') {
       actions = '<button type="button" class="button small" data-inbox-go-transfer="' + it.id + '">Open transfer</button>';
     } else if (it.kind === 'purchase') {
@@ -10248,6 +10278,18 @@ function renderApprovalsInbox() {
   el.querySelectorAll('[data-inbox-reject-bill]').forEach(btn => {
     btn.addEventListener('click', () => {
       rejectExpenseBill(btn.getAttribute('data-inbox-reject-bill'));
+      renderApprovalsInbox();
+    });
+  });
+  el.querySelectorAll('[data-inbox-approve-cash]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      approveExpenseCash(btn.getAttribute('data-inbox-approve-cash'));
+      renderApprovalsInbox();
+    });
+  });
+  el.querySelectorAll('[data-inbox-reject-cash]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      rejectExpenseCash(btn.getAttribute('data-inbox-reject-cash'));
       renderApprovalsInbox();
     });
   });
@@ -10302,7 +10344,9 @@ function renderDashboardApprovals() {
       '<span>' + String(it.label).replace(/</g, '') + '</span>' +
       (it.kind === 'bill' && it.canAct
         ? '<button type="button" class="button text" data-dash-approve-bill="' + it.id + '">Approve</button>'
-        : '<button type="button" class="button text" data-dash-approval="' + it.kind + ':' + it.id + '">Open</button>') +
+        : (it.kind === 'cash' && it.canAct
+          ? '<button type="button" class="button text" data-dash-approve-cash="' + it.id + '">Approve</button>'
+          : '<button type="button" class="button text" data-dash-approval="' + it.kind + ':' + it.id + '">Open</button>')) +
       '</li>'
     ).join('') +
     (items.length > 5 ? '<li class="section-sub" style="padding-top:6px">+' + (items.length - 5) + ' more</li>' : '') +
@@ -10311,6 +10355,12 @@ function renderDashboardApprovals() {
   el.querySelectorAll('[data-dash-approve-bill]').forEach(btn => {
     btn.addEventListener('click', () => {
       approveExpenseBill(btn.getAttribute('data-dash-approve-bill'));
+      renderDashboardApprovals();
+    });
+  });
+  el.querySelectorAll('[data-dash-approve-cash]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      approveExpenseCash(btn.getAttribute('data-dash-approve-cash'));
       renderDashboardApprovals();
     });
   });
@@ -18091,6 +18141,158 @@ function approveExpenseBill(billId) {
   advanceExpenseBillLevel(billId, { postIfFinal: true });
 }
 
+function postPendingCashExpense(entry) {
+  ensureBooksDb();
+  const amt = toRep(entry.amount, entry.currency);
+  const cashAcct = entry.bankAccountId || defaultCashAccountId() || '1000';
+  let offsetAcct = entry.offsetAccountId || '';
+  if (!offsetAcct) {
+    offsetAcct = (typeof EXPENSE_ACCOUNT_BY_CATEGORY !== 'undefined' && EXPENSE_ACCOUNT_BY_CATEGORY[entry.category])
+      || entry.category || '5700';
+  }
+  try {
+    const coa = (typeof getCoa === 'function' ? getCoa() : []) || [];
+    if (!coa.some(a => a.id === offsetAcct)) offsetAcct = '5700';
+  } catch (_) { offsetAcct = '5700'; }
+  entry.offsetAccountId = offsetAcct;
+  entry.bankAccountId = cashAcct;
+  const key = 'j:cash:' + entry.id;
+  if ((db.journals || []).some(j => j.sourceKey === key && !j.reversed)) return true;
+  postJournal({
+    date: entry.date || (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10)),
+    memo: entry.note || 'Cash expense',
+    source: 'manual_expense',
+    sourceKey: key,
+    lines: [
+      { accountId: offsetAcct, debit: amt, credit: 0 },
+      { accountId: cashAcct, debit: 0, credit: amt }
+    ],
+    documents: entry.documents || []
+  });
+  return true;
+}
+
+function approveExpenseCash(cashId) {
+  advanceExpenseCashLevel(cashId, { postIfFinal: true });
+}
+
+function advanceExpenseCashLevel(cashId, opts) {
+  opts = opts || {};
+  ensureBooksDb();
+  const entry = (db.cashEntries || []).find(c => c.id === cashId);
+  if (!entry || (entry.status !== 'pending_approval' && entry.status !== 'pending_review')) {
+    toast('Not waiting for approval');
+    return;
+  }
+  if (!entry.approval_chain || !entry.approval_chain.length) {
+    attachExpenseApprovalChain(entry, entry.amount);
+  }
+  if (expenseBlockSelfApprove() && isSelfExpenseRequest(entry)) {
+    toast('You cannot approve your own expense — another approver must act');
+    return;
+  }
+  if (!canActOnExpenseLevel(entry)) {
+    toast('Your role cannot approve this level');
+    return;
+  }
+  if (expenseRequireReceipt() && !expenseHasReceipt(entry)) {
+    toast('Receipt required before approval');
+    return;
+  }
+  const actor = expenseActorMeta();
+  const idx = Math.max(0, Number(entry.approval_level_index) || 0);
+  const chain = entry.approval_chain;
+  const cur = chain[idx];
+  if (cur) {
+    cur.status = 'approved';
+    cur.at = actor.at;
+    cur.by = actor.userId;
+    cur.by_email = actor.email;
+  }
+  const isLast = idx >= chain.length - 1;
+  if (!isLast) {
+    entry.approval_level_index = idx + 1;
+    entry.approval_level = chain[idx + 1].level;
+    entry.status = 'pending_approval';
+    try {
+      appendBooksAudit('cash.level_approved', 'cash', entry.id,
+        'Level ' + (cur && cur.label ? cur.label : (idx + 1)) + ' OK · ' + (entry.note || 'Cash') +
+          ' · next: ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)),
+        null, { level: idx + 1 }, { status: entry.status });
+    } catch (_) {}
+    save();
+    try { queueBooksCloudSync(); } catch (_) {}
+    toast('Level approved — next: ' + (chain[idx + 1].label || 'final approval'));
+    try { refreshApprovalsUI(); } catch (_) {}
+    try { renderApprovalsInbox(); renderBooksPayables(); } catch (_) {}
+    return;
+  }
+  // Final — post cash expense journal
+  if (!entry.offsetAccountId || entry.offsetAccountId === 'other_out') {
+    const coa = (typeof getCoa === 'function' ? getCoa() : []).filter(a => a.type === 'expense');
+    const hint = coa.slice(0, 8).map(a => a.id + ' ' + a.name).join('\n');
+    const picked = (prompt(
+      'Final approval — which expense ledger?\n\n' + (hint || '5700 Operating expense') + '\n\nAccount code:',
+      entry.offsetAccountId || '5700'
+    ) || '').trim();
+    if (!picked) { toast('Ledger required to post'); return; }
+    entry.offsetAccountId = picked;
+  }
+  try {
+    postPendingCashExpense(entry);
+  } catch (err) {
+    toast('Could not post to ledger — ' + (err.message || 'error'));
+    return;
+  }
+  entry.status = 'posted';
+  entry.approved_by = actor.userId;
+  entry.approved_by_email = actor.email;
+  entry.approved_at = actor.at;
+  entry.posted_by = actor.userId;
+  entry.posted_at = actor.at;
+  try {
+    appendBooksAudit('cash.approved', 'cash', entry.id,
+      'Final approval · posted · ' + (entry.note || 'Cash') + ' · ' +
+        (typeof money === 'function' ? money(entry.amount, entry.currency) : entry.amount),
+      null, { status: entry.status }, { status: entry.status });
+  } catch (_) {}
+  save();
+  try { queueBooksCloudSync(); } catch (_) {}
+  toast('Cash expense posted to books');
+  try { refreshApprovalsUI(); } catch (_) {}
+  try { renderApprovalsInbox(); renderBooksPayables(); booksView(); } catch (_) {}
+}
+
+function rejectExpenseCash(cashId) {
+  ensureBooksDb();
+  if (!canReviewExpense() && !canApproveExpense()) { toast('Your role cannot reject expenses'); return; }
+  const entry = (db.cashEntries || []).find(c => c.id === cashId);
+  if (!entry || (entry.status !== 'pending_review' && entry.status !== 'pending_approval')) {
+    toast('Not pending');
+    return;
+  }
+  if (expenseBlockSelfApprove() && isSelfExpenseRequest(entry)) {
+    toast('You cannot reject your own request this way — ask another approver');
+    return;
+  }
+  const note = (prompt('Rejection reason (optional)') || '').trim();
+  const actor = expenseActorMeta();
+  entry.status = 'rejected';
+  entry.rejected_by = actor.userId;
+  entry.rejected_at = actor.at;
+  entry.rejection_note = note || null;
+  try {
+    appendBooksAudit('cash.rejected', 'cash', entry.id,
+      'Rejected · ' + (entry.note || 'Cash') + (note ? (' · ' + note) : ''),
+      null, { status: entry.status, note }, { status: entry.status });
+  } catch (_) {}
+  save();
+  try { queueBooksCloudSync(); } catch (_) {}
+  toast('Cash expense rejected');
+  try { refreshApprovalsUI(); } catch (_) {}
+  try { renderApprovalsInbox(); renderBooksPayables(); } catch (_) {}
+}
+
 function rejectExpenseBill(billId) {
   ensureBooksDb();
   if (!canReviewExpense() && !canApproveExpense()) { toast('Your role cannot reject expenses'); return; }
@@ -18343,7 +18545,10 @@ function renderBooksPayables() {
     '<div style="padding:12px 16px;border:1px solid var(--line);border-radius:12px;min-width:140px">' +
     '<div style="font-size:11px;color:var(--muted);text-transform:uppercase">Open AP</div>' +
     '<div style="font-size:18px;font-weight:700">' + (typeof money === 'function' ? money(openTotal, rep) : openTotal) + '</div>' +
-    '<div style="font-size:11px;color:var(--muted)">' + ledgerOpen.length + ' on ledger · ' + open.filter(b => b.status === 'pending_review' || b.status === 'pending_approval').length + ' in queue</div></div>';
+    '<div style="font-size:11px;color:var(--muted)">' + ledgerOpen.length + ' on ledger · ' +
+      (open.filter(b => b.status === 'pending_review' || b.status === 'pending_approval').length +
+        (db.cashEntries || []).filter(c => c.type === 'out' && (c.status === 'pending_review' || c.status === 'pending_approval')).length) +
+      ' in queue</div></div>';
   if (Math.abs(glAp) > 0.02) {
     html += '<div style="padding:12px 16px;border:1px solid var(--line);border-radius:12px;min-width:140px">' +
       '<div style="font-size:11px;color:var(--muted);text-transform:uppercase">Ledger 2000 AP</div>' +
@@ -18351,17 +18556,58 @@ function renderBooksPayables() {
   }
   html += '<button type="button" class="button primary" id="booksAddBillBtn">+ Expense request</button></div>';
 
-  // Accountant queue — requests waiting for review / post (requesters never touch journals)
-  const queue = bills.filter(b => b.status === 'pending_review' || b.status === 'pending_approval');
-  if (queue.length) {
-    const canAct = (typeof canReviewExpense === 'function' && canReviewExpense())
-      || (typeof canApproveExpense === 'function' && canApproveExpense());
+  // Accountant queue — bills + cash expenses waiting for matrix approval
+  const queueBills = bills.filter(b => b.status === 'pending_review' || b.status === 'pending_approval');
+  const queueCash = (db.cashEntries || []).filter(c =>
+    c.type === 'out' && (c.status === 'pending_review' || c.status === 'pending_approval')
+  );
+  const queueTotal = queueBills.length + queueCash.length;
+  if (queueTotal) {
     html += '<div style="margin-bottom:14px;padding:12px 14px;border:1px solid #fcd34d;border-radius:12px;background:#fffbeb">';
-    html += '<div style="font-size:12px;font-weight:800;color:#92400e;margin-bottom:6px">Accountant queue · ' + queue.length + ' waiting</div>';
-    html += '<p class="section-sub" style="margin:0 0 8px">Staff submitted these without posting books. Review, pick the ledger if needed, then Approve &amp; post.</p>';
-    if (!canAct) {
-      html += '<p class="section-sub" style="margin:0">You submitted these — an approver will post them to the ledger.</p>';
-    }
+    html += '<div style="font-size:12px;font-weight:800;color:#92400e;margin-bottom:6px">Accountant queue · ' + queueTotal + ' waiting</div>';
+    html += '<p class="section-sub" style="margin:0 0 10px">Approve the current matrix level here or from Home → Approvals inbox. Final level posts the journal.</p>';
+    queueBills.forEach(b => {
+      if (!b.approval_chain || !b.approval_chain.length) {
+        try { attachExpenseApprovalChain(b, b.amount); } catch (_) {}
+      }
+      const idx = Math.max(0, Number(b.approval_level_index) || 0);
+      const cur = (b.approval_chain || [])[idx];
+      const isLast = (b.approval_chain || []).length ? idx >= b.approval_chain.length - 1 : true;
+      const canAct = typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(b);
+      html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;border-top:1px solid rgba(146,64,14,.2)">' +
+        '<div style="flex:1;min-width:140px"><b>' + String(b.supplier || 'Bill').replace(/</g, '') + '</b>' +
+        '<div class="section-sub">Bill · ' + (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) +
+        ' · ' + String((cur && cur.label) || 'Approval').replace(/</g, '') + '</div></div>';
+      if (canAct) {
+        html += '<button type="button" class="button small primary" data-approve-bill="' + b.id + '">' +
+          (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>';
+        html += '<button type="button" class="button small danger" data-reject-bill="' + b.id + '">Reject</button>';
+      } else {
+        html += '<span class="section-sub">Waiting on approver</span>';
+      }
+      html += '</div>';
+    });
+    queueCash.forEach(c => {
+      if (!c.approval_chain || !c.approval_chain.length) {
+        try { attachExpenseApprovalChain(c, c.amount); } catch (_) {}
+      }
+      const idx = Math.max(0, Number(c.approval_level_index) || 0);
+      const cur = (c.approval_chain || [])[idx];
+      const isLast = (c.approval_chain || []).length ? idx >= c.approval_chain.length - 1 : true;
+      const canAct = typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(c);
+      html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;border-top:1px solid rgba(146,64,14,.2)">' +
+        '<div style="flex:1;min-width:140px"><b>' + String(c.note || 'Cash expense').replace(/</g, '') + '</b>' +
+        '<div class="section-sub">Cash · ' + (typeof money === 'function' ? money(c.amount, c.currency) : c.amount) +
+        ' · ' + String((cur && cur.label) || 'Approval').replace(/</g, '') + '</div></div>';
+      if (canAct) {
+        html += '<button type="button" class="button small primary" data-approve-cash="' + c.id + '">' +
+          (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>';
+        html += '<button type="button" class="button small danger" data-reject-cash="' + c.id + '">Reject</button>';
+      } else {
+        html += '<span class="section-sub">Waiting on approver</span>';
+      }
+      html += '</div>';
+    });
     html += '</div>';
   }
 
@@ -24002,7 +24248,7 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
   const status = needsAppr
     ? (typeof expenseSubmitStatus === 'function' ? expenseSubmitStatus(amount) : 'pending_approval')
     : 'posted';
-  db.cashEntries.push({
+  const cashEntry = {
     id, type, category, amount, currency, date, note, source: 'manual',
     documents: docs,
     bankAccountId, offsetAccountId,
@@ -24010,7 +24256,11 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
     requested_by: actor.userId || null,
     requested_by_email: actor.email || null,
     requested_at: actor.at || null
-  });
+  };
+  if (needsAppr && (status === 'pending_approval' || status === 'pending_review')) {
+    try { attachExpenseApprovalChain(cashEntry, amount); } catch (_) {}
+  }
+  db.cashEntries.push(cashEntry);
   try {
     appendBooksAudit(
       needsAppr ? 'cash.submitted' : 'cash.manual',
