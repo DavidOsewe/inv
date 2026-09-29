@@ -4101,6 +4101,32 @@ input:focus:not(:focus-visible) {
               <input type="checkbox" data-p="expenseRequireReceipt" id="expenseRequireReceipt" checked>
               <span>Require receipt/attachment when approval is required</span>
             </label>
+            <div style="margin:14px 0 0;padding-top:12px;border-top:1px dashed var(--line)">
+              <div style="font-size:12px;font-weight:700;margin-bottom:6px">O3 · AP automation (fast lane)</div>
+              <p class="section-sub" style="margin:0 0 10px">
+                Routine bills that pass policy can post to AP without sitting in the matrix.
+                Exceptions and higher amounts still use the levels above.
+              </p>
+              <div class="field" style="margin:0 0 8px">
+                <label>Auto-post max amount (0 = off)</label>
+                <input type="number" min="0" step="1" id="expenseAutoPostMax" data-p="expenseAutoPostMax" placeholder="e.g. 25000">
+              </div>
+              <label style="display:flex;align-items:center;gap:10px;margin:6px 0;cursor:pointer">
+                <input type="checkbox" data-p="expenseAutoPostRequireReceipt" id="expenseAutoPostRequireReceipt" checked>
+                <span>Auto-post only when a receipt is attached</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:10px;margin:6px 0;cursor:pointer">
+                <input type="checkbox" data-p="expenseAutoPostKnownSupplier" id="expenseAutoPostKnownSupplier" checked>
+                <span>Auto-post only for known suppliers (prior bill or supplier list)</span>
+              </label>
+              <div class="field" style="margin:8px 0 0">
+                <label>PO match tolerance %</label>
+                <input type="number" min="0" max="25" step="0.5" id="expensePoMatchTolerancePct" data-p="expensePoMatchTolerancePct" value="5" placeholder="5">
+              </div>
+              <p class="section-sub" style="margin:8px 0 0">
+                Link a bill to a PO on submit. Within tolerance → can use fast lane; over tolerance → stays in queue with a variance flag.
+              </p>
+            </div>
           </div>
           <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
             <input type="checkbox" data-p="lowStockAlertsEnabled" id="lowStockAlertsEnabled">
@@ -4991,6 +5017,13 @@ input:focus:not(:focus-visible) {
       <div class="field"><label>Due date</label><input id="billDue" type="date"></div>
     </div>
     <div class="field"><label>What is this for?</label><input id="billNote" placeholder="e.g. June rent, POS paper, fuel for delivery"></div>
+    <div class="field" id="billPoField">
+      <label>Link to purchase order (optional · 2-way match)</label>
+      <select id="billPurchaseId" class="searchable" data-searchable="1">
+        <option value="">— No PO —</option>
+      </select>
+      <div class="section-sub" id="billPoHint" style="margin-top:4px">Stock / supplier POs only. Amount is checked against the PO total within your tolerance.</div>
+    </div>
     <div style="display:flex;gap:8px;margin-top:12px">
       <button class="button primary" type="button" id="billSave">Submit to accountant</button>
       <button class="button" type="button" id="billCancel">Cancel</button>
@@ -6896,7 +6929,9 @@ function applyRoleGates() {
   [
     'requireTransferApproval', 'requirePurchaseApproval', 'requireExpenseApproval',
     'expenseRequesterRole', 'expenseBlockSelfApprove', 'expenseRequireReceipt',
-    'expenseMatrixAddLevel'
+    'expenseMatrixAddLevel',
+    'expenseAutoPostMax', 'expenseAutoPostRequireReceipt', 'expenseAutoPostKnownSupplier',
+    'expensePoMatchTolerancePct'
   ].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -9848,7 +9883,9 @@ async function refreshCloudMemberRole() {
 /* ---------- Approvals (transfers + POs + expenses) ---------- */
 const APPROVAL_SETTING_KEYS = [
   'requireTransferApproval', 'requirePurchaseApproval', 'requireExpenseApproval',
-  'expenseRequesterRole', 'expenseBlockSelfApprove', 'expenseRequireReceipt'
+  'expenseRequesterRole', 'expenseBlockSelfApprove', 'expenseRequireReceipt',
+  'expenseAutoPostMax', 'expenseAutoPostRequireReceipt', 'expenseAutoPostKnownSupplier',
+  'expensePoMatchTolerancePct'
 ];
 
 /** Default Odoo-style sequential levels (min_amount triggers inclusion). */
@@ -9869,25 +9906,33 @@ function getExpenseMatrixLevels() {
     const appr = (db.profile && db.profile.expenseApproverRole) || 'owner';
     if (thr > 0 && rev !== 'none') {
       levels = [
-        { level: 1, min_amount: thr, role: rev === 'none' ? 'manager' : rev, label: 'Review' },
-        { level: 2, min_amount: thr, role: appr || 'owner', label: 'Approve & post' }
+        { level: 1, min_amount: thr, role: rev === 'none' ? 'manager' : rev, label: 'Review', approver_type: 'role' },
+        { level: 2, min_amount: thr, role: appr || 'owner', label: 'Approve & post', approver_type: 'role' }
       ];
     } else if (rev && rev !== 'none') {
       levels = [
-        { level: 1, min_amount: 0, role: rev, label: 'Review' },
-        { level: 2, min_amount: 0, role: appr || 'owner', label: 'Approve & post' }
+        { level: 1, min_amount: 0, role: rev, label: 'Review', approver_type: 'role' },
+        { level: 2, min_amount: 0, role: appr || 'owner', label: 'Approve & post', approver_type: 'role' }
       ];
     } else {
       levels = defaultExpenseMatrixLevels();
     }
   }
   return levels
-    .map((l, i) => ({
-      level: Number(l.level) || (i + 1),
-      min_amount: Math.max(0, Number(l.min_amount) || 0),
-      role: (l.role === 'owner' || l.role === 'manager' || l.role === 'member') ? l.role : 'manager',
-      label: String(l.label || ('Level ' + (i + 1))).trim() || ('Level ' + (i + 1))
-    }))
+    .map((l, i) => {
+      const type = (l.approver_type === 'user') ? 'user' : 'role';
+      const ids = Array.isArray(l.approver_user_ids) ? l.approver_user_ids.map(String) : [];
+      const emails = Array.isArray(l.approver_emails) ? l.approver_emails.map(e => String(e).toLowerCase()) : [];
+      return {
+        level: Number(l.level) || (i + 1),
+        min_amount: Math.max(0, Number(l.min_amount) || 0),
+        role: (l.role === 'owner' || l.role === 'manager' || l.role === 'member') ? l.role : 'manager',
+        label: String(l.label || ('Level ' + (i + 1))).trim() || ('Level ' + (i + 1)),
+        approver_type: type,
+        approver_user_ids: ids,
+        approver_emails: emails
+      };
+    })
     .sort((a, b) => a.level - b.level || a.min_amount - b.min_amount);
 }
 
@@ -9898,23 +9943,96 @@ function expenseLevelsForAmount(amount) {
   return levels.length ? levels : getExpenseMatrixLevels().slice(0, 1);
 }
 
+/** Cached org members for named-approver pickers (filled by loadTeamPanel). */
+function getTeamMembersForApprovals() {
+  const cached = db.teamMembersCache;
+  if (Array.isArray(cached) && cached.length) return cached;
+  // Minimal fallback: current user only
+  try {
+    const me = expenseActorMeta();
+    if (me.userId || me.email) {
+      return [{
+        user_id: me.userId || '',
+        email: me.email || '',
+        role: currentOrgRole(),
+        name: me.email || 'You'
+      }];
+    }
+  } catch (_) {}
+  return [];
+}
+
+function levelApproverSummary(l) {
+  if (!l) return '';
+  if (l.approver_type === 'user' && (l.approver_user_ids || []).length) {
+    const team = getTeamMembersForApprovals();
+    const names = (l.approver_user_ids || []).map(id => {
+      const m = team.find(t => String(t.user_id) === String(id));
+      return (m && (m.name || m.email)) || String(id).slice(0, 8);
+    });
+    if (!names.length && (l.approver_emails || []).length) return l.approver_emails.join(', ');
+    return names.join(', ') || 'Named approver';
+  }
+  if (l.role === 'owner') return 'Owner only';
+  if (l.role === 'manager') return 'Manager + owner';
+  return 'Member + above';
+}
+
 function renderExpenseMatrixEditor() {
   const host = document.getElementById('expenseMatrixLevels');
   if (!host) return;
   const levels = getExpenseMatrixLevels();
-  host.innerHTML = levels.map((l, i) =>
-    '<div class="two" data-matrix-row="' + i + '" style="gap:8px;align-items:end;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel)">' +
-    '<div class="field" style="margin:0"><label>Level</label><input type="number" min="1" step="1" data-mx="level" value="' + l.level + '" style="max-width:70px"></div>' +
-    '<div class="field" style="margin:0"><label>Min amount</label><input type="number" min="0" step="1" data-mx="min_amount" value="' + l.min_amount + '"></div>' +
-    '<div class="field" style="margin:0"><label>Approver role</label><select data-mx="role">' +
-    '<option value="manager"' + (l.role === 'manager' ? ' selected' : '') + '>Manager + owner</option>' +
-    '<option value="owner"' + (l.role === 'owner' ? ' selected' : '') + '>Owner only</option>' +
-    '<option value="member"' + (l.role === 'member' ? ' selected' : '') + '>Member + above</option>' +
-    '</select></div>' +
-    '<div class="field" style="margin:0"><label>Label</label><input data-mx="label" value="' + String(l.label).replace(/"/g, '&quot;') + '" placeholder="e.g. Manager review"></div>' +
-    '<button type="button" class="button small danger" data-mx-remove="' + i + '" title="Remove">×</button>' +
-    '</div>'
-  ).join('') || '<p class="section-sub">No levels — add at least one.</p>';
+  const team = getTeamMembersForApprovals();
+  host.innerHTML = levels.map((l, i) => {
+    const isUser = l.approver_type === 'user';
+    const memberChecks = team.length
+      ? team.map(m => {
+          const id = String(m.user_id || '');
+          const checked = (l.approver_user_ids || []).some(x => String(x) === id);
+          const label = String(m.name || m.email || id).replace(/</g, '');
+          const roleBit = m.role ? (' · ' + m.role) : '';
+          return '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:2px 0;cursor:pointer">' +
+            '<input type="checkbox" data-mx-user="' + id + '" data-mx-email="' +
+            String(m.email || '').replace(/"/g, '') + '"' + (checked ? ' checked' : '') + '>' +
+            label + roleBit + '</label>';
+        }).join('')
+      : '<p class="section-sub" style="margin:4px 0">Open Profile → Team (signed in) to load members, or save after invite.</p>';
+    return '<div data-matrix-row="' + i + '" style="padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel)">' +
+      '<div class="two" style="gap:8px;align-items:end">' +
+      '<div class="field" style="margin:0"><label>Level</label><input type="number" min="1" step="1" data-mx="level" value="' + l.level + '" style="max-width:70px"></div>' +
+      '<div class="field" style="margin:0"><label>Min amount</label><input type="number" min="0" step="1" data-mx="min_amount" value="' + l.min_amount + '"></div>' +
+      '<div class="field" style="margin:0"><label>Label</label><input data-mx="label" value="' + String(l.label).replace(/"/g, '&quot;') + '" placeholder="e.g. Ops manager"></div>' +
+      '<button type="button" class="button small danger" data-mx-remove="' + i + '" title="Remove">×</button>' +
+      '</div>' +
+      '<div class="two" style="gap:8px;margin-top:8px;align-items:start">' +
+      '<div class="field" style="margin:0"><label>Approver type (O3)</label><select data-mx="approver_type">' +
+      '<option value="role"' + (!isUser ? ' selected' : '') + '>By role</option>' +
+      '<option value="user"' + (isUser ? ' selected' : '') + '>Named team member(s)</option>' +
+      '</select></div>' +
+      '<div class="field" style="margin:0" data-mx-role-wrap="' + i + '"' + (isUser ? ' hidden' : '') + '>' +
+      '<label>Role gate</label><select data-mx="role">' +
+      '<option value="manager"' + (l.role === 'manager' ? ' selected' : '') + '>Manager + owner</option>' +
+      '<option value="owner"' + (l.role === 'owner' ? ' selected' : '') + '>Owner only</option>' +
+      '<option value="member"' + (l.role === 'member' ? ' selected' : '') + '>Member + above</option>' +
+      '</select></div></div>' +
+      '<div data-mx-users-wrap="' + i + '" style="margin-top:8px' + (isUser ? '' : ';display:none') + '">' +
+      '<div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">Who can approve this level</div>' +
+      memberChecks +
+      '</div></div>';
+  }).join('') || '<p class="section-sub">No levels — add at least one.</p>';
+
+  host.querySelectorAll('[data-mx="approver_type"]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const row = sel.closest('[data-matrix-row]');
+      if (!row) return;
+      const idx = row.getAttribute('data-matrix-row');
+      const isUser = sel.value === 'user';
+      const roleWrap = row.querySelector('[data-mx-role-wrap="' + idx + '"]');
+      const usersWrap = row.querySelector('[data-mx-users-wrap="' + idx + '"]');
+      if (roleWrap) roleWrap.hidden = isUser;
+      if (usersWrap) usersWrap.style.display = isUser ? '' : 'none';
+    });
+  });
   host.querySelectorAll('[data-mx-remove]').forEach(btn => {
     btn.addEventListener('click', () => {
       const levelsNow = readExpenseMatrixFromEditor();
@@ -9932,12 +10050,26 @@ function readExpenseMatrixFromEditor() {
   const host = document.getElementById('expenseMatrixLevels');
   if (!host) return getExpenseMatrixLevels();
   const rows = [...host.querySelectorAll('[data-matrix-row]')];
-  return rows.map((row, i) => ({
-    level: Number(row.querySelector('[data-mx="level"]')?.value) || (i + 1),
-    min_amount: Math.max(0, Number(row.querySelector('[data-mx="min_amount"]')?.value) || 0),
-    role: row.querySelector('[data-mx="role"]')?.value || 'manager',
-    label: (row.querySelector('[data-mx="label"]')?.value || '').trim() || ('Level ' + (i + 1))
-  })).sort((a, b) => a.level - b.level);
+  return rows.map((row, i) => {
+    const type = row.querySelector('[data-mx="approver_type"]')?.value === 'user' ? 'user' : 'role';
+    const ids = [];
+    const emails = [];
+    row.querySelectorAll('[data-mx-user]:checked').forEach(cb => {
+      const id = cb.getAttribute('data-mx-user');
+      const em = cb.getAttribute('data-mx-email');
+      if (id) ids.push(id);
+      if (em) emails.push(String(em).toLowerCase());
+    });
+    return {
+      level: Number(row.querySelector('[data-mx="level"]')?.value) || (i + 1),
+      min_amount: Math.max(0, Number(row.querySelector('[data-mx="min_amount"]')?.value) || 0),
+      role: row.querySelector('[data-mx="role"]')?.value || 'manager',
+      label: (row.querySelector('[data-mx="label"]')?.value || '').trim() || ('Level ' + (i + 1)),
+      approver_type: type,
+      approver_user_ids: type === 'user' ? ids : [],
+      approver_emails: type === 'user' ? emails : []
+    };
+  }).sort((a, b) => a.level - b.level);
 }
 
 function saveExpenseMatrixFromEditor() {
@@ -9964,7 +10096,12 @@ function persistApprovalSettingsFromForm() {
     const el = document.querySelector('[data-p="' + key + '"]') || document.getElementById(key);
     if (!el) return;
     if (el.type === 'checkbox') db.profile[key] = !!el.checked;
-    else db.profile[key] = el.value;
+    else if (el.type === 'number') {
+      const n = Number(el.value);
+      if (key === 'expenseAutoPostMax') db.profile[key] = Number.isFinite(n) && n > 0 ? n : 0;
+      else if (key === 'expensePoMatchTolerancePct') db.profile[key] = Number.isFinite(n) ? Math.max(0, Math.min(25, n)) : 5;
+      else db.profile[key] = Number.isFinite(n) ? n : el.value;
+    } else db.profile[key] = el.value;
   });
   try { saveExpenseMatrixFromEditor(); } catch (_) {
     if (!db.profile.expenseMatrixLevels) db.profile.expenseMatrixLevels = defaultExpenseMatrixLevels();
@@ -10054,14 +10191,33 @@ function canRequestExpense() {
   const need = (db.profile && db.profile.expenseRequesterRole) || 'member';
   return roleMeetsMinimum(need);
 }
+function expenseActorIsNamedApprover(level) {
+  if (!level || level.approver_type !== 'user') return false;
+  const ids = level.approver_user_ids || [];
+  const emails = (level.approver_emails || []).map(e => String(e).toLowerCase());
+  if (!ids.length && !emails.length) return false;
+  const me = expenseActorMeta();
+  if (me.userId && ids.some(id => String(id) === String(me.userId))) return true;
+  if (me.email && emails.includes(String(me.email).toLowerCase())) return true;
+  return false;
+}
 function canReviewExpense() {
-  // Any matrix level this user can act on
   if (!approvalsEnabledExpenses()) return false;
-  return getExpenseMatrixLevels().some(l => roleMeetsMinimum(l.role) && (can('expenses.review') || can('expenses.approve') || currentOrgRole() === 'owner' || roleMeetsMinimum(l.role)));
+  return getExpenseMatrixLevels().some(l => {
+    if (l.approver_type === 'user' && (l.approver_user_ids || []).length) {
+      return expenseActorIsNamedApprover(l);
+    }
+    return roleMeetsMinimum(l.role) && (can('expenses.review') || can('expenses.approve') || currentOrgRole() === 'owner' || roleMeetsMinimum(l.role));
+  });
 }
 function canApproveExpense() {
   if (!approvalsEnabledExpenses()) return can('books.write');
-  return getExpenseMatrixLevels().some(l => roleMeetsMinimum(l.role));
+  return getExpenseMatrixLevels().some(l => {
+    if (l.approver_type === 'user' && (l.approver_user_ids || []).length) {
+      return expenseActorIsNamedApprover(l);
+    }
+    return roleMeetsMinimum(l.role);
+  });
 }
 /** Can current user act on this bill's current matrix level? */
 function canActOnExpenseLevel(bill) {
@@ -10070,6 +10226,10 @@ function canActOnExpenseLevel(bill) {
   const idx = Math.max(0, Number(bill.approval_level_index) || 0);
   const cur = levels[idx];
   if (!cur) return canApproveExpense();
+  // O3 named approvers: only the selected people (not the whole role)
+  if (cur.approver_type === 'user' && ((cur.approver_user_ids || []).length || (cur.approver_emails || []).length)) {
+    return expenseActorIsNamedApprover(cur);
+  }
   if (!roleMeetsMinimum(cur.role)) return false;
   return can('expenses.approve') || can('expenses.review') || roleMeetsMinimum(cur.role);
 }
@@ -10086,12 +10246,159 @@ function expenseReviewRequired() {
 /** Initial status when requester submits an expense/bill */
 function expenseSubmitStatus(amount) {
   // SoD: anyone without books.write cannot post to the ledger — always queue
+  // (O3 fast-lane may still auto-post later via evaluateExpenseSubmitPath)
   const canPost = typeof can === 'function' && can('books.write');
   if (!canPost) return 'pending_approval';
   if (!approvalsEnabledExpenses()) return 'open';
   const levels = expenseLevelsForAmount(amount);
   if (!levels.length) return 'open';
   return 'pending_approval';
+}
+
+/** O3 AP automation settings */
+function getApAutomationSettings() {
+  restoreApprovalSettingsMirror();
+  const p = db.profile || {};
+  return {
+    autoPostMax: Math.max(0, Number(p.expenseAutoPostMax) || 0),
+    requireReceipt: p.expenseAutoPostRequireReceipt !== false,
+    knownSupplierOnly: p.expenseAutoPostKnownSupplier !== false,
+    poTolerancePct: Math.max(0, Math.min(25, Number(p.expensePoMatchTolerancePct) || 5))
+  };
+}
+
+function isKnownSupplierName(name) {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n || n === 'supplier') return false;
+  try {
+    if ((db.suppliers || []).some(s => String(s.name || '').trim().toLowerCase() === n)) return true;
+  } catch (_) {}
+  try {
+    if ((db.bills || []).some(b =>
+      (b.status === 'open' || b.status === 'paid') &&
+      String(b.supplier || '').trim().toLowerCase() === n
+    )) return true;
+  } catch (_) {}
+  try {
+    if ((db.purchases || []).some(po => {
+      const sn = (po.supplier_name || (po.supplier && po.supplier.name) || '');
+      return String(sn).trim().toLowerCase() === n;
+    })) return true;
+  } catch (_) {}
+  return false;
+}
+
+function purchaseOpenForMatch() {
+  return (db.purchases || []).filter(po => {
+    const st = String(po.status || '');
+    return st === 'ordered' || st === 'partial' || st === 'received' || st === 'open';
+  });
+}
+
+function purchaseMatchTotal(po) {
+  if (!po) return 0;
+  if (Number(po.total) > 0) return Number(po.total);
+  return (po.lines || []).reduce((s, l) =>
+    s + (Number(l.qty) || 0) * (Number(l.unit_cost) || Number(l.rate) || 0), 0);
+}
+
+/**
+ * 2-way match: bill amount vs PO total within tolerance.
+ * Returns { ok, variancePct, poTotal, status: 'match'|'variance'|'no_po' }
+ */
+function matchBillToPurchase(amount, purchaseId) {
+  if (!purchaseId) return { ok: true, status: 'no_po', variancePct: 0, poTotal: 0 };
+  const po = (db.purchases || []).find(p => p.id === purchaseId);
+  if (!po) return { ok: false, status: 'variance', variancePct: 100, poTotal: 0, note: 'PO not found' };
+  const poTotal = purchaseMatchTotal(po);
+  const amt = Number(amount) || 0;
+  if (!(poTotal > 0)) return { ok: false, status: 'variance', variancePct: 100, poTotal: 0, note: 'PO has no total' };
+  const variancePct = Math.abs(amt - poTotal) / poTotal * 100;
+  const tol = getApAutomationSettings().poTolerancePct;
+  const ok = variancePct <= tol + 1e-9;
+  return {
+    ok,
+    status: ok ? 'match' : 'variance',
+    variancePct: Math.round(variancePct * 100) / 100,
+    poTotal,
+    purchase_number: po.purchase_number || po.id,
+    supplier: po.supplier_name || ''
+  };
+}
+
+/**
+ * O3 path decision for a bill submit.
+ * Returns { status, autoPosted, match, reasons[] }
+ * status: open | pending_approval
+ */
+function evaluateExpenseSubmitPath(opts) {
+  opts = opts || {};
+  const amount = Number(opts.amount) || 0;
+  const docs = opts.docs || [];
+  const supplier = opts.supplier || '';
+  const purchaseId = opts.purchaseId || '';
+  const canPost = typeof can === 'function' && can('books.write');
+  const match = matchBillToPurchase(amount, purchaseId);
+  const reasons = [];
+
+  // PO variance always forces human queue
+  if (purchaseId && match.status === 'variance') {
+    reasons.push('PO amount variance ' + match.variancePct + '% (tol ' + getApAutomationSettings().poTolerancePct + '%)');
+    return { status: 'pending_approval', autoPosted: false, match, reasons };
+  }
+
+  // Fast lane only when approvals are on (otherwise accountant path already posts)
+  if (!approvalsEnabledExpenses()) {
+    return {
+      status: canPost ? 'open' : 'pending_approval',
+      autoPosted: false,
+      match,
+      reasons: canPost ? ['approvals off — posted'] : ['awaiting approver']
+    };
+  }
+
+  const ap = getApAutomationSettings();
+  let eligible = ap.autoPostMax > 0 && amount > 0 && amount <= ap.autoPostMax;
+  if (!eligible) {
+    if (!(ap.autoPostMax > 0)) reasons.push('fast lane off (max = 0)');
+    else reasons.push('amount above auto-post max');
+  }
+  if (eligible && ap.requireReceipt && !(docs && docs.length)) {
+    eligible = false;
+    reasons.push('receipt required for fast lane');
+  }
+  if (eligible && ap.knownSupplierOnly && !isKnownSupplierName(supplier)) {
+    eligible = false;
+    reasons.push('supplier not known yet');
+  }
+  if (eligible && purchaseId && match.status === 'match') {
+    reasons.push('PO match within tolerance');
+  }
+
+  if (eligible) {
+    return { status: 'open', autoPosted: true, match, reasons: reasons.concat(['O3 policy auto-post']) };
+  }
+
+  // Staff without books.write always queue; owners follow matrix
+  if (!canPost) return { status: 'pending_approval', autoPosted: false, match, reasons };
+  return { status: 'pending_approval', autoPosted: false, match, reasons };
+}
+
+function fillBillPurchaseOptions() {
+  const sel = document.getElementById('billPurchaseId');
+  if (!sel) return;
+  const open = purchaseOpenForMatch();
+  const opts = ['<option value="">— No PO —</option>'];
+  open.slice().sort((a, b) => String(b.date || b.created_at || '').localeCompare(String(a.date || a.created_at || ''))).forEach(po => {
+    const total = purchaseMatchTotal(po);
+    const label = (po.purchase_number || 'PO') + ' · ' +
+      (po.supplier_name || 'Supplier') + ' · ' +
+      (typeof money === 'function' ? money(total, po.currency || (db.profile && db.profile.reporting) || 'NGN') : total) +
+      ' · ' + (po.status || '');
+    opts.push('<option value="' + po.id + '">' + String(label).replace(/</g, '') + '</option>');
+  });
+  sel.innerHTML = opts.join('');
+  try { if (typeof initSearchableSelects === 'function') initSearchableSelects(sel.parentElement || document); } catch (_) {}
 }
 /** Attach matrix chain metadata on submit */
 function attachExpenseApprovalChain(entity, amount) {
@@ -10101,6 +10408,10 @@ function attachExpenseApprovalChain(entity, amount) {
     min_amount: l.min_amount,
     role: l.role,
     label: l.label,
+    approver_type: l.approver_type || 'role',
+    approver_user_ids: (l.approver_user_ids || []).slice(),
+    approver_emails: (l.approver_emails || []).slice(),
+    waiting_on: levelApproverSummary(l),
     status: 'pending',
     at: null,
     by: null,
@@ -10217,7 +10528,9 @@ function listPendingApprovalItems() {
         const chain = b.approval_chain || [];
         const idx = Math.max(0, Number(b.approval_level_index) || 0);
         const cur = chain[idx];
-        const levelLabel = cur ? (cur.label || ('Level ' + cur.level)) : 'Approval';
+        const levelLabel = cur
+          ? ((cur.waiting_on || levelApproverSummary(cur) || cur.label || ('Level ' + cur.level)))
+          : 'Approval';
         const mine = isSelfExpenseRequest(b);
         items.push({
           kind: 'bill',
@@ -10245,7 +10558,9 @@ function listPendingApprovalItems() {
         const chain = c.approval_chain || [];
         const idx = Math.max(0, Number(c.approval_level_index) || 0);
         const cur = chain[idx];
-        const levelLabel = cur ? (cur.label || ('Level ' + cur.level)) : 'Approval';
+        const levelLabel = cur
+          ? ((cur.waiting_on || levelApproverSummary(cur) || cur.label || ('Level ' + cur.level)))
+          : 'Approval';
         const mine = isSelfExpenseRequest(c);
         items.push({
           kind: 'cash',
@@ -16243,10 +16558,16 @@ function profile() {
       if (key === 'lowStockAlertsEnabled' && val === undefined) val = true;
       if (key === 'expenseBlockSelfApprove' && val === undefined) val = true;
       if (key === 'expenseRequireReceipt' && val === undefined) val = true;
+      if (key === 'expenseAutoPostRequireReceipt' && val === undefined) val = true;
+      if (key === 'expenseAutoPostKnownSupplier' && val === undefined) val = true;
       e.checked = !!val;
       return;
     }
-    if (val === undefined || val === null) val = '';
+    if (val === undefined || val === null) {
+      if (key === 'expenseAutoPostMax') val = 0;
+      else if (key === 'expensePoMatchTolerancePct') val = 5;
+      else val = '';
+    }
     e.value = val;
   });
   try { syncExpenseApprovalRolesVisibility(); } catch (_) {}
@@ -18246,7 +18567,10 @@ function advanceExpenseBillLevel(billId, opts) {
     }
   }
   if (!canActOnExpenseLevel(bill)) {
-    toast('Your role cannot approve this level');
+    toast((bill.approval_chain && bill.approval_chain[Math.max(0, Number(bill.approval_level_index) || 0)] &&
+      bill.approval_chain[Math.max(0, Number(bill.approval_level_index) || 0)].approver_type === 'user')
+      ? 'Only the named approver(s) can act on this level'
+      : 'Your role cannot approve this level');
     return;
   }
   if (expenseRequireReceipt() && !expenseHasReceipt(bill)) {
@@ -18380,7 +18704,10 @@ function advanceExpenseCashLevel(cashId, opts) {
     }
   }
   if (!canActOnExpenseLevel(entry)) {
-    toast('Your role cannot approve this level');
+    toast((entry.approval_chain && entry.approval_chain[Math.max(0, Number(entry.approval_level_index) || 0)] &&
+        entry.approval_chain[Math.max(0, Number(entry.approval_level_index) || 0)].approver_type === 'user')
+      ? 'Only the named approver(s) can act on this level'
+      : 'Your role cannot approve this level');
     return;
   }
   if (expenseRequireReceipt() && !expenseHasReceipt(entry)) {
@@ -18686,8 +19013,10 @@ function openBillModal() {
   set('billDate', typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
   set('billDue', typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
   set('billNote', '');
+  try { fillBillPurchaseOptions(); } catch (_) {}
   if (typeof showModal === 'function') showModal('billModal');
-  else { m.classList.add('show'); m.style.display = 'grid'; try { initSearchableSelects(m); } catch (_) {} }
+  else { m.classList.add('show'); m.style.display = 'grid'; }
+  try { initSearchableSelects(m); } catch (_) {}
 }
 function closeBillModal() {
   if (typeof hideModal === 'function') hideModal('billModal');
@@ -18899,7 +19228,10 @@ function renderBooksPayables() {
         '<div style="font-size:12px;color:var(--muted)">' + cat + ' · bill ' + (b.date || '—') +
         ' · due ' + (due || '—') + (overdue && st === 'open' ? ' · <span style="color:var(--red-text)">overdue</span>' : '') +
         (b.note ? (' · ' + String(b.note).slice(0, 40).replace(/</g, '')) : '') +
-        (b.requested_by_email ? (' · by ' + String(b.requested_by_email).replace(/</g, '')) : '') + '</div>' +
+        (b.requested_by_email ? (' · by ' + String(b.requested_by_email).replace(/</g, '')) : '') +
+        (b.auto_posted ? ' · <span style="color:#166534">fast lane</span>' : '') +
+        (b.purchase_id ? (' · PO' + (b.match_status === 'variance' ? ' <span style="color:#92400e">variance ' + (b.match_variance_pct || '') + '%</span>' : (b.match_status === 'match' ? ' match' : ''))) : '') +
+        '</div>' +
         '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">' + actions + '</div></div>' +
         '<b>' + (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) + '</b>' +
         '</div>';
@@ -24516,8 +24848,13 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
   if (!(amount > 0)) { toast('Enter bill amount'); return; }
   let docs = [];
   try { docs = await readSupportingDocsFromInput('billDocs'); } catch (_) {}
-  const status = typeof expenseSubmitStatus === 'function' ? expenseSubmitStatus(amount) : 'open';
-  // Receipt required when this amount goes through approval queue
+  const supplier = (document.getElementById('billSupplier')?.value || '').trim() || 'Supplier';
+  const purchaseId = (document.getElementById('billPurchaseId')?.value || '').trim();
+  const path = typeof evaluateExpenseSubmitPath === 'function'
+    ? evaluateExpenseSubmitPath({ amount, docs, supplier, purchaseId })
+    : { status: (typeof expenseSubmitStatus === 'function' ? expenseSubmitStatus(amount) : 'open'), autoPosted: false, match: { status: 'no_po' }, reasons: [] };
+  const status = path.status || 'pending_approval';
+  // Receipt required when this amount goes through approval queue (not fast-lane)
   if (status !== 'open' && typeof expenseRequireReceipt === 'function' && expenseRequireReceipt() && !(docs && docs.length)) {
     toast('Attach a receipt or invoice before submitting to the accountant');
     return;
@@ -24525,7 +24862,7 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
   const actor = typeof expenseActorMeta === 'function' ? expenseActorMeta() : {};
   const bill = {
     id: crypto.randomUUID(),
-    supplier: (document.getElementById('billSupplier')?.value || '').trim() || 'Supplier',
+    supplier,
     category: (document.getElementById('billCategory')?.value || '').trim() || '',
     amount,
     tax: Number(document.getElementById('billTax')?.value || 0),
@@ -24535,6 +24872,12 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
     note: (document.getElementById('billNote')?.value || '').trim(),
     status,
     documents: docs,
+    purchase_id: purchaseId || null,
+    match_status: (path.match && path.match.status) || (purchaseId ? 'linked' : 'no_po'),
+    match_variance_pct: path.match ? path.match.variancePct : null,
+    match_po_total: path.match ? path.match.poTotal : null,
+    auto_posted: !!path.autoPosted,
+    auto_post_reasons: path.reasons || [],
     requested_by: actor.userId || null,
     requested_by_email: actor.email || null,
     requested_at: actor.at || new Date().toISOString()
@@ -24555,23 +24898,33 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
     }
   }
   try {
+    const matchBit = bill.purchase_id
+      ? (' · PO ' + (path.match && path.match.purchase_number ? path.match.purchase_number : '') + ' · ' + (bill.match_status || ''))
+      : '';
     appendBooksAudit(
-      status === 'open' ? 'bill.created' : 'bill.submitted',
+      path.autoPosted ? 'bill.auto_posted' : (status === 'open' ? 'bill.created' : 'bill.submitted'),
       'bill',
       bill.id,
-      (status === 'open' ? 'Bill accrued · ' : ('Bill submitted · ' + status + ' · ')) +
+      (path.autoPosted ? 'O3 auto-post · ' : (status === 'open' ? 'Bill accrued · ' : ('Bill submitted · ' + status + ' · '))) +
         (bill.supplier || 'Supplier') + ' · ' + (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
+        matchBit +
         ((bill.documents || []).length ? (' · ' + bill.documents.length + ' file(s)') : ''),
       null,
-      { id: bill.id, supplier: bill.supplier, amount: bill.amount, currency: bill.currency, status, documents: bill.documents || [] },
-      { documents: bill.documents || [], documentCount: (bill.documents || []).length, status }
+      { id: bill.id, supplier: bill.supplier, amount: bill.amount, currency: bill.currency, status, documents: bill.documents || [], purchase_id: bill.purchase_id, match_status: bill.match_status, auto_posted: bill.auto_posted },
+      { documents: bill.documents || [], documentCount: (bill.documents || []).length, status, auto_posted: !!path.autoPosted, reasons: path.reasons || [] }
     );
   } catch (_) {}
   save();
   try { queueBooksCloudSync(); } catch (_) {}
   closeBillModal();
   if (status === 'pending_review' || status === 'pending_approval') {
-    toast('Request submitted — track it on Home → Approvals → My requests');
+    const variance = path.match && path.match.status === 'variance';
+    toast(variance
+      ? 'Queued — PO amount variance ' + path.match.variancePct + '% (needs review)'
+      : 'Request submitted — track it on Home → Approvals → My requests');
+    try { refreshApprovalsUI(); renderDashboardApprovals(); } catch (_) {}
+  } else if (path.autoPosted) {
+    toast('Fast lane · posted to AP (policy). Pay when due from Money out.');
     try { refreshApprovalsUI(); renderDashboardApprovals(); } catch (_) {}
   } else {
     const apprOff = typeof approvalsEnabledExpenses === 'function' && !approvalsEnabledExpenses();
@@ -24580,16 +24933,19 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
       : 'Bill accrued · AP open · see Money out');
   }
   try { refreshApprovalsUI(); } catch (_) {}
-  try {
-    booksPage = 'ap';
-    booksTab = 'payables';
-    setBooksPage('ap', 'payables');
-    renderBooksPayables();
-  } catch (_) {
-    booksTab = 'payables';
-    booksView();
+  // Only jump to Books if the user can open it
+  if (typeof can === 'function' && can('books.view')) {
+    try {
+      booksPage = 'ap';
+      booksTab = 'payables';
+      setBooksPage('ap', 'payables');
+      renderBooksPayables();
+    } catch (_) {
+      booksTab = 'payables';
+      booksView();
+    }
   }
-  try { track('bill_accrued', { category: bill.category, status }); } catch (_) {}
+  try { track('bill_accrued', { category: bill.category, status, auto_posted: !!path.autoPosted }); } catch (_) {}
 });
 
 document.getElementById('btnExportBooks')?.addEventListener('click', exportBooksCsv);
@@ -26813,6 +27169,16 @@ async function loadTeamPanel() {
     const payload = typeof data === 'string' ? JSON.parse(data) : data;
     const members = payload?.members || [];
     const invites = payload?.invites || [];
+    // O3: cache for named-approver matrix picker
+    try {
+      db.teamMembersCache = members.map(m => ({
+        user_id: m.user_id,
+        email: m.email || '',
+        role: String(m.role || 'member').toLowerCase(),
+        name: m.name || m.full_name || m.email || 'Member'
+      }));
+      try { save(); } catch (_) {}
+    } catch (_) {}
 
     const myId = cloud.user?.id;
     const myMembership = members.find(m => m.user_id === myId);
