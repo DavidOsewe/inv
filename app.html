@@ -10085,6 +10085,9 @@ function expenseReviewRequired() {
 }
 /** Initial status when requester submits an expense/bill */
 function expenseSubmitStatus(amount) {
+  // SoD: anyone without books.write cannot post to the ledger — always queue
+  const canPost = typeof can === 'function' && can('books.write');
+  if (!canPost) return 'pending_approval';
   if (!approvalsEnabledExpenses()) return 'open';
   const levels = expenseLevelsForAmount(amount);
   if (!levels.length) return 'open';
@@ -18564,9 +18567,7 @@ function paySupplierBill(billId, opts) {
   // Prefer selected bank / cash equivalent, else default cash
   let bankId = opts.accountId || bill.payFromAccountId || '';
   if (!bankId) {
-    const banks = (typeof getCoa === 'function' ? getCoa() : []).filter(a =>
-      a && (a.id === '1000' || (typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a)))
-    );
+    const banks = typeof listPayFromAccounts === 'function' ? listPayFromAccounts() : [];
     bankId = (banks[0] && banks[0].id) || '1000';
   }
   const payDate = opts.date || (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
@@ -18727,15 +18728,17 @@ function renderBooksPayables() {
     return;
   }
 
-  // Bank options for pay-from
+  // Bank / cash options for pay-from (full cash & equivalents)
   let bankOpts = '';
   try {
-    const banks = (getCoa() || []).filter(a => a && (a.id === '1000' || (typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a))));
-    const list = banks.length ? banks : (getCoa() || []).filter(a => a.type === 'asset');
-    bankOpts = list.map(a => '<option value="' + a.id + '">' + a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>').join('');
+    const list = typeof listPayFromAccounts === 'function' ? listPayFromAccounts() : (getCoa() || []).filter(isCashEquivalentAccount);
+    bankOpts = list.map(a =>
+      '<option value="' + a.id + '">' + a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>'
+    ).join('');
   } catch (_) {
     bankOpts = '<option value="1000">1000 · Cash</option>';
   }
+  if (!bankOpts) bankOpts = '<option value="1000">1000 · Cash</option>';
 
   let html = '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;align-items:center">' +
     '<div style="padding:12px 16px;border:1px solid var(--line);border-radius:12px;min-width:140px">' +
@@ -18884,7 +18887,8 @@ function renderBooksPayables() {
           (isLastLvl ? 'Approve &amp; post' : 'Approve level') + '</button>';
         actions += '<button type="button" class="button small danger" data-reject-bill="' + b.id + '">Reject</button>';
       } else if (st === 'open' || st === 'approved') {
-        actions += '<select data-pay-from="' + b.id + '" style="font-size:12px;max-width:180px" title="Pay from">' + bankOpts + '</select>';
+        actions += '<select class="searchable" data-searchable="1" data-pay-from="' + b.id +
+          '" style="font-size:12px;min-width:160px;max-width:220px" title="Pay from account">' + bankOpts + '</select>';
         actions += '<button type="button" class="button small primary" data-pay-bill="' + b.id + '">Mark paid</button>';
       }
       actions += '<button type="button" class="button small danger" data-del-bill="' + b.id + '">Delete</button>';
@@ -18914,6 +18918,9 @@ function renderBooksPayables() {
   }
   el.innerHTML = html;
   document.getElementById('booksAddBillBtn')?.addEventListener('click', openBillModal);
+  try {
+    if (typeof initSearchableSelects === 'function') initSearchableSelects(el);
+  } catch (_) {}
 }
 
 
@@ -19596,9 +19603,35 @@ function fillPayDepositAccountSelect(selectedId) {
 function isCashEquivalentAccount(a) {
   if (!a || a.type !== 'asset') return false;
   if (a.fsLine === 'cash_and_equivalents' || a.cfSection === 'cash') return true;
-  if (a.id === '1000' || a.id === '1050') return true;
+  if (a.id === '1000' || a.id === '1050' || a.id === '1100' || a.id === '1200') return true;
   const n = String(a.name || '');
-  return /cash|bank|monie\s*point|opay|palm\s*pay|gt\s*bank|gtbank|access|zenith|uba|first\s*bank|fidelity|sterling|wema|wallet|till|petty|mfb|equivalent/i.test(n);
+  const id = String(a.id || '');
+  // Nigerian banks / wallets + generic cash
+  if (/cash|bank|monie|opay|palm|gtbank|gt\s*bank|access|zenith|uba|first\s*bank|fidelity|sterling|wema|wallet|till|petty|mfb|equivalent|pos\s*float|float|kuda|carbon|chipper/i.test(n)) return true;
+  // Asset codes in the typical cash/bank range (1000–1299)
+  if (/^1[0-2]\d{2}$/.test(id)) return true;
+  return false;
+}
+
+/** Accounts available when paying a bill / cash out — always includes full cash & bank set. */
+function listPayFromAccounts() {
+  const coa = (typeof getCoa === 'function' ? getCoa() : []) || [];
+  let banks = coa.filter(isCashEquivalentAccount);
+  if (banks.length <= 1) {
+    // Broader fallback: any current asset that looks monetary
+    const extra = coa.filter(a =>
+      a && a.type === 'asset' &&
+      !banks.some(b => b.id === a.id) &&
+      (/cash|bank|wallet|till|float|deposit|receivable/i.test(String(a.name || '')) || /^1\d{3}$/.test(String(a.id || '')))
+    );
+    banks = banks.concat(extra);
+  }
+  if (!banks.length) {
+    banks = coa.filter(a => a && a.type === 'asset').slice(0, 30);
+  }
+  if (!banks.length) banks = [{ id: '1000', name: 'Cash', type: 'asset' }];
+  // Stable sort by code
+  return banks.slice().sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
 }
 
 function cashEquivalentsTotal(bal) {
@@ -24540,8 +24573,12 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
   if (status === 'pending_review' || status === 'pending_approval') {
     toast('Request submitted — track it on Home → Approvals → My requests');
     try { refreshApprovalsUI(); renderDashboardApprovals(); } catch (_) {}
+  } else {
+    const apprOff = typeof approvalsEnabledExpenses === 'function' && !approvalsEnabledExpenses();
+    toast(apprOff
+      ? 'Bill posted to AP (expense approvals are OFF in Profile)'
+      : 'Bill accrued · AP open · see Money out');
   }
-  else toast('Bill accrued · AP open · see Money out');
   try { refreshApprovalsUI(); } catch (_) {}
   try {
     booksPage = 'ap';
