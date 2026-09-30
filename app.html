@@ -4104,7 +4104,7 @@ input:focus:not(:focus-visible) {
               <span><b>Pyramid</b> — line manager first</span>
             </label>
             <p class="section-sub" style="margin:0 0 12px 28px">
-              Set each person’s manager under Profile → Team → <b>Reports to</b> (or open the Team tab above).
+              Set each person’s manager under <b>Plan → Team → Reports to</b> (sidebar Plan, not Profile).
             </p>
             <div class="field" style="margin:0 0 10px">
               <label>Who can submit expense requests</label>
@@ -4162,14 +4162,14 @@ input:focus:not(:focus-visible) {
           <div data-appr-panel="teamhint" style="display:none;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
             <div style="font-size:12px;font-weight:700;margin-bottom:6px">Team · Reports to</div>
             <p class="section-sub" style="margin:0 0 10px">
-              Pyramid needs a line manager on each staff member. That lives on the <b>Team</b> block (same Profile page, higher up).
+              Pyramid needs a line manager on each staff member. Team lives under the left sidebar item <b>Plan</b> (not Profile) — scroll down past Feature access to the <b>Team</b> card.
             </p>
             <ol class="section-sub" style="margin:0 0 12px;padding-left:18px;line-height:1.5">
-              <li>Scroll up to <b>Team</b> (or use the button below).</li>
-              <li>On each member, set <b>Reports to</b> → their manager.</li>
-              <li>Come back here → Ladder → keep Pyramid on.</li>
+              <li>Open <b>Plan</b> in the left menu (or the button below).</li>
+              <li>Scroll to <b>Team</b> → on each member set <b>Reports to</b> → their manager.</li>
+              <li>Return to Profile → Approvals → Ladder → keep Pyramid on.</li>
             </ol>
-            <button type="button" class="button small" id="apprJumpTeam">Scroll to Team</button>
+            <button type="button" class="button small primary" id="apprJumpTeam">Open Plan → Team</button>
           </div>
         </div>
 
@@ -4995,6 +4995,38 @@ input:focus:not(:focus-visible) {
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
       <button type="button" class="button" id="journalActivityClose">Close</button>
       <button type="button" class="button small" id="journalActivityBackLedger" hidden>← Back to ledger</button>
+    </div>
+  </div>
+</div>
+<div class="modalback" id="expenseLedgerPickModal" style="z-index:90">
+  <div class="modal" style="max-width:440px">
+    <h2>Final approval — pick ledger</h2>
+    <p class="section-sub" style="margin-top:-4px">Choose the expense (or P&amp;L) account from your full chart of accounts. This posts the bill to AP.</p>
+    <div class="field">
+      <label>Ledger account</label>
+      <select id="expenseLedgerPickSelect" class="searchable" data-searchable="1"></select>
+    </div>
+    <div class="field">
+      <label>Or type account code</label>
+      <input id="expenseLedgerPickCode" placeholder="e.g. 5700" autocomplete="off">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button type="button" class="button primary" id="expenseLedgerPickOk">Post with this ledger</button>
+      <button type="button" class="button" id="expenseLedgerPickCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+<div class="modalback" id="expenseRejectModal" style="z-index:90">
+  <div class="modal" style="max-width:400px">
+    <h2>Reject request</h2>
+    <p class="section-sub" style="margin-top:-4px">Optional note for the requester (shown on their Home / My requests).</p>
+    <div class="field">
+      <label>Reason</label>
+      <input id="expenseRejectNote" placeholder="e.g. Missing receipt, wrong amount">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button type="button" class="button primary" id="expenseRejectOk">Reject</button>
+      <button type="button" class="button" id="expenseRejectCancel">Cancel</button>
     </div>
   </div>
 </div>
@@ -10231,13 +10263,24 @@ function initApprovalsTabsOnce() {
     btn.addEventListener('click', () => setApprovalsTab(btn.getAttribute('data-appr-tab')));
   });
   document.getElementById('apprJumpTeam')?.addEventListener('click', () => {
-    const team = document.getElementById('teamPanel') || document.getElementById('teamMembersList');
-    if (team) {
-      team.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      try { toast('Set Reports to on each member'); } catch (_) {}
-    } else {
-      toast('Open Team on this Profile page (scroll up)');
-    }
+    try {
+      if (typeof switchTo === 'function') switchTo('plan');
+      else {
+        const btn = document.querySelector('.nav button[data-view="plan"]');
+        if (btn) btn.click();
+      }
+    } catch (_) {}
+    setTimeout(() => {
+      const team = document.getElementById('teamSection')
+        || document.getElementById('teamPanel')
+        || document.getElementById('teamMembersList');
+      if (team) {
+        team.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        try { toast('Set Reports to on each member'); } catch (_) {}
+      } else {
+        toast('Open Plan in the sidebar, then scroll to Team');
+      }
+    }, 120);
   });
   setApprovalsTab('switches');
 }
@@ -18495,10 +18538,44 @@ function openJournalActivityModal(journalId, opts) {
     }
   }
 
+  // Approval chain from related bill / cash (or embedded in audit meta)
+  let chainHtml = '';
+  try {
+    let chain = null;
+    for (const e of events) {
+      const c = (e.meta && e.meta.approval_chain) || (e.after && e.after.approval_chain);
+      if (Array.isArray(c) && c.length) { chain = c; break; }
+    }
+    if (!chain && j && j.sourceKey) {
+      const sk = String(j.sourceKey);
+      if (sk.indexOf('bill:') >= 0) {
+        const billId = sk.replace(/^j:bill:/, '').replace(/^bill:/, '');
+        const b = (db.bills || []).find(x => x.id === billId);
+        if (b && Array.isArray(b.approval_chain)) chain = b.approval_chain;
+      }
+    }
+    if (chain && chain.length) {
+      chainHtml = '<div style="margin:10px 0 14px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">' +
+        '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Approval chain</div>' +
+        chain.map((lv, i) => {
+          const st = String(lv.status || 'pending');
+          const col = st === 'approved' ? '#15803d' : (st === 'rejected' ? '#b91c1c' : '#a16207');
+          return '<div style="font-size:12px;padding:3px 0;display:flex;gap:8px;flex-wrap:wrap">' +
+            '<span style="font-weight:700">L' + (lv.level != null ? lv.level : (i + 1)) + '</span>' +
+            '<span>' + String(lv.label || lv.role || 'Level').replace(/</g, '') + '</span>' +
+            '<span style="color:' + col + ';font-weight:600">' + st + '</span>' +
+            (lv.by_email ? ('<span style="color:var(--muted)">' + String(lv.by_email).replace(/</g, '') + '</span>') : '') +
+            (lv.at ? ('<span style="color:var(--muted)">' + String(lv.at).replace('T', ' ').slice(0, 16) + '</span>') : '') +
+            '</div>';
+        }).join('') + '</div>';
+    }
+  } catch (_) {}
+
   if (!events.length) {
-    body.innerHTML = '<p class="section-sub">No audit events for this journal yet (posted before audit trail was enabled, or audit not logging).</p>';
+    body.innerHTML = chainHtml +
+      '<p class="section-sub">No audit events for this journal yet (posted before audit trail was enabled, or audit not logging).</p>';
   } else {
-    body.innerHTML = events.map((e, idx) => {
+    body.innerHTML = chainHtml + events.map((e, idx) => {
       const docs = resolveSupportingDocs(e);
       return '<div class="audit-event" data-j-audit-idx="' + idx + '" style="padding:10px 0;border-bottom:1px solid var(--line)">' +
         '<div style="font-size:12px;color:var(--muted)">' + String(e.at || '').replace('T', ' ').slice(0, 19) +
@@ -18811,44 +18888,153 @@ function advanceExpenseBillLevel(billId, opts) {
     toast('Final level — use Approve & post to hit the ledger');
     return;
   }
+  const finishBillPost = (ledgerCode) => {
+    if (ledgerCode) bill.category = ledgerCode;
+    if (!bill.category || bill.category === 'other_out' || bill.category === '') {
+      toast('Ledger required to post');
+      return;
+    }
+    try {
+      accrueSupplierBill(bill);
+    } catch (err) {
+      toast('Could not post to ledger — ' + (err.message || 'error'));
+      return;
+    }
+    bill.status = 'open';
+    bill.approved_by = actor.userId;
+    bill.approved_by_email = actor.email;
+    bill.approved_at = actor.at;
+    bill.posted_by = actor.userId;
+    bill.posted_at = actor.at;
+    try {
+      const chainSnap = (bill.approval_chain || []).map(lv => ({
+        level: lv.level, label: lv.label, status: lv.status,
+        by_email: lv.by_email || null, at: lv.at || null, role: lv.role || null
+      }));
+      appendBooksAudit('bill.approved', 'bill', bill.id,
+        'Final approval · posted · ' + (bill.supplier || 'Supplier') + ' · ' +
+          (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
+          ' · ledger ' + (bill.category || '') +
+          ((bill.documents || []).length ? (' · ' + bill.documents.length + ' file(s)') : ''),
+        null,
+        {
+          status: bill.status,
+          category: bill.category,
+          documents: bill.documents || [],
+          documentCount: (bill.documents || []).length,
+          approval_chain: chainSnap
+        },
+        { status: bill.status, documents: bill.documents || [], approval_chain: chainSnap }
+      );
+    } catch (_) {}
+    save();
+    try { queueBooksCloudSync(); } catch (_) {}
+    toast('Posted to books · AP open');
+    try { refreshApprovalsUI(); } catch (_) {}
+    try { renderBooksPayables(); renderApprovalsInbox(); } catch (_) { booksView(); }
+  };
   if (!bill.category || bill.category === 'other_out' || bill.category === '') {
-    const coa = (typeof getCoa === 'function' ? getCoa() : []).filter(a => a.type === 'expense');
-    const hint = coa.slice(0, 8).map(a => a.id + ' ' + a.name).join('\n');
-    const picked = (prompt(
-      'Final approval — which expense ledger?\n\n' + (hint || '5700 Operating expense') + '\n\nAccount code:',
-      bill.category || '5700'
-    ) || '').trim();
-    if (!picked) { toast('Ledger required to post'); return; }
-    bill.category = picked;
-  }
-  try {
-    accrueSupplierBill(bill);
-  } catch (err) {
-    toast('Could not post to ledger — ' + (err.message || 'error'));
+    pickExpenseLedgerFromCoa(bill.category || '5700').then(code => {
+      if (!code) { toast('Ledger required to post'); return; }
+      finishBillPost(code);
+    });
     return;
   }
-  bill.status = 'open';
-  bill.approved_by = actor.userId;
-  bill.approved_by_email = actor.email;
-  bill.approved_at = actor.at;
-  bill.posted_by = actor.userId;
-  bill.posted_at = actor.at;
-  try {
-    appendBooksAudit('bill.approved', 'bill', bill.id,
-      'Final approval · posted · ' + (bill.supplier || 'Supplier') + ' · ' +
-        (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
-        ' · ledger ' + (bill.category || ''),
-      null, { status: bill.status, category: bill.category }, { status: bill.status });
-  } catch (_) {}
-  save();
-  try { queueBooksCloudSync(); } catch (_) {}
-  toast('Posted to books · AP open');
-  try { refreshApprovalsUI(); } catch (_) {}
-  try { renderBooksPayables(); renderApprovalsInbox(); } catch (_) { booksView(); }
+  finishBillPost(bill.category);
 }
 
 function approveExpenseBill(billId) {
   advanceExpenseBillLevel(billId, { postIfFinal: true });
+}
+
+/** Full COA picker for final expense post — no browser prompt. */
+function listExpenseCoaForPick() {
+  const coa = (typeof getCoa === 'function' ? getCoa() : []) || [];
+  // Prefer expense; also allow cost/other P&L so accountant is not boxed in
+  const expense = coa.filter(a => a && a.type === 'expense');
+  const extra = coa.filter(a => a && (a.type === 'income' || a.type === 'equity' || a.type === 'liability')
+    && !expense.some(e => e.id === a.id));
+  // Asset stock accounts sometimes used for inventory purchase
+  const stockish = coa.filter(a => a && a.type === 'asset' && /stock|inventory|cogs|1300|1400/i.test(String(a.id) + ' ' + (a.name || '')));
+  const merged = expense.concat(stockish).concat(extra);
+  if (!merged.length) return coa.slice();
+  return merged;
+}
+
+function pickExpenseLedgerFromCoa(defaultCode) {
+  return new Promise(resolve => {
+    const sel = document.getElementById('expenseLedgerPickSelect');
+    const codeInp = document.getElementById('expenseLedgerPickCode');
+    const ok = document.getElementById('expenseLedgerPickOk');
+    const cancel = document.getElementById('expenseLedgerPickCancel');
+    if (!sel || !ok) {
+      resolve((defaultCode || '5700').trim());
+      return;
+    }
+    const list = listExpenseCoaForPick();
+    const pref = String(defaultCode || '5700').trim();
+    sel.innerHTML = list.map(a =>
+      '<option value="' + String(a.id).replace(/"/g, '') + '"' +
+      (String(a.id) === pref ? ' selected' : '') + '>' +
+      String(a.id) + ' · ' + String(a.name || '').replace(/</g, '') +
+      (a.type ? (' · ' + a.type) : '') + '</option>'
+    ).join('');
+    if (codeInp) codeInp.value = pref;
+    try {
+      if (typeof initSearchableSelects === 'function') initSearchableSelects(document.getElementById('expenseLedgerPickModal'));
+    } catch (_) {}
+    const cleanup = (val) => {
+      ok.removeEventListener('click', onOk);
+      cancel && cancel.removeEventListener('click', onCancel);
+      try { hideModal('expenseLedgerPickModal'); } catch (_) {}
+      resolve(val);
+    };
+    const onOk = () => {
+      const typed = (codeInp && codeInp.value || '').trim();
+      const fromSel = (sel.value || '').trim();
+      let code = typed || fromSel;
+      if (typed && list.some(a => String(a.id) === typed)) code = typed;
+      else if (typed && !list.some(a => String(a.id) === typed)) {
+        // Allow any COA id that exists on full chart
+        const all = (typeof getCoa === 'function' ? getCoa() : []) || [];
+        if (all.some(a => String(a.id) === typed)) code = typed;
+        else if (fromSel) code = fromSel;
+      }
+      if (!code) { toast('Pick a ledger account'); return; }
+      cleanup(code);
+    };
+    const onCancel = () => cleanup('');
+    ok.addEventListener('click', onOk);
+    if (cancel) cancel.addEventListener('click', onCancel);
+    try { showModal('expenseLedgerPickModal'); } catch (_) {
+      const m = document.getElementById('expenseLedgerPickModal');
+      if (m) { m.classList.add('show'); m.style.display = 'grid'; }
+    }
+  });
+}
+
+function promptExpenseRejectNote() {
+  return new Promise(resolve => {
+    const inp = document.getElementById('expenseRejectNote');
+    const ok = document.getElementById('expenseRejectOk');
+    const cancel = document.getElementById('expenseRejectCancel');
+    if (!ok) { resolve(''); return; }
+    if (inp) inp.value = '';
+    const cleanup = (val) => {
+      ok.removeEventListener('click', onOk);
+      cancel && cancel.removeEventListener('click', onCancel);
+      try { hideModal('expenseRejectModal'); } catch (_) {}
+      resolve(val);
+    };
+    const onOk = () => cleanup((inp && inp.value || '').trim());
+    const onCancel = () => cleanup(null);
+    ok.addEventListener('click', onOk);
+    if (cancel) cancel.addEventListener('click', onCancel);
+    try { showModal('expenseRejectModal'); } catch (_) {
+      const m = document.getElementById('expenseRejectModal');
+      if (m) { m.classList.add('show'); m.style.display = 'grid'; }
+    }
+  });
 }
 
 function postPendingCashExpense(entry) {
@@ -18944,39 +19130,59 @@ function advanceExpenseCashLevel(cashId, opts) {
     return;
   }
   // Final — post cash expense journal
+  const finishCashPost = (ledgerCode) => {
+    if (ledgerCode) entry.offsetAccountId = ledgerCode;
+    if (!entry.offsetAccountId || entry.offsetAccountId === 'other_out') {
+      toast('Ledger required to post');
+      return;
+    }
+    try {
+      postPendingCashExpense(entry);
+    } catch (err) {
+      toast('Could not post to ledger — ' + (err.message || 'error'));
+      return;
+    }
+    entry.status = 'posted';
+    entry.approved_by = actor.userId;
+    entry.approved_by_email = actor.email;
+    entry.approved_at = actor.at;
+    entry.posted_by = actor.userId;
+    entry.posted_at = actor.at;
+    try {
+      const chainSnap = (entry.approval_chain || []).map(lv => ({
+        level: lv.level, label: lv.label, status: lv.status,
+        by_email: lv.by_email || null, at: lv.at || null, role: lv.role || null
+      }));
+      appendBooksAudit('cash.approved', 'cash', entry.id,
+        'Final approval · posted · ' + (entry.note || 'Cash') + ' · ' +
+          (typeof money === 'function' ? money(entry.amount, entry.currency) : entry.amount) +
+          ' · ledger ' + (entry.offsetAccountId || '') +
+          ((entry.documents || []).length ? (' · ' + entry.documents.length + ' file(s)') : ''),
+        null,
+        {
+          status: entry.status,
+          offsetAccountId: entry.offsetAccountId,
+          documents: entry.documents || [],
+          documentCount: (entry.documents || []).length,
+          approval_chain: chainSnap
+        },
+        { status: entry.status, documents: entry.documents || [], approval_chain: chainSnap }
+      );
+    } catch (_) {}
+    save();
+    try { queueBooksCloudSync(); } catch (_) {}
+    toast('Cash expense posted to books');
+    try { refreshApprovalsUI(); } catch (_) {}
+    try { renderApprovalsInbox(); renderBooksPayables(); booksView(); } catch (_) {}
+  };
   if (!entry.offsetAccountId || entry.offsetAccountId === 'other_out') {
-    const coa = (typeof getCoa === 'function' ? getCoa() : []).filter(a => a.type === 'expense');
-    const hint = coa.slice(0, 8).map(a => a.id + ' ' + a.name).join('\n');
-    const picked = (prompt(
-      'Final approval — which expense ledger?\n\n' + (hint || '5700 Operating expense') + '\n\nAccount code:',
-      entry.offsetAccountId || '5700'
-    ) || '').trim();
-    if (!picked) { toast('Ledger required to post'); return; }
-    entry.offsetAccountId = picked;
-  }
-  try {
-    postPendingCashExpense(entry);
-  } catch (err) {
-    toast('Could not post to ledger — ' + (err.message || 'error'));
+    pickExpenseLedgerFromCoa(entry.offsetAccountId || '5700').then(code => {
+      if (!code) { toast('Ledger required to post'); return; }
+      finishCashPost(code);
+    });
     return;
   }
-  entry.status = 'posted';
-  entry.approved_by = actor.userId;
-  entry.approved_by_email = actor.email;
-  entry.approved_at = actor.at;
-  entry.posted_by = actor.userId;
-  entry.posted_at = actor.at;
-  try {
-    appendBooksAudit('cash.approved', 'cash', entry.id,
-      'Final approval · posted · ' + (entry.note || 'Cash') + ' · ' +
-        (typeof money === 'function' ? money(entry.amount, entry.currency) : entry.amount),
-      null, { status: entry.status }, { status: entry.status });
-  } catch (_) {}
-  save();
-  try { queueBooksCloudSync(); } catch (_) {}
-  toast('Cash expense posted to books');
-  try { refreshApprovalsUI(); } catch (_) {}
-  try { renderApprovalsInbox(); renderBooksPayables(); booksView(); } catch (_) {}
+  finishCashPost(entry.offsetAccountId);
 }
 
 function rejectExpenseCash(cashId) {
@@ -18991,22 +19197,27 @@ function rejectExpenseCash(cashId) {
     toast('You cannot reject your own request this way — ask another approver');
     return;
   }
-  const note = (prompt('Rejection reason (optional)') || '').trim();
-  const actor = expenseActorMeta();
-  entry.status = 'rejected';
-  entry.rejected_by = actor.userId;
-  entry.rejected_at = actor.at;
-  entry.rejection_note = note || null;
-  try {
-    appendBooksAudit('cash.rejected', 'cash', entry.id,
-      'Rejected · ' + (entry.note || 'Cash') + (note ? (' · ' + note) : ''),
-      null, { status: entry.status, note }, { status: entry.status });
-  } catch (_) {}
-  save();
-  try { queueBooksCloudSync(); } catch (_) {}
-  toast('Cash expense rejected');
-  try { refreshApprovalsUI(); } catch (_) {}
-  try { renderApprovalsInbox(); renderBooksPayables(); } catch (_) {}
+  promptExpenseRejectNote().then(note => {
+    if (note === null) return; // cancelled
+    const actor = expenseActorMeta();
+    entry.status = 'rejected';
+    entry.rejected_by = actor.userId;
+    entry.rejected_at = actor.at;
+    entry.rejection_note = note || null;
+    try {
+      appendBooksAudit('cash.rejected', 'cash', entry.id,
+        'Rejected · ' + (entry.note || 'Cash') + (note ? (' · ' + note) : ''),
+        null,
+        { status: entry.status, note, documents: entry.documents || [] },
+        { status: entry.status, documents: entry.documents || [] }
+      );
+    } catch (_) {}
+    save();
+    try { queueBooksCloudSync(); } catch (_) {}
+    toast('Cash expense rejected');
+    try { refreshApprovalsUI(); } catch (_) {}
+    try { renderApprovalsInbox(); renderBooksPayables(); } catch (_) {}
+  });
 }
 
 function rejectExpenseBill(billId) {
@@ -19017,22 +19228,27 @@ function rejectExpenseBill(billId) {
     toast('Not pending');
     return;
   }
-  const note = (prompt('Rejection reason (optional)') || '').trim();
-  const actor = expenseActorMeta();
-  bill.status = 'rejected';
-  bill.rejected_by = actor.userId;
-  bill.rejected_at = actor.at;
-  bill.rejection_note = note || null;
-  try {
-    appendBooksAudit('bill.rejected', 'bill', bill.id,
-      'Rejected · ' + (bill.supplier || 'Supplier') + (note ? (' · ' + note) : ''),
-      null, { status: bill.status, note }, { status: bill.status });
-  } catch (_) {}
-  save();
-  try { queueBooksCloudSync(); } catch (_) {}
-  toast('Expense rejected');
-  try { refreshApprovalsUI(); } catch (_) {}
-  try { renderBooksPayables(); } catch (_) { booksView(); }
+  promptExpenseRejectNote().then(note => {
+    if (note === null) return;
+    const actor = expenseActorMeta();
+    bill.status = 'rejected';
+    bill.rejected_by = actor.userId;
+    bill.rejected_at = actor.at;
+    bill.rejection_note = note || null;
+    try {
+      appendBooksAudit('bill.rejected', 'bill', bill.id,
+        'Rejected · ' + (bill.supplier || 'Supplier') + (note ? (' · ' + note) : ''),
+        null,
+        { status: bill.status, note, documents: bill.documents || [] },
+        { status: bill.status, documents: bill.documents || [] }
+      );
+    } catch (_) {}
+    save();
+    try { queueBooksCloudSync(); } catch (_) {}
+    toast('Expense rejected');
+    try { refreshApprovalsUI(); } catch (_) {}
+    try { renderBooksPayables(); } catch (_) { booksView(); }
+  });
 }
 
 function accrueSupplierBill(bill) {
@@ -19067,7 +19283,8 @@ function accrueSupplierBill(bill) {
     memo: 'Bill · ' + (bill.supplier || 'Supplier') + (bill.note ? ' · ' + bill.note : ''),
     source: 'bill_accrual',
     sourceKey: 'j:' + key,
-    lines
+    lines,
+    documents: Array.isArray(bill.documents) ? bill.documents : []
   });
 }
 
