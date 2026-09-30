@@ -4058,88 +4058,119 @@ input:focus:not(:focus-visible) {
           <div class="referral-link-box" id="profileReferralUrl">Sign in to generate your referral link.</div>
         </div>
 
-        <div class="field" style="margin-top:18px">
+        <div class="field" style="margin-top:18px" id="approvalsSetupBlock">
           <label style="font-weight:700">Approvals</label>
-          <p class="section-sub" style="margin:4px 0 10px">Require a manager/owner to approve stock moves and purchase orders before they take effect.</p>
-          <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
-            <input type="checkbox" data-p="requireTransferApproval" id="requireTransferApproval">
-            <span>Require approval for stock transfers</span>
-          </label>
-          <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
-            <input type="checkbox" data-p="requirePurchaseApproval" id="requirePurchaseApproval">
-            <span>Require approval for purchase orders</span>
-          </label>
-          <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
-            <input type="checkbox" data-p="requireExpenseApproval" id="requireExpenseApproval">
-            <span>Require approval for expenses &amp; supplier bills</span>
-          </label>
-          <div id="expenseApprovalRolesBox" style="margin:10px 0 4px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
-            <div style="font-size:12px;font-weight:700;margin-bottom:8px">Odoo-style amount matrix (expense / bills)</div>
-            <p class="section-sub" style="margin:0 0 10px">
-              Sequential levels by amount. A request only needs levels where amount ≥ that level’s minimum.
-              The <b>last</b> required level posts to the ledger (accountant). Requesters never post journals.
+          <p class="section-sub" style="margin:4px 0 8px">
+            Expense path: <b>line manager</b> → <b>amount levels</b> → last step posts books.
+            Optional fast lane skips the queue for small safe bills.
+          </p>
+          <div id="approvalsTabBar" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px">
+            <button type="button" class="button small primary" data-appr-tab="switches">1 · Switches</button>
+            <button type="button" class="button small" data-appr-tab="ladder">2 · Ladder</button>
+            <button type="button" class="button small" data-appr-tab="fastlane">3 · Fast lane</button>
+            <button type="button" class="button small" data-appr-tab="teamhint">Team · Reports to</button>
+          </div>
+
+          <!-- Tab 1: master switches -->
+          <div data-appr-panel="switches">
+            <p class="section-sub" style="margin:0 0 10px">Turn on what needs a human sign-off before it takes effect.</p>
+            <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
+              <input type="checkbox" data-p="requireTransferApproval" id="requireTransferApproval">
+              <span>Stock transfers</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
+              <input type="checkbox" data-p="requirePurchaseApproval" id="requirePurchaseApproval">
+              <span>Purchase orders</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
+              <input type="checkbox" data-p="requireExpenseApproval" id="requireExpenseApproval">
+              <span>Expenses &amp; supplier bills <b>(ladder applies here)</b></span>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
+              <input type="checkbox" data-p="lowStockAlertsEnabled" id="lowStockAlertsEnabled">
+              <span>Low-stock alerts (toast + badge)</span>
+            </label>
+          </div>
+
+          <!-- Tab 2: pyramid + matrix -->
+          <div data-appr-panel="ladder" id="expenseApprovalRolesBox" style="display:none;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
+            <div style="font-size:12px;font-weight:700;margin-bottom:6px">Expense ladder</div>
+            <p class="section-sub" style="margin:0 0 12px">
+              <b>Step A</b> — line manager (if Pyramid is on and Team has Reports to).<br>
+              <b>Step B</b> — amount levels below. Last level posts the journal.
+            </p>
+            <label style="display:flex;align-items:center;gap:10px;margin:0 0 8px;cursor:pointer">
+              <input type="checkbox" data-p="expensePyramidLineManager" id="expensePyramidLineManager" checked>
+              <span><b>Pyramid</b> — line manager first</span>
+            </label>
+            <p class="section-sub" style="margin:0 0 12px 28px">
+              Set each person’s manager under Profile → Team → <b>Reports to</b> (or open the Team tab above).
             </p>
             <div class="field" style="margin:0 0 10px">
-              <label>Requester (can submit)</label>
+              <label>Who can submit expense requests</label>
               <select id="expenseRequesterRole" data-p="expenseRequesterRole">
                 <option value="member">Member + above</option>
                 <option value="manager">Manager + owner only</option>
                 <option value="owner">Owner only</option>
               </select>
             </div>
+            <div style="font-size:12px;font-weight:700;margin:4px 0 8px">Amount levels (after line manager)</div>
             <div id="expenseMatrixLevels" style="display:flex;flex-direction:column;gap:8px"></div>
             <button type="button" class="button small" id="expenseMatrixAddLevel" style="margin-top:8px">+ Add level</button>
             <p class="section-sub" style="margin:10px 0 0">
               Example: Level 1 min 0 · Manager · Level 2 min 50,000 · Owner.
               ₦30k stops after manager; ₦120k needs manager then owner (posts).
             </p>
-            <label style="display:flex;align-items:center;gap:10px;margin:10px 0 0;cursor:pointer">
+            <label style="display:flex;align-items:center;gap:10px;margin:12px 0 0;cursor:pointer">
               <input type="checkbox" data-p="expenseBlockSelfApprove" id="expenseBlockSelfApprove" checked>
-              <span>Block self-approve (cannot approve your own request)</span>
+              <span>Block self-approve</span>
             </label>
             <label style="display:flex;align-items:center;gap:10px;margin:8px 0 0;cursor:pointer">
               <input type="checkbox" data-p="expenseRequireReceipt" id="expenseRequireReceipt" checked>
-              <span>Require receipt/attachment when approval is required</span>
+              <span>Require receipt when approval is on</span>
             </label>
-            <label style="display:flex;align-items:center;gap:10px;margin:8px 0 0;cursor:pointer">
-              <input type="checkbox" data-p="expensePyramidLineManager" id="expensePyramidLineManager" checked>
-              <span>Pyramid · line manager first (Reports to on Team)</span>
-            </label>
-            <p class="section-sub" style="margin:4px 0 0 28px">
-              When on, every request starts with the requester’s manager, then the amount matrix.
-              Set <b>Reports to</b> under Profile → Team.
-            </p>
-            <div style="margin:14px 0 0;padding-top:12px;border-top:1px dashed var(--line)">
-              <div style="font-size:12px;font-weight:700;margin-bottom:6px">AP automation (fast lane)</div>
-              <p class="section-sub" style="margin:0 0 10px">
-                Routine bills that pass policy can post to AP without sitting in the matrix.
-                Exceptions and higher amounts still use the levels above.
-              </p>
-              <div class="field" style="margin:0 0 8px">
-                <label>Auto-post max amount (0 = off)</label>
-                <input type="number" min="0" step="1" id="expenseAutoPostMax" data-p="expenseAutoPostMax" placeholder="e.g. 25000">
-              </div>
-              <label style="display:flex;align-items:center;gap:10px;margin:6px 0;cursor:pointer">
-                <input type="checkbox" data-p="expenseAutoPostRequireReceipt" id="expenseAutoPostRequireReceipt" checked>
-                <span>Auto-post only when a receipt is attached</span>
-              </label>
-              <label style="display:flex;align-items:center;gap:10px;margin:6px 0;cursor:pointer">
-                <input type="checkbox" data-p="expenseAutoPostKnownSupplier" id="expenseAutoPostKnownSupplier" checked>
-                <span>Auto-post only for known suppliers (prior bill or supplier list)</span>
-              </label>
-              <div class="field" style="margin:8px 0 0">
-                <label>PO match tolerance %</label>
-                <input type="number" min="0" max="25" step="0.5" id="expensePoMatchTolerancePct" data-p="expensePoMatchTolerancePct" value="5" placeholder="5">
-              </div>
-              <p class="section-sub" style="margin:8px 0 0">
-                Link a bill to a PO on submit. Within tolerance → can use fast lane; over tolerance → stays in queue with a variance flag.
-              </p>
-            </div>
           </div>
-          <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
-            <input type="checkbox" data-p="lowStockAlertsEnabled" id="lowStockAlertsEnabled">
-            <span>Automated low-stock alerts (toast + badge when stock hits threshold)</span>
-          </label>
+
+          <!-- Tab 3: fast lane -->
+          <div data-appr-panel="fastlane" style="display:none;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
+            <div style="font-size:12px;font-weight:700;margin-bottom:6px">Fast lane (optional)</div>
+            <p class="section-sub" style="margin:0 0 10px">
+              Leave max at <b>0</b> until the ladder feels natural. Then allow tiny routine bills to post without the queue.
+            </p>
+            <div class="field" style="margin:0 0 8px">
+              <label>Auto-post max amount (0 = off)</label>
+              <input type="number" min="0" step="1" id="expenseAutoPostMax" data-p="expenseAutoPostMax" placeholder="e.g. 25000">
+            </div>
+            <label style="display:flex;align-items:center;gap:10px;margin:6px 0;cursor:pointer">
+              <input type="checkbox" data-p="expenseAutoPostRequireReceipt" id="expenseAutoPostRequireReceipt" checked>
+              <span>Only with a receipt</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;margin:6px 0;cursor:pointer">
+              <input type="checkbox" data-p="expenseAutoPostKnownSupplier" id="expenseAutoPostKnownSupplier" checked>
+              <span>Only known suppliers</span>
+            </label>
+            <div class="field" style="margin:8px 0 0">
+              <label>PO match tolerance %</label>
+              <input type="number" min="0" max="25" step="0.5" id="expensePoMatchTolerancePct" data-p="expensePoMatchTolerancePct" value="5" placeholder="5">
+            </div>
+            <p class="section-sub" style="margin:8px 0 0">
+              Bills linked to a PO within tolerance can use fast lane; over tolerance stay in the queue.
+            </p>
+          </div>
+
+          <!-- Tab 4: team reports-to hint + jump -->
+          <div data-appr-panel="teamhint" style="display:none;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
+            <div style="font-size:12px;font-weight:700;margin-bottom:6px">Team · Reports to</div>
+            <p class="section-sub" style="margin:0 0 10px">
+              Pyramid needs a line manager on each staff member. That lives on the <b>Team</b> block (same Profile page, higher up).
+            </p>
+            <ol class="section-sub" style="margin:0 0 12px;padding-left:18px;line-height:1.5">
+              <li>Scroll up to <b>Team</b> (or use the button below).</li>
+              <li>On each member, set <b>Reports to</b> → their manager.</li>
+              <li>Come back here → Ladder → keep Pyramid on.</li>
+            </ol>
+            <button type="button" class="button small" id="apprJumpTeam">Scroll to Team</button>
+          </div>
         </div>
 
         <button class="button primary" id="saveProfile">Save profile</button>
@@ -10161,10 +10192,54 @@ function expenseApprovalThreshold() {
   return mins.length ? Math.min(...mins) : 0;
 }
 function syncExpenseApprovalRolesVisibility() {
-  const box = document.getElementById('expenseApprovalRolesBox');
-  const on = !!(document.getElementById('requireExpenseApproval')?.checked
+  // Ladder panel is shown via approvals tabs — not forced visible by the expense toggle alone.
+  try { initApprovalsTabsOnce(); } catch (_) {}
+}
+
+let _approvalsTab = 'switches';
+function setApprovalsTab(tab) {
+  const allowed = ['switches', 'ladder', 'fastlane', 'teamhint'];
+  _approvalsTab = allowed.includes(tab) ? tab : 'switches';
+  const expenseOn = !!(document.getElementById('requireExpenseApproval')?.checked
     || (db.profile && db.profile.requireExpenseApproval));
-  if (box) box.style.display = on ? '' : 'none';
+  document.querySelectorAll('[data-appr-tab]').forEach(btn => {
+    const t = btn.getAttribute('data-appr-tab');
+    const isOn = t === _approvalsTab;
+    btn.classList.toggle('primary', isOn);
+  });
+  document.querySelectorAll('[data-appr-panel]').forEach(panel => {
+    const t = panel.getAttribute('data-appr-panel');
+    let show = t === _approvalsTab;
+    // Ladder tab still accessible so users can configure before enabling expenses;
+    // show a soft note via existing copy. Always allow viewing.
+    panel.style.display = show ? '' : 'none';
+  });
+  if (_approvalsTab === 'ladder') {
+    try { renderExpenseMatrixEditor(); } catch (_) {}
+  }
+  void expenseOn;
+}
+
+function initApprovalsTabsOnce() {
+  const bar = document.getElementById('approvalsTabBar');
+  if (!bar || bar.dataset.wired === '1') {
+    setApprovalsTab(_approvalsTab || 'switches');
+    return;
+  }
+  bar.dataset.wired = '1';
+  bar.querySelectorAll('[data-appr-tab]').forEach(btn => {
+    btn.addEventListener('click', () => setApprovalsTab(btn.getAttribute('data-appr-tab')));
+  });
+  document.getElementById('apprJumpTeam')?.addEventListener('click', () => {
+    const team = document.getElementById('teamPanel') || document.getElementById('teamMembersList');
+    if (team) {
+      team.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      try { toast('Set Reports to on each member'); } catch (_) {}
+    } else {
+      toast('Open Team on this Profile page (scroll up)');
+    }
+  });
+  setApprovalsTab('switches');
 }
 function refreshApprovalsUI() {
   try { renderDashboardApprovals(); } catch (_) {}
@@ -16695,6 +16770,7 @@ function profile() {
     }
     e.value = val;
   });
+  try { initApprovalsTabsOnce(); } catch (_) {}
   try { syncExpenseApprovalRolesVisibility(); } catch (_) {}
   try { renderExpenseMatrixEditor(); } catch (_) {}
   $('#logoPreview').src = db.profile.logo ||
@@ -25907,8 +25983,9 @@ function saveProfileField(el) {
   if (key === 'requireExpenseApproval') {
     try { syncExpenseApprovalRolesVisibility(); } catch (_) {}
     try {
+      if (val && typeof setApprovalsTab === 'function') setApprovalsTab('ladder');
       toast(val
-        ? 'Expense approval ON — requests go to accountant queue'
+        ? 'Expense approval ON — open Ladder tab for pyramid + levels'
         : 'Expense approval OFF — bills post to ledger immediately');
     } catch (_) {}
   }
