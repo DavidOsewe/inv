@@ -4101,8 +4101,16 @@ input:focus:not(:focus-visible) {
               <input type="checkbox" data-p="expenseRequireReceipt" id="expenseRequireReceipt" checked>
               <span>Require receipt/attachment when approval is required</span>
             </label>
+            <label style="display:flex;align-items:center;gap:10px;margin:8px 0 0;cursor:pointer">
+              <input type="checkbox" data-p="expensePyramidLineManager" id="expensePyramidLineManager" checked>
+              <span>Pyramid · line manager first (Reports to on Team)</span>
+            </label>
+            <p class="section-sub" style="margin:4px 0 0 28px">
+              When on, every request starts with the requester’s manager, then the amount matrix.
+              Set <b>Reports to</b> under Profile → Team.
+            </p>
             <div style="margin:14px 0 0;padding-top:12px;border-top:1px dashed var(--line)">
-              <div style="font-size:12px;font-weight:700;margin-bottom:6px">O3 · AP automation (fast lane)</div>
+              <div style="font-size:12px;font-weight:700;margin-bottom:6px">AP automation (fast lane)</div>
               <p class="section-sub" style="margin:0 0 10px">
                 Routine bills that pass policy can post to AP without sitting in the matrix.
                 Exceptions and higher amounts still use the levels above.
@@ -9885,7 +9893,8 @@ const APPROVAL_SETTING_KEYS = [
   'requireTransferApproval', 'requirePurchaseApproval', 'requireExpenseApproval',
   'expenseRequesterRole', 'expenseBlockSelfApprove', 'expenseRequireReceipt',
   'expenseAutoPostMax', 'expenseAutoPostRequireReceipt', 'expenseAutoPostKnownSupplier',
-  'expensePoMatchTolerancePct'
+  'expensePoMatchTolerancePct',
+  'expensePyramidLineManager'
 ];
 
 /** Default Odoo-style sequential levels (min_amount triggers inclusion). */
@@ -10400,10 +10409,71 @@ function fillBillPurchaseOptions() {
   sel.innerHTML = opts.join('');
   try { if (typeof initSearchableSelects === 'function') initSearchableSelects(sel.parentElement || document); } catch (_) {}
 }
-/** Attach matrix chain metadata on submit */
+function pyramidLineManagerEnabled() {
+  restoreApprovalSettingsMirror();
+  if (!db.profile) return true;
+  if (db.profile.expensePyramidLineManager === false) return false;
+  return true;
+}
+
+/** Map user_id → manager user_id (from profile + team cache). */
+function getMemberReportsToMap() {
+  const map = Object.assign({}, (db.profile && db.profile.memberReportsTo) || {});
+  try {
+    (db.teamMembersCache || []).forEach(m => {
+      if (m.user_id && m.reports_to && map[m.user_id] === undefined) {
+        map[m.user_id] = m.reports_to;
+      }
+    });
+  } catch (_) {}
+  return map;
+}
+
+function resolveLineManagerForUser(userId, email) {
+  const map = getMemberReportsToMap();
+  const team = getTeamMembersForApprovals();
+  let mgrId = null;
+  if (userId && map[userId]) mgrId = map[userId];
+  if (!mgrId && email) {
+    const me = team.find(t => String(t.email || '').toLowerCase() === String(email).toLowerCase());
+    if (me && me.user_id && map[me.user_id]) mgrId = map[me.user_id];
+    if (me && me.reports_to) mgrId = me.reports_to;
+  }
+  if (!mgrId) return null;
+  // Prevent self as manager
+  if (userId && String(mgrId) === String(userId)) return null;
+  const mgr = team.find(t => String(t.user_id) === String(mgrId));
+  return {
+    user_id: String(mgrId),
+    email: (mgr && mgr.email) || '',
+    name: (mgr && (mgr.name || mgr.email)) || String(mgrId).slice(0, 8)
+  };
+}
+
+function buildLineManagerLevel(requesterUserId, requesterEmail) {
+  const mgr = resolveLineManagerForUser(requesterUserId, requesterEmail);
+  if (!mgr) return null;
+  return {
+    level: 0,
+    min_amount: 0,
+    role: 'manager',
+    label: 'Line manager',
+    approver_type: 'user',
+    approver_user_ids: [mgr.user_id],
+    approver_emails: mgr.email ? [String(mgr.email).toLowerCase()] : [],
+    waiting_on: mgr.name || mgr.email || 'Line manager',
+    pyramid: true,
+    status: 'pending',
+    at: null,
+    by: null,
+    by_email: null
+  };
+}
+
+/** Attach matrix chain metadata on submit (pyramid prepends line manager). */
 function attachExpenseApprovalChain(entity, amount) {
-  const levels = expenseLevelsForAmount(amount);
-  entity.approval_chain = levels.map(l => ({
+  const matrix = expenseLevelsForAmount(amount);
+  let chain = matrix.map(l => ({
     level: l.level,
     min_amount: l.min_amount,
     role: l.role,
@@ -10412,14 +10482,68 @@ function attachExpenseApprovalChain(entity, amount) {
     approver_user_ids: (l.approver_user_ids || []).slice(),
     approver_emails: (l.approver_emails || []).slice(),
     waiting_on: levelApproverSummary(l),
+    pyramid: false,
     status: 'pending',
     at: null,
     by: null,
     by_email: null
   }));
+
+  if (pyramidLineManagerEnabled()) {
+    const actor = entity.requested_by || entity.requested_by_user_id
+      ? { userId: entity.requested_by || entity.requested_by_user_id, email: entity.requested_by_email }
+      : expenseActorMeta();
+    const lm = buildLineManagerLevel(actor.userId || actor.user_id, actor.email);
+    if (lm) {
+      // Skip if first matrix level is already the same named person
+      const first = chain[0];
+      const same =
+        first && first.approver_type === 'user' &&
+        (first.approver_user_ids || []).some(id => String(id) === String(lm.approver_user_ids[0]));
+      if (!same) chain = [lm].concat(chain);
+    }
+  }
+
+  // Re-number sequential display levels 1..n while keeping matrix level ids
+  chain.forEach((c, i) => {
+    if (c.pyramid) c.level = 0;
+    c.seq = i + 1;
+  });
+
+  entity.approval_chain = chain;
   entity.approval_level_index = 0;
-  entity.approval_level = levels[0] ? levels[0].level : 1;
+  entity.approval_level = chain[0] ? chain[0].level : 1;
   return entity;
+}
+
+async function setMemberReportsTo(userId, managerUserId) {
+  if (!db.profile) db.profile = {};
+  if (!db.profile.memberReportsTo || typeof db.profile.memberReportsTo !== 'object') {
+    db.profile.memberReportsTo = {};
+  }
+  if (!managerUserId) delete db.profile.memberReportsTo[userId];
+  else db.profile.memberReportsTo[userId] = managerUserId;
+  try {
+    (db.teamMembersCache || []).forEach(m => {
+      if (String(m.user_id) === String(userId)) m.reports_to = managerUserId || null;
+    });
+  } catch (_) {}
+  save();
+  // Best-effort cloud column (run team_reports_to_v1.sql)
+  try {
+    if (cloud.client && cloud.organizationId && userId) {
+      const { error } = await cloud.client
+        .from('organization_members')
+        .update({ reports_to: managerUserId || null })
+        .eq('organization_id', cloud.organizationId)
+        .eq('user_id', userId);
+      if (error && !/reports_to|column/i.test(String(error.message || error))) {
+        console.warn('reports_to cloud', error);
+      }
+    }
+  } catch (e) {
+    console.warn('reports_to save', e);
+  }
 }
 function expenseActorMeta() {
   try {
@@ -16560,6 +16684,7 @@ function profile() {
       if (key === 'expenseRequireReceipt' && val === undefined) val = true;
       if (key === 'expenseAutoPostRequireReceipt' && val === undefined) val = true;
       if (key === 'expenseAutoPostKnownSupplier' && val === undefined) val = true;
+      if (key === 'expensePyramidLineManager' && val === undefined) val = true;
       e.checked = !!val;
       return;
     }
@@ -27169,13 +27294,15 @@ async function loadTeamPanel() {
     const payload = typeof data === 'string' ? JSON.parse(data) : data;
     const members = payload?.members || [];
     const invites = payload?.invites || [];
-    // O3: cache for named-approver matrix picker
+    // Cache for named-approver picker + pyramid reports_to
     try {
+      const rt = (db.profile && db.profile.memberReportsTo) || {};
       db.teamMembersCache = members.map(m => ({
         user_id: m.user_id,
         email: m.email || '',
         role: String(m.role || 'member').toLowerCase(),
-        name: m.name || m.full_name || m.email || 'Member'
+        name: m.name || m.full_name || m.email || 'Member',
+        reports_to: rt[m.user_id] || m.reports_to || null
       }));
       try { save(); } catch (_) {}
     } catch (_) {}
@@ -27214,15 +27341,30 @@ async function loadTeamPanel() {
         membersEl.innerHTML = '<div class="team-empty">No members yet.</div>';
       } else {
         ensurePosDb();
-        // Load default_location_id for members (optional column)
+        // Load default_location_id + reports_to for members (optional columns)
         let locByUser = {};
+        let reportsByUser = Object.assign({}, (db.profile && db.profile.memberReportsTo) || {});
         try {
           const { data: memRows } = await cloud.client
             .from('organization_members')
-            .select('user_id, default_location_id')
+            .select('user_id, default_location_id, reports_to')
             .eq('organization_id', organizationId);
-          (memRows || []).forEach(r => { locByUser[r.user_id] = r.default_location_id; });
-        } catch (e) { console.warn('member locations', e); }
+          (memRows || []).forEach(r => {
+            locByUser[r.user_id] = r.default_location_id;
+            if (r.reports_to) reportsByUser[r.user_id] = r.reports_to;
+          });
+        } catch (e) {
+          // reports_to column may be missing until team_reports_to_v1.sql
+          try {
+            const { data: memRows } = await cloud.client
+              .from('organization_members')
+              .select('user_id, default_location_id')
+              .eq('organization_id', organizationId);
+            (memRows || []).forEach(r => { locByUser[r.user_id] = r.default_location_id; });
+          } catch (e2) { console.warn('member locations', e2); }
+        }
+        if (!db.profile) db.profile = {};
+        db.profile.memberReportsTo = reportsByUser;
         const locOpts = db.locations.filter(l => l.active !== false)
           .map(l => ({ id: l.id, cloudId: l.cloudId, name: l.name }));
         const rows = members.map(m => {
@@ -27246,12 +27388,28 @@ async function loadTeamPanel() {
           } else if (localLoc) {
             locSelect = `<span class="team-row-sub" title="Default location">${localLoc.name}</span>`;
           }
+          // Pyramid: Reports to
+          let reportsSelect = '';
+          if (isOwner || (typeof can === 'function' && can('team.manage'))) {
+            const curMgr = reportsByUser[m.user_id] || '';
+            const mgrOpts = '<option value="">— No manager —</option>' + members
+              .filter(o => o.user_id && o.user_id !== m.user_id)
+              .map(o => {
+                const sel = String(curMgr) === String(o.user_id) ? ' selected' : '';
+                return `<option value="${o.user_id}"${sel}>${String(o.email || o.user_id).replace(/</g, '')}</option>`;
+              }).join('');
+            reportsSelect = `<select class="button small" data-member-reports-to="${m.user_id}" title="Line manager (pyramid)" style="max-width:160px">${mgrOpts}</select>`;
+          } else if (reportsByUser[m.user_id]) {
+            const mgr = members.find(o => String(o.user_id) === String(reportsByUser[m.user_id]));
+            reportsSelect = `<span class="team-row-sub" title="Reports to">${mgr ? (mgr.email || 'Manager') : 'Manager'}</span>`;
+          }
           return `<div class="team-row">
             <div class="team-row-main">
               <b title="${email}">${email}</b>
               ${sub ? `<span class="team-row-sub">${sub}</span>` : ''}
             </div>
-            <div class="team-row-actions">
+            <div class="team-row-actions" style="flex-wrap:wrap">
+              ${reportsSelect}
               ${locSelect}
               <span class="${roleClass}">${role}</span>
               ${removeBtn}
@@ -27259,7 +27417,7 @@ async function loadTeamPanel() {
           </div>`;
         }).join('');
         membersEl.innerHTML = `<div class="team-block"><div class="team-block-title">Members · ${members.length}</div>
-          <p class="team-help" style="margin:0 0 8px">Default location scopes POS for cashiers (outlet staff).</p>
+          <p class="team-help" style="margin:0 0 8px">Reports to = line manager for expense pyramid. Default location scopes POS for cashiers.</p>
           ${rows}</div>`;
         membersEl.querySelectorAll('[data-member-location]').forEach(sel => {
           sel.addEventListener('change', async () => {
@@ -27270,6 +27428,18 @@ async function loadTeamPanel() {
               toast(lid ? 'Default location saved' : 'Location cleared');
             } catch (err) {
               toast(err.message || 'Could not save location — run pos_member_location.sql?');
+            }
+          });
+        });
+        membersEl.querySelectorAll('[data-member-reports-to]').forEach(sel => {
+          sel.addEventListener('change', async () => {
+            const uid = sel.getAttribute('data-member-reports-to');
+            const mgr = sel.value || null;
+            try {
+              await setMemberReportsTo(uid, mgr);
+              toast(mgr ? 'Line manager saved' : 'Line manager cleared');
+            } catch (err) {
+              toast(err.message || 'Could not save reports-to');
             }
           });
         });
