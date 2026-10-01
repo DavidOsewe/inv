@@ -2897,6 +2897,7 @@ input:focus:not(:focus-visible) {
       </button>
       <div class="account-menu" id="accountMenu" role="menu">
         <div class="account-menu-header"><strong id="accountMenuName">Account</strong><span id="accountMenuEmail">Not signed in</span></div>
+        <button type="button" id="accountSignInBtn" class="primary" style="display:none">Sign in with email</button>
         <button type="button" data-account-action="profile">Profile &amp; settings</button>
         <button type="button" data-account-action="plan">Plan &amp; billing</button>
         <button type="button" id="copyAccountReferral">Copy referral link</button>
@@ -4999,19 +5000,24 @@ input:focus:not(:focus-visible) {
   </div>
 </div>
 <div class="modalback" id="expenseLedgerPickModal" style="z-index:90">
-  <div class="modal" style="max-width:440px">
-    <h2>Final approval — pick ledger</h2>
-    <p class="section-sub" style="margin-top:-4px">Choose the expense (or P&amp;L) account from your full chart of accounts. This posts the bill to AP.</p>
+  <div class="modal" style="max-width:480px">
+    <h2 id="expenseLedgerPickTitle">Approve &amp; post</h2>
+    <p class="section-sub" id="expenseLedgerPickSub" style="margin-top:-4px">
+      Confirm the ledger entry. This posts expense + accounts payable — not a cash payment.
+    </p>
+    <div id="expenseLedgerPickMeta" class="section-sub" style="margin:0 0 10px"></div>
+    <div id="expenseLedgerPickDocs" style="margin:0 0 10px"></div>
     <div class="field">
-      <label>Ledger account</label>
+      <label>Expense / P&amp;L ledger (full COA)</label>
       <select id="expenseLedgerPickSelect" class="searchable" data-searchable="1"></select>
     </div>
     <div class="field">
       <label>Or type account code</label>
       <input id="expenseLedgerPickCode" placeholder="e.g. 5700" autocomplete="off">
     </div>
+    <div id="expenseLedgerPickPreview" style="margin:10px 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);font-size:13px"></div>
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-      <button type="button" class="button primary" id="expenseLedgerPickOk">Post with this ledger</button>
+      <button type="button" class="button primary" id="expenseLedgerPickOk">Post journal (Dr expense / Cr AP)</button>
       <button type="button" class="button" id="expenseLedgerPickCancel">Cancel</button>
     </div>
   </div>
@@ -5365,10 +5371,11 @@ document.addEventListener('click', (e) => {
 
 // Global signup navigation so the Free-limit button still works even if a later
 // initialization block throws an unrelated runtime error.
-function goToSignup() {
+function goToSignup(opts) {
   try {
     const current = new URLSearchParams(window.location.search);
-    current.set('source', 'growth_limit');
+    const source = (opts && opts.source) || 'account_chip';
+    current.set('source', source);
     const url = new URL('signup.html', window.location.href);
     current.forEach((value, key) => url.searchParams.set(key, value));
     window.location.assign(url.toString());
@@ -5393,7 +5400,16 @@ async function getSupabase() {
         document.head.appendChild(s);
       });
     }
-    return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+    // Explicit session recovery after magic-link redirect + site-data clear
+    return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        flowType: 'pkce',
+        storage: window.localStorage
+      }
+    });
   })();
   return supabaseClientPromise;
 }
@@ -5685,38 +5701,51 @@ function setPreferredOrganizationId(organizationId) {
 
 async function ensureCloudOrganization() {
   if (cloud.organizationId) return cloud.organizationId;
+  if (!cloud.client || !cloud.user) throw new Error('Sign in required');
+
+  // Always re-query memberships — do not invent a second org after site-data clear.
   const { data: memberships, error } = await cloud.client
     .from('organization_members')
     .select('organization_id, role');
-  if (error) throw error;
+  if (error) {
+    // Fail closed: never create a new org when membership lookup fails
+    console.warn('organization_members lookup', error.message || error);
+    throw error;
+  }
 
   const rows = memberships || [];
   if (rows.length) {
     const preferred = getPreferredOrganizationId();
     const match = preferred && rows.find(r => r.organization_id === preferred);
-    // Prefer explicitly chosen org (e.g. after accepting a team invite).
-    // If none chosen yet and the user is a non-owner member of some org,
-    // prefer that shared team org over their personal (owner) org.
-    const teamMembership = rows.find(r => String(r.role || '').toLowerCase() === 'member');
-    const chosen = match || teamMembership || rows[0];
+    // Prefer explicit choice → owner org → any team membership → first row
+    const ownerMembership = rows.find(r => String(r.role || '').toLowerCase() === 'owner');
+    const teamMembership = rows.find(r => {
+      const role = String(r.role || '').toLowerCase();
+      return role && role !== 'owner';
+    });
+    const chosen = match || ownerMembership || teamMembership || rows[0];
     cloud.organizationId = chosen.organization_id;
     try {
       const mem = rows.find(r => r.organization_id === chosen.organization_id);
       if (mem && mem.role) setCurrentOrgRole(mem.role);
       else if (chosen.role) setCurrentOrgRole(chosen.role);
     } catch (_) {}
-    // Persist so later sessions stay on the shared org
-    if (!preferred) setPreferredOrganizationId(cloud.organizationId);
+    setPreferredOrganizationId(cloud.organizationId);
     return cloud.organizationId;
   }
 
+  // Truly first-time user only — no memberships in cloud
   const { data, error: createError } = await cloud.client.rpc('create_organization', {
-    org_name: db.profile.name || 'My business',
-    org_currency: db.profile.reporting || 'USD'
+    org_name: (db.profile && db.profile.name && db.profile.name !== 'Your Company')
+      ? db.profile.name
+      : 'My business',
+    org_currency: (db.profile && db.profile.reporting) || 'USD'
   });
   if (createError) throw createError;
-  cloud.organizationId = data.id;
-  setPreferredOrganizationId(data.id);
+  cloud.organizationId = data && (data.id || data.organization_id || data);
+  if (!cloud.organizationId) throw new Error('Could not create organisation');
+  setPreferredOrganizationId(cloud.organizationId);
+  try { setCurrentOrgRole('owner'); } catch (_) {}
   return cloud.organizationId;
 }
 
@@ -6489,9 +6518,22 @@ async function startCloudSync(client, user) {
     try { await pullLocationsFromCloud(); } catch (e) { console.warn('locations pull', e.message || e); }
     try { await pullPurchasesBundleFromCloud(); } catch (e) { console.warn('purchases pull', e.message || e); }
     try { await pushBooksToCloud(); } catch (e) { console.warn('books push', e.message || e); }
+    // After site-data clear: confirm restore so user knows the same org came back
+    try {
+      const orgName = (db.profile && db.profile.name) || '';
+      if (loaded || (orgName && orgName !== 'Your Company' && orgName !== 'My business')) {
+        toast('Signed in · restored ' + (orgName || 'your organisation') + ' from cloud');
+      } else if (cloud.organizationId) {
+        toast('Signed in · organisation linked. Cloud data may still be syncing.');
+      }
+    } catch (_) {}
     dashboard();
   } catch (error) {
     console.warn('cloud sync setup', error.message || error);
+    try {
+      toast('Signed in, but cloud restore failed: ' + (error.message || 'unknown') +
+        '. Try refresh. Do not create a second business.');
+    } catch (_) {}
   }
 }
 
@@ -17665,9 +17707,41 @@ function reverseJournal(journalId, reason) {
 
 function journalActivity(journalId) {
   ensureBooksDb();
-  return (db.auditEvents || [])
-    .filter(e => e.entityType === 'journal' && e.entityId === journalId)
-    .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  const events = db.auditEvents || [];
+  const j = (db.journals || []).find(x => x.id === journalId);
+  const related = [];
+  // Direct journal events
+  events.forEach(e => {
+    if (e.entityType === 'journal' && e.entityId === journalId) related.push(e);
+  });
+  // Linked bill / cash request trail (submit → levels → approve) so docs + chain appear
+  try {
+    const sk = j && j.sourceKey ? String(j.sourceKey) : '';
+    let billId = null;
+    let cashId = null;
+    if (sk.indexOf('bill:') >= 0) {
+      billId = sk.replace(/^j:bill:/, '').replace(/^bill:/, '');
+    } else if (sk.indexOf('cash:') >= 0) {
+      cashId = sk.replace(/^j:cash:/, '').replace(/^cash:/, '');
+    }
+    if (billId) {
+      events.forEach(e => {
+        if (e.entityType === 'bill' && e.entityId === billId) related.push(e);
+      });
+    }
+    if (cashId) {
+      events.forEach(e => {
+        if ((e.entityType === 'cash' || e.entityType === 'cash_entry') && e.entityId === cashId) related.push(e);
+      });
+    }
+  } catch (_) {}
+  // de-dupe by id
+  const seen = new Set();
+  return related.filter(e => {
+    if (!e || !e.id || seen.has(e.id)) return false;
+    seen.add(e.id);
+    return true;
+  }).sort((a, b) => String(b.at).localeCompare(String(a.at)));
 }
 
 
@@ -18546,18 +18620,47 @@ function openJournalActivityModal(journalId, opts) {
       const c = (e.meta && e.meta.approval_chain) || (e.after && e.after.approval_chain);
       if (Array.isArray(c) && c.length) { chain = c; break; }
     }
-    if (!chain && j && j.sourceKey) {
+    let relatedBill = null, relatedCash = null;
+    if (j && j.sourceKey) {
       const sk = String(j.sourceKey);
       if (sk.indexOf('bill:') >= 0) {
         const billId = sk.replace(/^j:bill:/, '').replace(/^bill:/, '');
-        const b = (db.bills || []).find(x => x.id === billId);
-        if (b && Array.isArray(b.approval_chain)) chain = b.approval_chain;
+        relatedBill = (db.bills || []).find(x => x.id === billId) || null;
+        if (!chain && relatedBill && Array.isArray(relatedBill.approval_chain)) chain = relatedBill.approval_chain;
+      } else if (sk.indexOf('cash:') >= 0) {
+        const cashId = sk.replace(/^j:cash:/, '').replace(/^cash:/, '');
+        relatedCash = (db.cashEntries || []).find(x => x.id === cashId) || null;
+        if (!chain && relatedCash && Array.isArray(relatedCash.approval_chain)) chain = relatedCash.approval_chain;
       }
     }
-    if (chain && chain.length) {
+    let requesterRow = '';
+    try {
+      let reqEmail = (relatedBill && relatedBill.requested_by_email)
+        || (relatedCash && relatedCash.requested_by_email) || null;
+      let reqAt = (relatedBill && relatedBill.requested_at)
+        || (relatedCash && relatedCash.requested_at) || null;
+      for (const e of events) {
+        if (!reqEmail && e.after && e.after.requested_by_email) reqEmail = e.after.requested_by_email;
+        if (!reqAt && e.after && e.after.requested_at) reqAt = e.after.requested_at;
+        if (!reqEmail && e.action && /submitted|created|auto_posted/i.test(String(e.action))) {
+          reqEmail = e.actorEmail || reqEmail;
+          reqAt = e.at || reqAt;
+        }
+      }
+      if (reqEmail) {
+        requesterRow = '<div style="font-size:12px;padding:3px 0;display:flex;gap:8px;flex-wrap:wrap">' +
+          '<span style="font-weight:700">Req</span><span>Requester</span>' +
+          '<span style="color:#15803d;font-weight:600">submitted</span>' +
+          '<span style="color:var(--muted)">' + String(reqEmail).replace(/</g, '') + '</span>' +
+          (reqAt ? ('<span style="color:var(--muted)">' + String(reqAt).replace('T', ' ').slice(0, 16) + '</span>') : '') +
+          '</div>';
+      }
+    } catch (_) {}
+    if ((chain && chain.length) || requesterRow) {
       chainHtml = '<div style="margin:10px 0 14px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">' +
         '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Approval chain</div>' +
-        chain.map((lv, i) => {
+        requesterRow +
+        (chain || []).map((lv, i) => {
           const st = String(lv.status || 'pending');
           const col = st === 'approved' ? '#15803d' : (st === 'rejected' ? '#b91c1c' : '#a16207');
           return '<div style="font-size:12px;padding:3px 0;display:flex;gap:8px;flex-wrap:wrap">' +
@@ -18603,26 +18706,51 @@ function resolveSupportingDocs(evOrEntity) {
     || tryDocs(evOrEntity.meta && evOrEntity.meta.documents)
     || tryDocs(evOrEntity.after && evOrEntity.after.documents)
     || tryDocs(evOrEntity.before && evOrEntity.before.documents);
-  if (docs) return docs;
+  // Prefer copies that still have dataUrl when merging from entity
+  const preferOpenable = (list) => {
+    if (!list || !list.length) return null;
+    if (list.some(d => d && d.dataUrl)) return list;
+    return list;
+  };
+  if (docs) docs = preferOpenable(docs);
   const type = evOrEntity.entityType;
   const id = evOrEntity.entityId;
-  if (!type || !id) return [];
   try {
     ensureBooksDb();
-    if (type === 'journal') {
-      const j = (db.journals || []).find(x => x.id === id);
-      return tryDocs(j && j.documents) || [];
+    if (type === 'journal' || (evOrEntity.lines && evOrEntity.sourceKey)) {
+      const j = type === 'journal'
+        ? (db.journals || []).find(x => x.id === id)
+        : (evOrEntity.id ? (db.journals || []).find(x => x.id === evOrEntity.id) : null) || evOrEntity;
+      const jDocs = tryDocs(j && j.documents);
+      if (jDocs && jDocs.some(d => d.dataUrl)) return jDocs;
+      // Follow sourceKey → bill / cash
+      const sk = j && j.sourceKey ? String(j.sourceKey) : '';
+      if (sk.indexOf('bill:') >= 0) {
+        const billId = sk.replace(/^j:bill:/, '').replace(/^bill:/, '');
+        const b = (db.bills || []).find(x => x.id === billId);
+        const bDocs = tryDocs(b && b.documents);
+        if (bDocs) return bDocs;
+      }
+      if (sk.indexOf('cash:') >= 0) {
+        const cashId = sk.replace(/^j:cash:/, '').replace(/^cash:/, '');
+        const c = (db.cashEntries || []).find(x => x.id === cashId);
+        const cDocs = tryDocs(c && c.documents);
+        if (cDocs) return cDocs;
+      }
+      if (jDocs) return jDocs;
     }
-    if (type === 'bill') {
+    if (type === 'bill' && id) {
       const b = (db.bills || []).find(x => x.id === id);
-      return tryDocs(b && b.documents) || [];
+      const bDocs = tryDocs(b && b.documents);
+      if (bDocs) return bDocs;
     }
-    if (type === 'cash' || type === 'cash_entry') {
+    if ((type === 'cash' || type === 'cash_entry') && id) {
       const c = (db.cashEntries || []).find(x => x.id === id);
-      return tryDocs(c && c.documents) || [];
+      const cDocs = tryDocs(c && c.documents);
+      if (cDocs) return cDocs;
     }
   } catch (_) {}
-  return [];
+  return docs || [];
 }
 
 function supportingDocsHtml(docs, compact) {
@@ -18933,14 +19061,21 @@ function advanceExpenseBillLevel(billId, opts) {
     try { refreshApprovalsUI(); } catch (_) {}
     try { renderBooksPayables(); renderApprovalsInbox(); } catch (_) { booksView(); }
   };
-  if (!bill.category || bill.category === 'other_out' || bill.category === '') {
-    pickExpenseLedgerFromCoa(bill.category || '5700').then(code => {
-      if (!code) { toast('Ledger required to post'); return; }
-      finishBillPost(code);
-    });
-    return;
-  }
-  finishBillPost(bill.category);
+  // Always open post modal so accountant confirms Dr/Cr + ledger (never silent post / never Mark paid here)
+  pickExpenseLedgerFromCoa({
+    defaultCode: bill.category && bill.category !== 'other_out' ? bill.category : '5700',
+    amount: bill.amount,
+    tax: bill.tax,
+    currency: bill.currency,
+    supplier: bill.supplier,
+    note: bill.note,
+    documents: bill.documents || [],
+    kind: 'bill',
+    requesterEmail: bill.requested_by_email || null
+  }).then(code => {
+    if (!code) { toast('Post cancelled'); return; }
+    finishBillPost(code);
+  });
 }
 
 function approveExpenseBill(billId) {
@@ -18950,29 +19085,68 @@ function approveExpenseBill(billId) {
 /** Full COA picker for final expense post — no browser prompt. */
 function listExpenseCoaForPick() {
   const coa = (typeof getCoa === 'function' ? getCoa() : []) || [];
-  // Prefer expense; also allow cost/other P&L so accountant is not boxed in
   const expense = coa.filter(a => a && a.type === 'expense');
   const extra = coa.filter(a => a && (a.type === 'income' || a.type === 'equity' || a.type === 'liability')
     && !expense.some(e => e.id === a.id));
-  // Asset stock accounts sometimes used for inventory purchase
   const stockish = coa.filter(a => a && a.type === 'asset' && /stock|inventory|cogs|1300|1400/i.test(String(a.id) + ' ' + (a.name || '')));
   const merged = expense.concat(stockish).concat(extra);
   if (!merged.length) return coa.slice();
   return merged;
 }
 
-function pickExpenseLedgerFromCoa(defaultCode) {
+/**
+ * opts: {
+ *   defaultCode, amount, currency, supplier, note, tax,
+ *   documents, kind: 'bill'|'cash', requesterEmail
+ * }
+ * Returns selected COA code or '' if cancelled.
+ */
+function pickExpenseLedgerFromCoa(defaultCodeOrOpts, maybeOpts) {
+  const opts = (defaultCodeOrOpts && typeof defaultCodeOrOpts === 'object')
+    ? defaultCodeOrOpts
+    : Object.assign({ defaultCode: defaultCodeOrOpts }, maybeOpts || {});
   return new Promise(resolve => {
     const sel = document.getElementById('expenseLedgerPickSelect');
     const codeInp = document.getElementById('expenseLedgerPickCode');
     const ok = document.getElementById('expenseLedgerPickOk');
     const cancel = document.getElementById('expenseLedgerPickCancel');
+    const meta = document.getElementById('expenseLedgerPickMeta');
+    const docsEl = document.getElementById('expenseLedgerPickDocs');
+    const preview = document.getElementById('expenseLedgerPickPreview');
+    const title = document.getElementById('expenseLedgerPickTitle');
+    const sub = document.getElementById('expenseLedgerPickSub');
     if (!sel || !ok) {
-      resolve((defaultCode || '5700').trim());
+      resolve(String(opts.defaultCode || '5700').trim());
       return;
     }
     const list = listExpenseCoaForPick();
-    const pref = String(defaultCode || '5700').trim();
+    const pref = String(opts.defaultCode || '5700').trim();
+    const kind = opts.kind === 'cash' ? 'cash' : 'bill';
+    if (title) title.textContent = kind === 'cash' ? 'Approve & post · cash expense' : 'Approve & post · supplier bill';
+    if (sub) {
+      sub.textContent = kind === 'cash'
+        ? 'This posts Dr expense / Cr cash — not a separate “mark paid” step.'
+        : 'This posts Dr expense / Cr accounts payable (2000). “Mark paid” is only after this, when cash leaves the bank.';
+    }
+    if (meta) {
+      const bits = [];
+      if (opts.supplier) bits.push(String(opts.supplier));
+      if (opts.note) bits.push(String(opts.note).slice(0, 60));
+      if (opts.amount != null && typeof money === 'function') bits.push(money(opts.amount, opts.currency));
+      else if (opts.amount != null) bits.push(String(opts.amount));
+      if (opts.requesterEmail) bits.push('by ' + opts.requesterEmail);
+      meta.textContent = bits.filter(Boolean).join(' · ');
+    }
+    if (docsEl) {
+      const docs = Array.isArray(opts.documents) ? opts.documents : [];
+      if (docs.length) {
+        docsEl.innerHTML = '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Supporting documents</div>' +
+          supportingDocsHtml(docs, true);
+        try { bindAuditDocButtons(docsEl, docs); } catch (_) {}
+      } else {
+        docsEl.innerHTML = '<p class="section-sub" style="margin:0">No attachment on this request.</p>';
+      }
+    }
     sel.innerHTML = list.map(a =>
       '<option value="' + String(a.id).replace(/"/g, '') + '"' +
       (String(a.id) === pref ? ' selected' : '') + '>' +
@@ -18980,6 +19154,35 @@ function pickExpenseLedgerFromCoa(defaultCode) {
       (a.type ? (' · ' + a.type) : '') + '</option>'
     ).join('');
     if (codeInp) codeInp.value = pref;
+
+    const refreshPreview = () => {
+      if (!preview) return;
+      const code = ((codeInp && codeInp.value) || sel.value || pref || '5700').trim();
+      const nm = (typeof coaName === 'function' ? coaName(code) : code);
+      const amt = Number(opts.amount) || 0;
+      const tax = Number(opts.tax) || 0;
+      const net = Math.max(0, amt - tax);
+      const amtLabel = typeof money === 'function' ? money(amt, opts.currency) : String(amt);
+      const netLabel = typeof money === 'function' ? money(net, opts.currency) : String(net);
+      if (kind === 'cash') {
+        preview.innerHTML =
+          '<div style="font-weight:700;margin-bottom:6px">Journal preview</div>' +
+          '<div>Dr ' + code + ' · ' + String(nm).replace(/</g, '') + ' <b style="float:right">' + amtLabel + '</b></div>' +
+          '<div>Cr cash / bank <b style="float:right">' + amtLabel + '</b></div>';
+      } else {
+        preview.innerHTML =
+          '<div style="font-weight:700;margin-bottom:6px">Journal preview (accrual)</div>' +
+          '<div>Dr ' + code + ' · ' + String(nm).replace(/</g, '') + ' <b style="float:right">' + netLabel + '</b></div>' +
+          (tax > 0.001 ? ('<div>Dr 1200 · Input VAT <b style="float:right">' +
+            (typeof money === 'function' ? money(tax, opts.currency) : tax) + '</b></div>') : '') +
+          '<div>Cr 2000 · Accounts payable <b style="float:right">' + amtLabel + '</b></div>' +
+          '<p class="section-sub" style="margin:8px 0 0">Paying the supplier later uses <b>Mark paid</b> (Dr AP / Cr bank).</p>';
+      }
+    };
+    sel.onchange = refreshPreview;
+    if (codeInp) codeInp.oninput = refreshPreview;
+    refreshPreview();
+
     try {
       if (typeof initSearchableSelects === 'function') initSearchableSelects(document.getElementById('expenseLedgerPickModal'));
     } catch (_) {}
@@ -18993,13 +19196,9 @@ function pickExpenseLedgerFromCoa(defaultCode) {
       const typed = (codeInp && codeInp.value || '').trim();
       const fromSel = (sel.value || '').trim();
       let code = typed || fromSel;
-      if (typed && list.some(a => String(a.id) === typed)) code = typed;
-      else if (typed && !list.some(a => String(a.id) === typed)) {
-        // Allow any COA id that exists on full chart
-        const all = (typeof getCoa === 'function' ? getCoa() : []) || [];
-        if (all.some(a => String(a.id) === typed)) code = typed;
-        else if (fromSel) code = fromSel;
-      }
+      const all = (typeof getCoa === 'function' ? getCoa() : []) || [];
+      if (typed && all.some(a => String(a.id) === typed)) code = typed;
+      else if (fromSel) code = fromSel;
       if (!code) { toast('Pick a ledger account'); return; }
       cleanup(code);
     };
@@ -19175,14 +19374,18 @@ function advanceExpenseCashLevel(cashId, opts) {
     try { refreshApprovalsUI(); } catch (_) {}
     try { renderApprovalsInbox(); renderBooksPayables(); booksView(); } catch (_) {}
   };
-  if (!entry.offsetAccountId || entry.offsetAccountId === 'other_out') {
-    pickExpenseLedgerFromCoa(entry.offsetAccountId || '5700').then(code => {
-      if (!code) { toast('Ledger required to post'); return; }
-      finishCashPost(code);
-    });
-    return;
-  }
-  finishCashPost(entry.offsetAccountId);
+  pickExpenseLedgerFromCoa({
+    defaultCode: entry.offsetAccountId && entry.offsetAccountId !== 'other_out' ? entry.offsetAccountId : '5700',
+    amount: entry.amount,
+    currency: entry.currency,
+    note: entry.note,
+    documents: entry.documents || [],
+    kind: 'cash',
+    requesterEmail: entry.requested_by_email || null
+  }).then(code => {
+    if (!code) { toast('Post cancelled'); return; }
+    finishCashPost(code);
+  });
 }
 
 function rejectExpenseCash(cashId) {
@@ -19636,7 +19839,7 @@ function renderBooksPayables() {
       } else if (st === 'open' || st === 'approved') {
         actions += '<select class="searchable" data-searchable="1" data-pay-from="' + b.id +
           '" style="font-size:12px;min-width:160px;max-width:220px" title="Pay from account">' + bankOpts + '</select>';
-        actions += '<button type="button" class="button small primary" data-pay-bill="' + b.id + '">Mark paid</button>';
+        actions += '<button type="button" class="button small primary" data-pay-bill="' + b.id + '">Pay (clear AP)</button>';
       }
       actions += '<button type="button" class="button small danger" data-del-bill="' + b.id + '">Delete</button>';
       return '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)">' +
@@ -26406,15 +26609,21 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     return (parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : s.slice(0,2)).toUpperCase();
   }
 
+  const signInBtn = document.getElementById('accountSignInBtn');
+
   function paintAccount(session) {
-    const name = session?.user ? (session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Account') : 'Account';
-    const email = session?.user?.email || 'Sign in to sync';
-    $('#accountAvatar').textContent = initialsFor(name, email);
+    const signedIn = !!(session && session.user);
+    const name = signedIn
+      ? (session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Account')
+      : 'Account';
+    const email = signedIn ? (session.user.email || '') : 'Sign in to sync';
+    $('#accountAvatar').textContent = signedIn ? initialsFor(name, email) : '→';
     $('#accountName').textContent = name;
     $('#accountEmail').textContent = email;
     $('#accountMenuName').textContent = name;
-    $('#accountMenuEmail').textContent = email;
-    lineLogout.style.display = session?.user ? 'block' : 'none';
+    $('#accountMenuEmail').textContent = signedIn ? email : 'Not signed in — use magic link';
+    if (lineLogout) lineLogout.style.display = signedIn ? 'block' : 'none';
+    if (signInBtn) signInBtn.style.display = signedIn ? 'none' : 'block';
   }
 
   function closeMenu() {
@@ -26424,6 +26633,11 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
   }
 
   card.onclick = () => {
+    // Signed out: go straight to magic-link page (clearing site data always needs this)
+    if (!cloud.user) {
+      try { goToSignup(); } catch (_) { window.location.href = 'signup.html'; }
+      return;
+    }
     const open = !menu.classList.contains('show');
     menu.classList.toggle('show', open);
     card.classList.toggle('open', open);
@@ -26433,6 +26647,12 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     if (!e.target.closest('.account-area')) closeMenu();
   });
   menu.addEventListener('click', async e => {
+    if (e.target.closest('#accountSignInBtn')) {
+      e.stopPropagation();
+      closeMenu();
+      try { goToSignup(); } catch (_) { window.location.href = 'signup.html'; }
+      return;
+    }
     const copyReferral = e.target.closest('#copyAccountReferral');
     if (copyReferral) {
       e.stopPropagation();
@@ -26473,12 +26693,43 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     }
   }
 
-  const { data: { session } } = await client.auth.getSession();
-  if (session?.user && window.location.hash && /(?:^#|&)error(?:=|%3D)/i.test(window.location.hash)) {
-    history.replaceState(null, document.title, window.location.pathname + window.location.search);
+  // Surface magic-link errors from redirect hash (expired, denied, etc.)
+  try {
+    const hash = String(window.location.hash || '');
+    if (/(?:^#|&)error(?:=|%3D)/i.test(hash)) {
+      const params = new URLSearchParams(hash.replace(/^#/, ''));
+      const desc = params.get('error_description') || params.get('error') || 'Sign-in failed';
+      toast(decodeURIComponent(String(desc).replace(/\+/g, ' ')));
+      history.replaceState(null, document.title, window.location.pathname + window.location.search);
+    }
+  } catch (_) {}
+
+  let session = null;
+  try {
+    const res = await client.auth.getSession();
+    session = res?.data?.session || null;
+  } catch (e) {
+    console.warn('getSession', e.message || e);
   }
+  // PKCE magic-link: if URL still has code=, exchange it (detectSessionInUrl usually does this)
+  try {
+    if (!session?.user && /[?&]code=/.test(window.location.search || '')) {
+      const { data, error } = await client.auth.exchangeCodeForSession(window.location.href);
+      if (error) console.warn('exchangeCodeForSession', error.message || error);
+      else session = data?.session || session;
+      // Clean code= from URL after exchange
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.delete('code');
+        history.replaceState(null, document.title, u.pathname + u.search + u.hash);
+      } catch (_) {}
+    }
+  } catch (e) {
+    console.warn('code exchange', e.message || e);
+  }
+
   await render(session);
-  client.auth.onAuthStateChange((_e, session) => { render(session); });
+  client.auth.onAuthStateChange((_e, s) => { render(s); });
 
   lineLogout.onclick = async e => {
     e.stopPropagation();
