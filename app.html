@@ -26711,13 +26711,16 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
   } catch (e) {
     console.warn('getSession', e.message || e);
   }
-  // PKCE magic-link: if URL still has code=, exchange it (detectSessionInUrl usually does this)
+  // PKCE magic-link: if URL still has code=, exchange it
   try {
     if (!session?.user && /[?&]code=/.test(window.location.search || '')) {
       const { data, error } = await client.auth.exchangeCodeForSession(window.location.href);
-      if (error) console.warn('exchangeCodeForSession', error.message || error);
-      else session = data?.session || session;
-      // Clean code= from URL after exchange
+      if (error) {
+        console.warn('exchangeCodeForSession', error.message || error);
+        try { toast('Sign-in link failed: ' + (error.message || 'use email code on signup')); } catch (_) {}
+      } else {
+        session = data?.session || session;
+      }
       try {
         const u = new URL(window.location.href);
         u.searchParams.delete('code');
@@ -26726,6 +26729,21 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     }
   } catch (e) {
     console.warn('code exchange', e.message || e);
+  }
+  // Implicit flow fallback: #access_token=...
+  try {
+    if (!session?.user && /access_token=/i.test(window.location.hash || '')) {
+      if (typeof client.auth.getSessionFromUrl === 'function') {
+        const { data, error } = await client.auth.getSessionFromUrl({ storeSession: true });
+        if (error) console.warn('getSessionFromUrl', error.message || error);
+        else session = data?.session || session;
+      }
+      try {
+        history.replaceState(null, document.title, window.location.pathname + window.location.search);
+      } catch (_) {}
+    }
+  } catch (e) {
+    console.warn('hash session', e.message || e);
   }
 
   await render(session);
