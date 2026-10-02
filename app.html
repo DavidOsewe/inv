@@ -3477,9 +3477,16 @@ input:focus:not(:focus-visible) {
 
       <div class="books-toolbar" id="booksToolbar">
         <div class="books-toolbar-meta" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-          <label for="booksPeriod">Period</label>
-          <select id="booksPeriod" style="max-width:150px">
-            <option value="month">This month</option>
+          <label for="booksPeriod" style="font-size:12px;color:var(--muted)">Period</label>
+          <div id="booksPeriodChips" style="display:flex;flex-wrap:wrap;gap:6px" role="group" aria-label="Report period">
+            <button type="button" class="button small" data-books-period="month" style="border-radius:999px">This month</button>
+            <button type="button" class="button small secondary" data-books-period="30" style="border-radius:999px">30 days</button>
+            <button type="button" class="button small secondary" data-books-period="90" style="border-radius:999px">90 days</button>
+            <button type="button" class="button small secondary" data-books-period="all" style="border-radius:999px">All time</button>
+            <button type="button" class="button small secondary" data-books-period="custom" style="border-radius:999px">Custom</button>
+          </div>
+          <select id="booksPeriod" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none" aria-hidden="true" tabindex="-1">
+            <option value="month" selected>This month</option>
             <option value="30">Last 30 days</option>
             <option value="90">Last 90 days</option>
             <option value="all">All time</option>
@@ -3490,6 +3497,7 @@ input:focus:not(:focus-visible) {
             <span style="font-size:12px;color:var(--muted)">to</span>
             <input type="date" id="booksDateTo" title="To date">
           </span>
+          <span id="booksPeriodLabel" style="font-size:12px;color:var(--muted)"></span>
           <span id="booksFeedNote">Invoice feed on</span>
         </div>
       </div>
@@ -3507,13 +3515,15 @@ input:focus:not(:focus-visible) {
         </div>
         <div class="books-metric-grid">
           <div class="books-metric"><small>Revenue</small><b id="booksRevenue">—</b><span class="mini">Accrued in period</span></div>
-          <div class="books-metric"><small>Expenses</small><b id="booksExpenses">—</b><span class="mini">Posted in period</span></div>
+          <div class="books-metric"><small>Expenses (P&amp;L)</small><b id="booksExpenses">—</b><span class="mini">All expense ledgers · period</span></div>
           <div class="books-metric"><small>Tax control</small><b id="booksTaxControl">—</b><span class="mini">Output − input</span></div>
         </div>
         <div class="insight" style="margin-top:4px">
           <h3 class="books-panel-title">Where money went</h3>
-          <p class="books-panel-lead">Expense mix for the selected period.</p>
+          <p class="books-panel-lead" id="booksExpenseLead">Full P&amp;L expenses by account · period above. Cash outs that are not expenses (drawings, inventory, AP, assets) are listed separately.</p>
+          <div id="booksExpenseSummary" style="margin-bottom:10px"></div>
           <div id="booksByCategory"></div>
+          <div id="booksNonExpenseOut" style="margin-top:12px"></div>
         </div>
       </div>
 
@@ -17873,6 +17883,13 @@ function booksPeriodCutoff(period) {
   return d.toISOString().slice(0, 10);
 }
 
+/** Last calendar day of current month (YYYY-MM-DD). */
+function booksMonthEndDate() {
+  const now = new Date();
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return end.getFullYear() + '-' + String(end.getMonth() + 1).padStart(2, '0') + '-' + String(end.getDate()).padStart(2, '0');
+}
+
 /** Inclusive date range for reports/ledger. */
 function booksDateRange() {
   const period = document.getElementById('booksPeriod')?.value || 'month';
@@ -17882,6 +17899,9 @@ function booksDateRange() {
       from: document.getElementById('booksDateFrom')?.value || null,
       to: document.getElementById('booksDateTo')?.value || null
     };
+  }
+  if (period === 'month') {
+    return { from: booksPeriodCutoff('month'), to: booksMonthEndDate() };
   }
   return { from: booksPeriodCutoff(period), to: null };
 }
@@ -17893,10 +17913,78 @@ function journalInDateRange(j, range) {
   return true;
 }
 
+function booksPeriodDisplayLabel() {
+  const period = document.getElementById('booksPeriod')?.value || 'month';
+  const range = booksDateRange();
+  if (period === 'all') return 'All time';
+  if (period === 'month') {
+    const from = range.from || booksPeriodCutoff('month');
+    const to = range.to || booksMonthEndDate();
+    return 'This month · ' + from + ' → ' + to;
+  }
+  if (period === '30') return 'Last 30 days · from ' + (range.from || '—');
+  if (period === '90') return 'Last 90 days · from ' + (range.from || '—');
+  if (period === 'custom') {
+    return 'Custom · ' + (range.from || '…') + ' → ' + (range.to || '…');
+  }
+  return period;
+}
+
+function setBooksPeriod(value, opts) {
+  opts = opts || {};
+  const allowed = ['month', '30', '90', 'all', 'custom'];
+  const v = allowed.includes(value) ? value : 'month';
+  const sel = document.getElementById('booksPeriod');
+  if (sel) sel.value = v;
+  try {
+    if (db && db.profile) {
+      db.profile.booksPeriod = v;
+      if (!opts.skipSave) save();
+    }
+  } catch (_) {}
+  syncBooksCustomDateUI();
+  syncBooksPeriodChips();
+  if (!opts.skipView) {
+    try { booksView(); } catch (_) {}
+  }
+}
+
+function syncBooksPeriodChips() {
+  const period = document.getElementById('booksPeriod')?.value || 'month';
+  document.querySelectorAll('[data-books-period]').forEach(btn => {
+    const on = btn.getAttribute('data-books-period') === period;
+    btn.classList.toggle('secondary', !on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) {
+      btn.style.fontWeight = '700';
+      btn.style.borderColor = 'var(--accent, #2563eb)';
+    } else {
+      btn.style.fontWeight = '';
+      btn.style.borderColor = '';
+    }
+  });
+  const lab = document.getElementById('booksPeriodLabel');
+  if (lab) lab.textContent = booksPeriodDisplayLabel();
+}
+
 function syncBooksCustomDateUI() {
   const period = document.getElementById('booksPeriod')?.value || 'month';
   const wrap = document.getElementById('booksCustomDates');
   if (wrap) wrap.style.display = period === 'custom' ? 'inline-flex' : 'none';
+  syncBooksPeriodChips();
+}
+
+function restoreBooksPeriodPreference() {
+  try {
+    const saved = db && db.profile && db.profile.booksPeriod;
+    const sel = document.getElementById('booksPeriod');
+    if (sel && saved && ['month', '30', '90', 'all', 'custom'].includes(saved)) {
+      sel.value = saved;
+    } else if (sel && !sel.value) {
+      sel.value = 'month';
+    }
+  } catch (_) {}
+  syncBooksCustomDateUI();
 }
 
 function drillToLedger(accountId, dateOpt) {
@@ -18209,6 +18297,35 @@ function accountPeriodNet(accountId, act) {
     return (row.credit || 0) - (row.debit || 0);
   }
   return (row.debit || 0) - (row.credit || 0);
+}
+
+/** True P&L expense accounts — type, statement, or FS line (COGS / opex / finance / tax). */
+function isPlExpenseAccount(a) {
+  if (!a) return false;
+  if (a.type === 'expense') return true;
+  if (a.statement === 'pl' && a.type !== 'income') {
+    const fs = String(a.fsLine || '');
+    if (/cogs|expense|cost|finance|tax/i.test(fs)) return true;
+    if (a.type !== 'asset' && a.type !== 'liability' && a.type !== 'equity') return true;
+  }
+  const fs = String(a.fsLine || '');
+  if (['cogs', 'operating_expense', 'finance_cost', 'tax_expense'].includes(fs)) return true;
+  // Name heuristic for custom COA that lost type
+  if (a.statement === 'pl' && /expense|cost of|cogs|fee|levy|salary|rent|utilit|marketing|ads|transport|logistic/i.test(a.name || '')) return true;
+  return false;
+}
+
+function isOwnerDrawingsAccount(a) {
+  if (!a) return false;
+  if (a.id === '3100') return true;
+  if (a.type === 'equity' && /draw|owner.?with|divid/i.test(a.name || '')) return true;
+  return false;
+}
+
+/** Expense net for overview (debit − credit); never negative display for pure expense activity. */
+function expensePeriodAmount(accountId, act) {
+  const row = act[accountId] || { debit: 0, credit: 0 };
+  return (Number(row.debit) || 0) - (Number(row.credit) || 0);
 }
 
 function renderBooksPnl() {
@@ -20636,7 +20753,9 @@ function cashEquivalentsTotal(bal) {
 
 function booksView() {
   ensureBooksDb();
+  try { restoreBooksPeriodPreference(); } catch {}
   try { syncBooksCustomDateUI(); } catch {}
+  try { syncBooksPeriodChips(); } catch {}
 
   // purge accidental binary statement imports
   try {
@@ -20670,8 +20789,12 @@ function booksView() {
 
   const rep = db.profile.reporting || 'USD';
   const act = periodActivity();
-  const revenue = getCoa().filter(a => a.type === 'income').reduce((n, a) => n + ((act[a.id]?.credit || 0) - (act[a.id]?.debit || 0)), 0);
-  const expenses = getCoa().filter(a => a.type === 'expense' || a.id === '3100').reduce((n, a) => n + ((act[a.id]?.debit || 0) - (act[a.id]?.credit || 0)), 0);
+  const coaAll = getCoa();
+  const revenue = coaAll.filter(a => a.type === 'income' || a.fsLine === 'revenue' || a.fsLine === 'other_income')
+    .reduce((n, a) => n + ((act[a.id]?.credit || 0) - (act[a.id]?.debit || 0)), 0);
+  // Full P&L expenses: every expense-type / FS expense line (not drawings)
+  const expenseAccounts = coaAll.filter(a => isPlExpenseAccount(a));
+  const expenses = expenseAccounts.reduce((n, a) => n + expensePeriodAmount(a.id, act), 0);
   const bal = accountBalances(null);
   const ar = bal['1100'] || 0;
 
@@ -20679,8 +20802,11 @@ function booksView() {
   const elExp = document.getElementById('booksExpenses');
   const elNet = document.getElementById('booksNetProfit');
   const elAR = document.getElementById('booksAR');
-  if (elRev) elRev.textContent = money(revenue);
-  if (elExp) elExp.textContent = money(expenses);
+  if (elRev) {
+    elRev.textContent = money(revenue);
+    elRev.style.color = revenue < 0 ? 'var(--red-text)' : '';
+  }
+  if (elExp) elExp.textContent = money(Math.max(0, expenses));
   if (elNet) {
     elNet.textContent = money(revenue - expenses);
     elNet.style.color = (revenue - expenses) >= 0 ? '' : 'var(--red-text)';
@@ -20688,9 +20814,11 @@ function booksView() {
   if (elAR) elAR.textContent = money(Math.max(0, ar));
   const cashEq = cashEquivalentsTotal(bal);
   const elCash = document.getElementById('booksCashBal');
-  if (elCash) elCash.textContent = money(cashEq);
-  const ap = -(bal['2000'] || 0); // credit-normal liability stored as negative in debit-credit running bal
-  // accountBalances: debit - credit, so AP credit balance is negative number; liability display = -balance
+  if (elCash) {
+    elCash.textContent = money(cashEq);
+    elCash.style.color = cashEq < 0 ? 'var(--red-text)' : '';
+  }
+  // accountBalances: debit - credit, so AP credit balance is negative; liability display = -balance
   const apBal = Math.max(0, -(bal['2000'] || 0));
   const taxOut = Math.max(0, -(bal['2100'] || 0));
   const taxIn = Math.max(0, bal['1200'] || 0);
@@ -20699,24 +20827,105 @@ function booksView() {
   if (elAP) elAP.textContent = money(apBal);
   if (elTax) elTax.textContent = money(taxOut - taxIn);
 
-  // Expense mix from period activity
+  // ——— Expense breakdown (full COA expense + non-expense cash outs) ———
   const byCat = document.getElementById('booksByCategory');
+  const sumEl = document.getElementById('booksExpenseSummary');
+  const nonEl = document.getElementById('booksNonExpenseOut');
+
+  const expRows = expenseAccounts.map(a => ({
+    id: a.id,
+    name: a.name,
+    fs: a.fsLine || 'operating_expense',
+    total: expensePeriodAmount(a.id, act)
+  })).filter(r => r.total > 0.001).sort((a, b) => b.total - a.total);
+
+  // Group by FS line for summary chips
+  const byFs = {};
+  expRows.forEach(r => {
+    const k = r.fs || 'operating_expense';
+    if (!byFs[k]) byFs[k] = 0;
+    byFs[k] += r.total;
+  });
+  if (sumEl) {
+    const chips = Object.keys(byFs).sort().map(k =>
+      '<span style="display:inline-flex;gap:6px;align-items:center;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--panel-2);font-size:12px">' +
+      '<span style="color:var(--muted)">' + (typeof fsLineLabel === 'function' ? fsLineLabel(k) : k) + '</span>' +
+      '<b>' + money(byFs[k]) + '</b></span>'
+    ).join('');
+    sumEl.innerHTML = (chips
+      ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px">' + chips + '</div>'
+      : '') +
+      '<div style="font-size:13px;margin-top:4px">Total P&amp;L expenses <b>' + money(Math.max(0, expenses)) + '</b> · ' +
+      expRows.length + ' account' + (expRows.length === 1 ? '' : 's') + ' with activity</div>';
+  }
+
   if (byCat) {
-    const expRows = getCoa().filter(a => a.type === 'expense' || a.id === '3100').map(a => ({
-      name: a.name,
-      total: (act[a.id]?.debit || 0) - (act[a.id]?.credit || 0)
-    })).filter(r => r.total > 0.001).sort((a, b) => b.total - a.total);
     if (!expRows.length) {
-      byCat.innerHTML = '<p class="section-sub" style="margin:0">No expenses posted in this period.</p>';
+      byCat.innerHTML = '<p class="section-sub" style="margin:0">No expense ledger activity in this period. Bank outflows may still sit under inventory, drawings, AP, or assets — see below.</p>';
     } else {
       const max = Math.max(1, ...expRows.map(r => r.total));
       byCat.innerHTML = expRows.map(r =>
-        `<div class="barrow" style="margin-bottom:8px">
-          <span style="min-width:140px;font-size:12px">${r.name}</span>
-          <div class="track"><div class="fill b" style="width:${(r.total / max) * 100}%"></div></div>
-          <b class="right" style="font-size:12px">${money(r.total)}</b>
+        `<div class="barrow" style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button type="button" class="button small" data-gl-drill="${r.id}" style="min-width:160px;justify-content:flex-start;padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline;cursor:pointer;font-size:12px;text-align:left">${r.id} · ${String(r.name).replace(/</g, '')}</button>
+          <div class="track" style="flex:1;min-width:80px"><div class="fill b" style="width:${(r.total / max) * 100}%"></div></div>
+          <b class="right" style="font-size:12px;font-variant-numeric:tabular-nums">${money(r.total)}</b>
         </div>`
       ).join('');
+      byCat.querySelectorAll('[data-gl-drill]').forEach(btn => {
+        btn.addEventListener('click', () => drillToLedger(btn.getAttribute('data-gl-drill')));
+      });
+    }
+  }
+
+  // Non-expense period debits that often absorb "missing" spend
+  if (nonEl) {
+    const otherOut = [];
+    coaAll.forEach(a => {
+      if (isPlExpenseAccount(a)) return;
+      if (isCashEquivalentAccount(a)) return;
+      if (a.type === 'income') return;
+      const deb = (act[a.id]?.debit || 0);
+      const cred = (act[a.id]?.credit || 0);
+      // Money that left via non-expense: drawings (equity debit), inventory/asset debits, AP debits (paying bills), loan payments
+      let amt = 0;
+      let label = a.name;
+      if (isOwnerDrawingsAccount(a)) {
+        amt = deb - cred; // drawings increase with debit
+        label = a.name + ' (owner drawings)';
+      } else if (a.type === 'asset' && (a.id === '1300' || a.fsLine === 'inventory' || /inventory|stock/i.test(a.name || ''))) {
+        amt = deb - cred;
+        label = a.name + ' (inventory purchase)';
+      } else if (a.type === 'asset' && (a.fsLine === 'non_current_assets' || /equipment|fixed|asset/i.test(a.name || ''))) {
+        amt = Math.max(0, deb - cred);
+        label = a.name + ' (asset purchase)';
+      } else if (a.type === 'liability' && (a.id === '2000' || a.fsLine === 'payables')) {
+        amt = Math.max(0, deb); // paying down AP
+        label = a.name + ' (supplier payments)';
+      } else if (a.type === 'liability' && (a.fsLine === 'loans' || /loan/i.test(a.name || ''))) {
+        amt = Math.max(0, deb);
+        label = a.name + ' (loan repayment)';
+      } else if (a.type === 'equity' && deb > cred + 0.001) {
+        amt = deb - cred;
+        label = a.name + ' (equity debit)';
+      }
+      if (amt > 0.001) otherOut.push({ id: a.id, name: label, total: amt });
+    });
+    otherOut.sort((a, b) => b.total - a.total);
+    if (otherOut.length) {
+      const otherSum = otherOut.reduce((n, r) => n + r.total, 0);
+      nonEl.innerHTML = '<div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Cash / ledger outs that are not P&amp;L expenses</div>' +
+        '<p class="section-sub" style="margin:0 0 8px">These reduce cash or change the balance sheet but are <b>not</b> in the Expenses card. Total <b>' + money(otherSum) + '</b>.</p>' +
+        otherOut.map(r =>
+          `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px">
+            <button type="button" class="button small" data-gl-drill="${r.id}" style="padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline;cursor:pointer;text-align:left">${r.id} · ${String(r.name).replace(/</g, '')}</button>
+            <b style="font-variant-numeric:tabular-nums">${money(r.total)}</b>
+          </div>`
+        ).join('');
+      nonEl.querySelectorAll('[data-gl-drill]').forEach(btn => {
+        btn.addEventListener('click', () => drillToLedger(btn.getAttribute('data-gl-drill')));
+      });
+    } else {
+      nonEl.innerHTML = '';
     }
   }
 
@@ -20890,8 +21099,8 @@ function buildBooksReportHtml(kind) {
       const net = (act[a.id]?.credit || 0) - (act[a.id]?.debit || 0);
       return { ...a, net };
     }).filter(a => Math.abs(a.net) > 0.001);
-    const expenses = getCoa().filter(a => a.type === 'expense' || a.id === '3100').map(a => {
-      const net = (act[a.id]?.debit || 0) - (act[a.id]?.credit || 0);
+    const expenses = getCoa().filter(a => isPlExpenseAccount(a)).map(a => {
+      const net = expensePeriodAmount(a.id, act);
       return { ...a, net };
     }).filter(a => Math.abs(a.net) > 0.001);
     const rev = income.reduce((n, a) => n + a.net, 0);
@@ -25798,14 +26007,26 @@ document.getElementById('journalCsvFile')?.addEventListener('change', (e) => {
   e.target.value = '';
 });
 document.getElementById('booksPeriod')?.addEventListener('change', () => {
-  syncBooksCustomDateUI();
-  booksView();
+  const v = document.getElementById('booksPeriod')?.value || 'month';
+  setBooksPeriod(v);
+});
+document.getElementById('booksPeriodChips')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-books-period]');
+  if (!btn) return;
+  e.preventDefault();
+  setBooksPeriod(btn.getAttribute('data-books-period'));
 });
 document.getElementById('booksDateFrom')?.addEventListener('change', () => {
-  if (document.getElementById('booksPeriod')?.value === 'custom') booksView();
+  if (document.getElementById('booksPeriod')?.value === 'custom') {
+    syncBooksPeriodChips();
+    booksView();
+  }
 });
 document.getElementById('booksDateTo')?.addEventListener('change', () => {
-  if (document.getElementById('booksPeriod')?.value === 'custom') booksView();
+  if (document.getElementById('booksPeriod')?.value === 'custom') {
+    syncBooksPeriodChips();
+    booksView();
+  }
 });
 
 document.getElementById('brCancel')?.addEventListener('click', closeBankRuleModal);
