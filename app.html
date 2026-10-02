@@ -3628,6 +3628,19 @@ input:focus:not(:focus-visible) {
             <div class="card"><small>Added</small><b id="bankTxAdded">0</b></div>
             <div class="card"><small>Excluded</small><b id="bankTxExcluded">0</b></div>
           </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
+            <span class="section-sub" style="margin:0">Filter</span>
+            <select id="bankTxFilter" style="min-width:160px;font-size:13px">
+              <option value="all">All lines</option>
+              <option value="out">Outflows (debits)</option>
+              <option value="in">Inflows (credits)</option>
+              <option value="rule">Has rule</option>
+              <option value="norule">No rule</option>
+              <option value="pending">Pending only</option>
+              <option value="excluded">Excluded only</option>
+            </select>
+            <input id="bankTxSearch" type="search" placeholder="Search description…" style="flex:1;min-width:140px;font-size:13px;padding:6px 10px;border:1px solid var(--line);border-radius:8px">
+          </div>
           <div id="bankTxList"></div>
         </div>
       </div>
@@ -25169,9 +25182,45 @@ function renderBankTransactions() {
   set('bankTxExcluded', counts.excluded || 0);
   try { updateBankTxReconHint(); } catch {}
 
-  const pending = list.filter(t => t.status === 'pending').sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  const excluded = list.filter(t => t.status === 'excluded').sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  const done = list.filter(t => t.status === 'matched' || t.status === 'added')
+  // Direction / rule / status filters + search
+  const filterEl = document.getElementById('bankTxFilter');
+  const searchEl = document.getElementById('bankTxSearch');
+  if (filterEl && !filterEl.dataset.bound) {
+    filterEl.dataset.bound = '1';
+    filterEl.addEventListener('change', () => { try { renderBankTransactions(); } catch (_) {} });
+  }
+  if (searchEl && !searchEl.dataset.bound) {
+    searchEl.dataset.bound = '1';
+    let _btq;
+    searchEl.addEventListener('input', () => {
+      clearTimeout(_btq);
+      _btq = setTimeout(() => { try { renderBankTransactions(); } catch (_) {} }, 180);
+    });
+  }
+  const filter = (filterEl && filterEl.value) || 'all';
+  const q = String((searchEl && searchEl.value) || '').trim().toLowerCase();
+  const hasRule = (tx) => {
+    if (tx.suggestedRuleId || tx.appliedRuleId) return true;
+    try { return !!findMatchingBankRule(tx); } catch (_) { return false; }
+  };
+  const passFilter = (tx) => {
+    const amt = Number(tx.amount) || 0;
+    if (filter === 'out' && !(amt < 0)) return false;
+    if (filter === 'in' && !(amt > 0)) return false;
+    if (filter === 'rule' && !hasRule(tx)) return false;
+    if (filter === 'norule' && hasRule(tx)) return false;
+    if (filter === 'pending' && tx.status !== 'pending') return false;
+    if (filter === 'excluded' && tx.status !== 'excluded') return false;
+    if (q) {
+      const hay = String(tx.description || '').toLowerCase() + ' ' + String(tx.date || '');
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  };
+  const filtered = list.filter(passFilter);
+  const pending = filtered.filter(t => t.status === 'pending').sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const excluded = filtered.filter(t => t.status === 'excluded').sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const done = filtered.filter(t => t.status === 'matched' || t.status === 'added')
     .sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 40);
   const v = bankImportValidation(accountId);
 
