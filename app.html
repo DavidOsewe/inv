@@ -7298,6 +7298,8 @@ document.addEventListener('click', (e) => {
   if (bankAdd) { e.preventDefault(); addBankTx(bankAdd.getAttribute('data-bank-add')); return; }
   const bankEx = e.target.closest('[data-bank-exclude]');
   if (bankEx) { e.preventDefault(); excludeBankTx(bankEx.getAttribute('data-bank-exclude')); return; }
+  const bankIn = e.target.closest('[data-bank-include]');
+  if (bankIn) { e.preventDefault(); includeBankTx(bankIn.getAttribute('data-bank-include')); return; }
   const bankSaveRule = e.target.closest('[data-bank-saverule]');
   if (bankSaveRule) {
     e.preventDefault();
@@ -25040,8 +25042,73 @@ function excludeBankTx(id) {
       { status: 'pending' }, { status: 'excluded' }, {});
   } catch {}
   renderBankTransactions();
-  toast('Excluded');
+  toast('Excluded — still listed under Excluded for review');
   track('bank_tx_excluded', {});
+}
+
+/** Put an excluded line back into For review (undo exclude / bad rule). */
+function includeBankTx(id) {
+  ensureBooksDb();
+  const tx = (db.bankTransactions || []).find(t => t.id === id);
+  if (!tx || tx.status !== 'excluded') return;
+  const prev = tx.status;
+  tx.status = 'pending';
+  delete tx.appliedRuleId;
+  save();
+  try {
+    appendBooksAudit('bank.included', 'bank_tx', tx.id, 'Re-included · ' + (tx.description || '').slice(0, 80),
+      { status: prev }, { status: 'pending' }, {});
+  } catch {}
+  renderBankTransactions();
+  toast('Back in For review');
+  track('bank_tx_included', {});
+}
+
+/** Statement batch vs reviewed amounts for the selected bank account. */
+function bankImportValidation(accountId) {
+  ensureBooksDb();
+  const list = (db.bankTransactions || []).filter(t => t.accountId === accountId);
+  const byStatus = { pending: [], matched: [], added: [], excluded: [] };
+  list.forEach(t => {
+    const st = t.status || 'pending';
+    if (!byStatus[st]) byStatus[st] = [];
+    byStatus[st].push(t);
+  });
+  const sumAbs = (arr) => arr.reduce((n, t) => {
+    const a = Number(t.amount) || 0;
+    return n + (a < 0 ? -a : a);
+  }, 0);
+  const sumDebit = (arr) => arr.reduce((n, t) => n + (Number(t.amount) < 0 ? -Number(t.amount) : 0), 0);
+  const sumCredit = (arr) => arr.reduce((n, t) => n + (Number(t.amount) > 0 ? Number(t.amount) : 0), 0);
+  // Latest import batch for this account (if any still present)
+  const imports = (db.statementImports || []).filter(s => s.accountId === accountId);
+  const lastImp = imports.length ? imports[imports.length - 1] : null;
+  const batchLines = lastImp
+    ? list.filter(t => t.importBatchId === lastImp.id)
+    : list;
+  const batchSum = summarizeBankTxs(batchLines);
+  return {
+    lastImp,
+    batchSum,
+    counts: {
+      pending: byStatus.pending.length,
+      matched: byStatus.matched.length,
+      added: byStatus.added.length,
+      excluded: byStatus.excluded.length,
+      total: list.length
+    },
+    amounts: {
+      pending: sumAbs(byStatus.pending),
+      matched: sumAbs(byStatus.matched),
+      added: sumAbs(byStatus.added),
+      excluded: sumAbs(byStatus.excluded),
+      pendingDr: sumDebit(byStatus.pending),
+      pendingCr: sumCredit(byStatus.pending),
+      excludedDr: sumDebit(byStatus.excluded),
+      excludedCr: sumCredit(byStatus.excluded)
+    },
+    excluded: byStatus.excluded
+  };
 }
 
 function autoMatchAllBankTx() {
@@ -25103,19 +25170,53 @@ function renderBankTransactions() {
   try { updateBankTxReconHint(); } catch {}
 
   const pending = list.filter(t => t.status === 'pending').sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  const done = list.filter(t => t.status !== 'pending').sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 40);
+  const excluded = list.filter(t => t.status === 'excluded').sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const done = list.filter(t => t.status === 'matched' || t.status === 'added')
+    .sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 40);
+  const v = bankImportValidation(accountId);
 
   if (!list.length) {
     el.innerHTML = `<div class="empty" style="padding:20px">
       <h3>No bank transactions yet</h3>
-      <p>Import a CSV from your bank (date, description, amount). Then Match lines that already exist in Books, Add new ones, or Exclude noise.</p>
+      <p>Import a CSV from your bank (date, description, amount). Then Match lines that already exist in Books, Add new ones, or Exclude noise. Excluded lines stay visible so you can re-include them.</p>
     </div>`;
     return;
   }
 
   let html = '';
+  // Validation strip: statement batch vs review buckets
+  html += '<div style="margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">';
+  html += '<div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Import vs review</div>';
+  if (v.lastImp) {
+    html += '<div style="font-size:12px;margin-bottom:6px">Latest file · <b>' +
+      String(v.lastImp.fileName || 'CSV').replace(/</g, '') + '</b>' +
+      (v.lastImp.minD ? (' · ' + v.lastImp.minD + (v.lastImp.maxD && v.lastImp.maxD !== v.lastImp.minD ? (' → ' + v.lastImp.maxD) : '')) : '') +
+      '</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin-bottom:6px">' +
+      '<span>Mapped outflows <b>' + money(v.lastImp.debits || 0) + '</b></span>' +
+      '<span>Mapped inflows <b>' + money(v.lastImp.credits || 0) + '</b></span>' +
+      '<span>Net <b>' + money(v.lastImp.net || 0) + '</b></span>' +
+      '<span>Rows kept <b>' + (v.lastImp.rowCount || 0) + '</b>' +
+      (v.lastImp.skippedDup ? (' · skipped dups ' + v.lastImp.skippedDup) : '') + '</span></div>';
+  }
+  html += '<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px">' +
+    '<span>Pending <b>' + v.counts.pending + '</b> · ' + money(v.amounts.pending) + '</span>' +
+    '<span>Matched <b>' + v.counts.matched + '</b> · ' + money(v.amounts.matched) + '</span>' +
+    '<span>Posted (Add) <b>' + v.counts.added + '</b> · ' + money(v.amounts.added) + '</span>' +
+    '<span style="color:' + (v.counts.excluded ? '#92400e' : 'inherit') + '">Excluded <b>' + v.counts.excluded + '</b> · ' + money(v.amounts.excluded) + '</span>' +
+    '</div>';
+  if (v.counts.pending > 0) {
+    html += '<p class="section-sub" style="margin:8px 0 0">Still to action: outflows ' + money(v.amounts.pendingDr) +
+      ' · inflows ' + money(v.amounts.pendingCr) + '. Match or Add before reconciling.</p>';
+  } else if (v.counts.excluded > 0) {
+    html += '<p class="section-sub" style="margin:8px 0 0">All pending cleared. Review <b>Excluded</b> below — re-include anything that should hit the books.</p>';
+  } else {
+    html += '<p class="section-sub" style="margin:8px 0 0">All lines matched or posted for this account.</p>';
+  }
+  html += '</div>';
+
   if (pending.length) {
-    html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">For review</div>';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">For review · ' + pending.length + '</div>';
     html += pending.map(tx => {
       const isIn = Number(tx.amount) >= 0;
       const hint = findBankTxMatch(tx);
@@ -25124,7 +25225,7 @@ function renderBankTransactions() {
       if (rule) sub = 'Rule: ' + (rule.name || rule.contains) + (rule.action === 'exclude' ? ' → exclude' : ' → ' + coaName(rule.coaId || '5700'));
       return `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)">
         <div style="flex:1;min-width:180px">
-          <div style="font-size:13px;font-weight:600">${tx.date || ''} · ${tx.description || 'Transaction'}${rule ? ' <span class="badge">Rule</span>' : ''}</div>
+          <div style="font-size:13px;font-weight:600">${tx.date || ''} · ${String(tx.description || 'Transaction').replace(/</g, '')}${rule ? ' <span class="badge">Rule</span>' : ''}</div>
           <div style="font-size:12px;color:var(--muted)">${sub}</div>
         </div>
         <b style="color:${isIn ? 'var(--green-text)' : 'var(--red-text)'}">${isIn ? '+' : '−'}${money(Math.abs(tx.amount))}</b>
@@ -25135,13 +25236,33 @@ function renderBankTransactions() {
       </div>`;
     }).join('');
   } else {
-    html += '<p class="section-sub">All imported lines reviewed for this account.</p>';
+    html += '<p class="section-sub">No pending lines — check Excluded if something is missing from the books.</p>';
   }
+
+  if (excluded.length) {
+    html += '<div style="margin-top:16px;padding:12px 14px;border:1px solid #fcd34d;border-radius:12px;background:#fffbeb">';
+    html += '<div style="font-size:11px;font-weight:800;color:#92400e;text-transform:uppercase;margin-bottom:6px">Excluded · review &amp; re-include · ' + excluded.length + '</div>';
+    html += '<p class="section-sub" style="margin:0 0 10px">These did not post. Re-include puts them back in For review so you can Match or Add.</p>';
+    html += excluded.map(tx => {
+      const isIn = Number(tx.amount) >= 0;
+      const rule = tx.appliedRuleId ? (db.bankRules || []).find(r => r.id === tx.appliedRuleId) : null;
+      return `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;border-top:1px solid rgba(146,64,14,.2)">
+        <div style="flex:1;min-width:160px">
+          <div style="font-size:13px;font-weight:600">${tx.date || ''} · ${String(tx.description || 'Transaction').replace(/</g, '')}</div>
+          <div style="font-size:12px;color:var(--muted)">${rule ? ('Excluded by rule · ' + (rule.name || rule.contains || '')) : 'Manually excluded'}</div>
+        </div>
+        <b style="color:${isIn ? 'var(--green-text)' : 'var(--red-text)'}">${isIn ? '+' : '−'}${money(Math.abs(tx.amount))}</b>
+        <button type="button" class="button small primary" data-bank-include="${tx.id}">Re-include</button>
+      </div>`;
+    }).join('');
+    html += '</div>';
+  }
+
   if (done.length) {
-    html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin:16px 0 6px">Recently reviewed</div>';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin:16px 0 6px">Matched / posted</div>';
     html += done.map(tx =>
       `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--line);color:var(--muted);display:flex;justify-content:space-between;gap:8px">
-        <span>${tx.date || ''} · ${tx.description || ''} · <b>${tx.status}</b></span>
+        <span>${tx.date || ''} · ${String(tx.description || '').replace(/</g, '')} · <b>${tx.status}</b></span>
         <span>${money(Math.abs(tx.amount))}</span>
       </div>`
     ).join('');
