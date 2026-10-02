@@ -14157,17 +14157,10 @@ function stockRecalcTotal(p) {
   if (!p) return 0;
   const map = ensureProductStockMap(p);
   const locs = (db.locations || []).filter(l => l.active !== false);
-  let total = 0;
-  if (locs.length) {
-    const activeIds = new Set(locs.map(l => l.id));
-    total = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
-    // Count orphan location keys too (pre-dedupe / stale ids) so opening is not invisible
-    Object.keys(map).forEach(lid => {
-      if (!activeIds.has(lid)) total += Number(map[lid]) || 0;
-    });
-  } else {
-    total = Object.values(map).reduce((n, v) => n + (Number(v) || 0), 0);
-  }
+  // Total = sum of qty at active stores only (opening must live on a store map)
+  const total = locs.length
+    ? locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0)
+    : Object.values(map).reduce((n, v) => n + (Number(v) || 0), 0);
   p.stock_qty = total;
   p.updated_at = new Date().toISOString();
   return total;
@@ -14260,41 +14253,17 @@ function migrateProductStockToLocations() {
   (db.products || []).forEach(p => {
     if (!p || p.track_stock === false) return;
     const map = ensureProductStockMap(p);
-    // Import any legacy locationStock rows once
-    (db.locationStock || []).forEach(s => {
-      if (s.product_id !== p.id || !s.location_id) return;
-      const lid = activeIds.has(s.location_id) ? s.location_id : (def && def.id);
-      if (!lid) return;
-      if (map[lid] == null) map[lid] = 0;
-      // Only fill from mirror if map slot empty / zero and row has qty
-      if (Math.abs(Number(map[lid]) || 0) < 0.0001 && Math.abs(Number(s.qty) || 0) > 0.0001) {
-        map[lid] = Number(s.qty) || 0;
-      }
-    });
-    // Fold qty on dead/orphan location ids into main store so opening is not lost
-    Object.keys(map).forEach(lid => {
-      if (activeIds.has(lid)) return;
-      const q = Number(map[lid]) || 0;
-      if (q && def) map[def.id] = (Number(map[def.id]) || 0) + q;
-      delete map[lid];
-    });
+    // One-time: opening qty only on product.stock_qty → put on main store
     let sum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
     const total = Number(p.stock_qty) || 0;
-    // Opening / legacy total sitting only on product.stock_qty
     if (Math.abs(sum) < 0.0001 && Math.abs(total) > 0.0001 && def) {
       map[def.id] = total;
       sum = total;
     }
-    // Rebuild from movements when map still empty (e.g. after site-data + partial cloud)
-    if (Math.abs(sum) < 0.0001 && def) {
-      const net = (db.stockMovements || [])
-        .filter(m => m && m.product_id === p.id)
-        .reduce((n, m) => n + (Number(m.qty_change) || 0), 0);
-      if (Math.abs(net) > 0.0001) {
-        map[def.id] = net;
-        sum = net;
-      }
-    }
+    // Drop dead location keys (do not re-add into main — avoids double-count after dedupe)
+    Object.keys(map).forEach(lid => {
+      if (!activeIds.has(lid)) delete map[lid];
+    });
     locs.forEach(loc => {
       if (map[loc.id] == null) map[loc.id] = 0;
       stockMirrorRow(p.id, loc.id, map[loc.id]);
@@ -20611,35 +20580,32 @@ function fillPayDepositAccountSelect(selectedId) {
 
 function isCashEquivalentAccount(a) {
   if (!a || a.type !== 'asset') return false;
-  if (a.fsLine === 'cash_and_equivalents' || a.cfSection === 'cash') return true;
-  if (a.id === '1000' || a.id === '1050' || a.id === '1100' || a.id === '1200') return true;
-  const n = String(a.name || '');
   const id = String(a.id || '');
-  // Nigerian banks / wallets + generic cash
-  if (/cash|bank|monie|opay|palm|gtbank|gt\s*bank|access|zenith|uba|first\s*bank|fidelity|sterling|wema|wallet|till|petty|mfb|equivalent|pos\s*float|float|kuda|carbon|chipper/i.test(n)) return true;
-  // Asset codes in the typical cash/bank range (1000–1299)
-  if (/^1[0-2]\d{2}$/.test(id)) return true;
+  const n = String(a.name || '');
+  // Never treat AR, inventory, VAT, prepayments, fixed assets as "pay from"
+  if (/receivable|inventory|stock|vat|tax\s*recover|prepay|fixed\s*asset|ppe|equipment|vehicle|furniture|goodwill|depreciation/i.test(n)) return false;
+  if (id === '1100' || id === '1200' || id === '1300' || id === '1400' || id === '1500') return false;
+  if (a.fsLine === 'cash_and_equivalents' || a.cfSection === 'cash') return true;
+  if (id === '1000' || id === '1010' || id === '1020' || id === '1050') return true;
+  // Nigerian banks / wallets + generic cash / till
+  if (/cash|bank|monie|opay|palm|gtbank|gt\s*bank|access|zenith|uba|first\s*bank|fidelity|sterling|wema|wallet|till|petty|mfb|equivalent|pos\s*float|float|kuda|carbon|chipper|providus|polaris|fcmb|eco\s*bank|union\s*bank|keystone/i.test(n)) return true;
+  // Narrow cash/bank code band only (1000–1099), not full 11xx–12xx
+  if (/^10\d{2}$/.test(id)) return true;
   return false;
 }
 
-/** Accounts available when paying a bill / cash out — always includes full cash & bank set. */
+/** Accounts available when paying a bill / cash out — full cash & bank set from COA. */
 function listPayFromAccounts() {
   const coa = (typeof getCoa === 'function' ? getCoa() : []) || [];
   let banks = coa.filter(isCashEquivalentAccount);
-  if (banks.length <= 1) {
-    // Broader fallback: any current asset that looks monetary
-    const extra = coa.filter(a =>
-      a && a.type === 'asset' &&
-      !banks.some(b => b.id === a.id) &&
-      (/cash|bank|wallet|till|float|deposit|receivable/i.test(String(a.name || '')) || /^1\d{3}$/.test(String(a.id || '')))
-    );
-    banks = banks.concat(extra);
-  }
-  if (!banks.length) {
-    banks = coa.filter(a => a && a.type === 'asset').slice(0, 30);
-  }
+  // Include any other asset the user labelled as bank/cash in coaExtra overrides
+  coa.forEach(a => {
+    if (!a || banks.some(b => b.id === a.id)) return;
+    if (a.type === 'asset' && /cash|bank|wallet|till|float|petty/i.test(String(a.name || ''))) {
+      banks.push(a);
+    }
+  });
   if (!banks.length) banks = [{ id: '1000', name: 'Cash', type: 'asset' }];
-  // Stable sort by code
   return banks.slice().sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
 }
 
