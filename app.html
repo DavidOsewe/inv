@@ -24298,39 +24298,38 @@ function offerReimportBankFile(prior, onProceed) {
     'This file was already imported on ' + when +
     ' (' + fname + ', ' + lines + ' lines).\n\n';
   if (counts.pending > 0) {
-    msg += 'Remove ' + counts.pending + ' pending line(s) from that import and re-map the columns?\n';
+    msg += 'Remove ' + counts.pending + ' pending line(s) from that import and re-map?\n';
     if (counts.locked > 0) {
-      msg += '(' + counts.locked + ' already added/matched/excluded will stay in the books.)\n';
+      msg += '(' + counts.locked + ' already added/matched/excluded stay — they will show as skipped duplicates with full detail.)\n';
     }
-    msg += '\nOK = undo pending + open mapper again\nCancel = keep as-is (no duplicates)';
+    msg += '\nContinue = undo pending + open column mapper\nCancel = keep as-is';
   } else if (counts.locked > 0) {
     msg +=
-      'All lines from that import are already posted (' + counts.locked + ').\n' +
-      'You can still clear the file lock and import again — row-level duplicates will be skipped.\n\n' +
-      'OK = clear file lock + open mapper\nCancel = keep lock';
+      counts.locked + ' line(s) from that import are already matched/posted/excluded.\n' +
+      'Re-import will skip those as identifiable duplicates (date + amount + narration) and list them under Skipped duplicates.\n\n' +
+      'Continue = clear file lock + open mapper\nCancel = keep lock';
   } else {
     msg +=
-      'No lines remain from that import (already cleared). Clear the file lock and map again?\n\n' +
-      'OK = open mapper\nCancel = keep lock';
+      'No lines remain from that import. Clear the file lock and map again?\n\n' +
+      'Continue = open mapper\nCancel = keep lock';
   }
   confirmAction(
-    'Duplicate import',
+    'File already imported',
     msg,
     () => {
       const r = undoPendingBankImport(prior.id);
-      // If prior was only a lock with no batch id match, still remove by contentHash
+      // Always drop lock by contentHash so mapper + commit can run
       db.statementImports = (db.statementImports || []).filter(x => x.contentHash !== prior.contentHash);
       try { save(); } catch (_) {}
       toast(
         (r.removed ? ('Removed ' + r.removed + ' pending · ') : '') +
-        'Re-map columns for a clean import'
+        'Map columns — skipped dups will be listed with date, narration, amount'
       );
       try { track('bank_tx_import_remap', { removed: r.removed }); } catch (_) {}
       if (typeof onProceed === 'function') onProceed();
     },
     { okLabel: 'Continue' }
   );
-  // Cancel path: keep existing data (user closed modal or clicked Cancel)
   return true;
 }
 
@@ -24369,16 +24368,18 @@ function importBankTxCsv(file) {
         return;
       }
       const contentHash = hashBankFileContent(raw);
-      // File-level duplicate block
-      const prior = (db.statementImports || []).find(s => s.contentHash === contentHash);
-      if (prior) {
-        toast('This exact file was already imported on ' + String(prior.importedAt || '').slice(0, 10) + ' · ' + (prior.fileName || '') + ' (' + (prior.rowCount || 0) + ' lines). Duplicates blocked.');
-        track('bank_tx_import_dup_file', { file: name });
-        return;
-      }
       const rows = parseCsvText(raw);
       if (!rows.length) {
         toast('Empty file or unreadable. Export as CSV (not Excel workbook)');
+        return;
+      }
+      // Same file already imported → offer soft re-map (do not hard-block)
+      const prior = (db.statementImports || []).find(s => s.contentHash === contentHash);
+      if (prior) {
+        track('bank_tx_import_dup_file', { file: name });
+        offerReimportBankFile(prior, () => {
+          openBankColumnMapper(rows, name, contentHash);
+        });
         return;
       }
       openBankColumnMapper(rows, name, contentHash);
@@ -24483,32 +24484,54 @@ function commitBankTxImport(txs, meta) {
     }
   }
   const accountId = document.getElementById('bankTxAccount')?.value || '1000';
+  const mappedSummary = meta.summary || summarizeBankTxs(txs);
   let added = 0;
   let skippedDup = 0;
+  let skippedDr = 0;
+  let skippedCr = 0;
+  const addedRows = [];
+  const skippedRows = []; // identifiable list for review
   const seen = new Set();
   const batchId = crypto.randomUUID();
   txs.forEach(tx => {
     const fp = bankTxFingerprint(tx);
-    if (seen.has(fp) || (db.bankTransactions || []).some(t => t.accountId === accountId && t.fingerprint === fp)) {
+    const amt = Number(tx.amount) || 0;
+    const inFileDup = seen.has(fp);
+    const existing = !inFileDup && (db.bankTransactions || []).find(t => t.accountId === accountId && t.fingerprint === fp);
+    if (inFileDup || existing) {
       skippedDup++;
+      if (amt < 0) skippedDr += -amt;
+      else if (amt > 0) skippedCr += amt;
+      if (skippedRows.length < 300) {
+        skippedRows.push({
+          date: tx.date || '',
+          description: String(tx.description || '').slice(0, 160),
+          amount: amt,
+          reason: inFileDup ? 'file_dup' : 'existing',
+          existingStatus: existing ? (existing.status || 'pending') : null,
+          existingId: existing ? existing.id : null
+        });
+      }
       return;
     }
     seen.add(fp);
-    db.bankTransactions.push({
+    const row = {
       id: crypto.randomUUID(),
       accountId,
       date: tx.date || (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10)),
       description: tx.description || '',
-      amount: Number(tx.amount) || 0,
+      amount: amt,
       status: 'pending',
       matchedJournalId: null,
       fingerprint: fp,
       importBatchId: batchId,
       importedAt: new Date().toISOString()
-    });
+    };
+    db.bankTransactions.push(row);
+    addedRows.push(row);
     added++;
   });
-  const summary = meta.summary || summarizeBankTxs(txs);
+  const importedSummary = summarizeBankTxs(addedRows);
   if (meta.contentHash || meta.fileName) {
     db.statementImports = db.statementImports || [];
     db.statementImports.push({
@@ -24516,13 +24539,22 @@ function commitBankTxImport(txs, meta) {
       contentHash: meta.contentHash || null,
       fileName: meta.fileName || '',
       accountId,
+      // Mapped = every row after column map (before dedup)
+      mappedRows: mappedSummary.n,
+      debits: mappedSummary.debits,
+      credits: mappedSummary.credits,
+      net: mappedSummary.net,
+      // Actually imported (new rows only)
       rowCount: added,
+      importedDebits: importedSummary.debits,
+      importedCredits: importedSummary.credits,
+      importedNet: importedSummary.net,
       skippedDup,
-      debits: summary.debits,
-      credits: summary.credits,
-      net: summary.net,
-      minD: summary.minD,
-      maxD: summary.maxD,
+      skippedDebits: skippedDr,
+      skippedCredits: skippedCr,
+      skippedRows, // identifiable dups for UI
+      minD: mappedSummary.minD || importedSummary.minD,
+      maxD: mappedSummary.maxD || importedSummary.maxD,
       importedAt: new Date().toISOString()
     });
     if (db.statementImports.length > 100) db.statementImports = db.statementImports.slice(-100);
@@ -24541,10 +24573,13 @@ function commitBankTxImport(txs, meta) {
     }
   } catch (_) {}
   let msg = 'Imported ' + added + ' new';
-  if (summary && summary.n) {
-    msg += ' · out ' + money(summary.debits) + ' · in ' + money(summary.credits);
+  if (importedSummary && importedSummary.n) {
+    msg += ' · out ' + money(importedSummary.debits) + ' · in ' + money(importedSummary.credits);
   }
-  if (skippedDup) msg += ' · skipped ' + skippedDup + ' duplicate' + (skippedDup === 1 ? '' : 's');
+  if (skippedDup) {
+    msg += ' · skipped ' + skippedDup + ' dup' + (skippedDup === 1 ? '' : 's') +
+      ' (out ' + money(skippedDr) + ' · in ' + money(skippedCr) + ')';
+  }
   if (applied && applied.suggested) msg += ' · ' + applied.suggested + ' matched a rule — use Apply rules → Review to review & post';
   else if (applied && applied.applied) msg += ' · ' + applied.applied + ' auto-posted';
   if (!added && skippedDup) msg = 'All ' + skippedDup + ' rows already imported (duplicates skipped)';
@@ -24553,8 +24588,10 @@ function commitBankTxImport(txs, meta) {
     rows: added,
     skipped_dup: skippedDup,
     rules_applied: (applied && applied.applied) || 0,
-    debits: summary.debits,
-    credits: summary.credits
+    debits: importedSummary.debits,
+    credits: importedSummary.credits,
+    mapped_debits: mappedSummary.debits,
+    mapped_credits: mappedSummary.credits
   });
 }
 
@@ -25081,46 +25118,102 @@ function includeBankTx(id) {
 function bankImportValidation(accountId) {
   ensureBooksDb();
   const list = (db.bankTransactions || []).filter(t => t.accountId === accountId);
-  const byStatus = { pending: [], matched: [], added: [], excluded: [] };
-  list.forEach(t => {
-    const st = t.status || 'pending';
-    if (!byStatus[st]) byStatus[st] = [];
-    byStatus[st].push(t);
-  });
   const sumAbs = (arr) => arr.reduce((n, t) => {
     const a = Number(t.amount) || 0;
     return n + (a < 0 ? -a : a);
   }, 0);
   const sumDebit = (arr) => arr.reduce((n, t) => n + (Number(t.amount) < 0 ? -Number(t.amount) : 0), 0);
   const sumCredit = (arr) => arr.reduce((n, t) => n + (Number(t.amount) > 0 ? Number(t.amount) : 0), 0);
-  // Latest import batch for this account (if any still present)
+  const bucket = (arr) => {
+    const by = { pending: [], matched: [], added: [], excluded: [] };
+    arr.forEach(t => {
+      const st = t.status || 'pending';
+      if (!by[st]) by[st] = [];
+      by[st].push(t);
+    });
+    return by;
+  };
+  // Account-wide (cards at top)
+  const allBy = bucket(list);
+  // Latest import batch for this account
   const imports = (db.statementImports || []).filter(s => s.accountId === accountId);
   const lastImp = imports.length ? imports[imports.length - 1] : null;
   const batchLines = lastImp
     ? list.filter(t => t.importBatchId === lastImp.id)
-    : list;
+    : list.slice();
+  const batchBy = bucket(batchLines);
   const batchSum = summarizeBankTxs(batchLines);
+  // Live imported totals should equal sum of batch status buckets
+  const liveDr = sumDebit(batchLines);
+  const liveCr = sumCredit(batchLines);
+  const statusDr = sumDebit(batchBy.pending) + sumDebit(batchBy.matched) + sumDebit(batchBy.added) + sumDebit(batchBy.excluded);
+  const statusCr = sumCredit(batchBy.pending) + sumCredit(batchBy.matched) + sumCredit(batchBy.added) + sumCredit(batchBy.excluded);
+  const storedImpDr = lastImp && lastImp.importedDebits != null ? Number(lastImp.importedDebits) : (lastImp ? Number(lastImp.debits) || 0 : liveDr);
+  const storedImpCr = lastImp && lastImp.importedCredits != null ? Number(lastImp.importedCredits) : (lastImp ? Number(lastImp.credits) || 0 : liveCr);
+  // Gap explanations
+  const mappedDr = lastImp ? Number(lastImp.debits) || 0 : 0;
+  const mappedCr = lastImp ? Number(lastImp.credits) || 0 : 0;
+  const skipDr = lastImp ? Number(lastImp.skippedDebits) || 0 : 0;
+  const skipCr = lastImp ? Number(lastImp.skippedCredits) || 0 : 0;
+  // Expected: mapped ≈ imported + skipped (when we have both)
+  const mapVsImportDr = Math.abs(mappedDr - (storedImpDr + skipDr));
+  const mapVsImportCr = Math.abs(mappedCr - (storedImpCr + skipCr));
+  // Expected: live batch lines ≈ imported at commit (should match unless lines deleted)
+  const liveVsStoredDr = Math.abs(liveDr - storedImpDr);
+  const liveVsStoredCr = Math.abs(liveCr - storedImpCr);
   return {
     lastImp,
     batchSum,
+    batchLines,
+    batchBy,
     counts: {
-      pending: byStatus.pending.length,
-      matched: byStatus.matched.length,
-      added: byStatus.added.length,
-      excluded: byStatus.excluded.length,
-      total: list.length
+      pending: allBy.pending.length,
+      matched: allBy.matched.length,
+      added: allBy.added.length,
+      excluded: allBy.excluded.length,
+      total: list.length,
+      batchPending: batchBy.pending.length,
+      batchMatched: batchBy.matched.length,
+      batchAdded: batchBy.added.length,
+      batchExcluded: batchBy.excluded.length,
+      batchTotal: batchLines.length
     },
     amounts: {
-      pending: sumAbs(byStatus.pending),
-      matched: sumAbs(byStatus.matched),
-      added: sumAbs(byStatus.added),
-      excluded: sumAbs(byStatus.excluded),
-      pendingDr: sumDebit(byStatus.pending),
-      pendingCr: sumCredit(byStatus.pending),
-      excludedDr: sumDebit(byStatus.excluded),
-      excludedCr: sumCredit(byStatus.excluded)
+      pending: sumAbs(allBy.pending),
+      matched: sumAbs(allBy.matched),
+      added: sumAbs(allBy.added),
+      excluded: sumAbs(allBy.excluded),
+      pendingDr: sumDebit(allBy.pending),
+      pendingCr: sumCredit(allBy.pending),
+      excludedDr: sumDebit(allBy.excluded),
+      excludedCr: sumCredit(allBy.excluded),
+      batchPendingDr: sumDebit(batchBy.pending),
+      batchPendingCr: sumCredit(batchBy.pending),
+      batchMatchedDr: sumDebit(batchBy.matched),
+      batchMatchedCr: sumCredit(batchBy.matched),
+      batchAddedDr: sumDebit(batchBy.added),
+      batchAddedCr: sumCredit(batchBy.added),
+      batchExcludedDr: sumDebit(batchBy.excluded),
+      batchExcludedCr: sumCredit(batchBy.excluded),
+      liveDr,
+      liveCr,
+      statusDr,
+      statusCr,
+      storedImpDr,
+      storedImpCr,
+      mappedDr,
+      mappedCr,
+      skipDr,
+      skipCr
     },
-    excluded: byStatus.excluded
+    gaps: {
+      mapVsImportDr,
+      mapVsImportCr,
+      liveVsStoredDr,
+      liveVsStoredCr,
+      ok: mapVsImportDr < 1 && mapVsImportCr < 1 && liveVsStoredDr < 1 && liveVsStoredCr < 1
+    },
+    excluded: allBy.excluded
   };
 }
 
@@ -25233,36 +25326,170 @@ function renderBankTransactions() {
   }
 
   let html = '';
-  // Validation strip: statement batch vs review buckets
+  // Validation strip: CSV → skipped → imported → status buckets (latest batch)
   html += '<div style="margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">';
-  html += '<div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Import vs review</div>';
+  html += '<div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Where the statement went</div>';
   if (v.lastImp) {
-    html += '<div style="font-size:12px;margin-bottom:6px">Latest file · <b>' +
-      String(v.lastImp.fileName || 'CSV').replace(/</g, '') + '</b>' +
-      (v.lastImp.minD ? (' · ' + v.lastImp.minD + (v.lastImp.maxD && v.lastImp.maxD !== v.lastImp.minD ? (' → ' + v.lastImp.maxD) : '')) : '') +
+    const imp = v.lastImp;
+    html += '<div style="font-size:12px;margin-bottom:8px">Latest file · <b>' +
+      String(imp.fileName || 'CSV').replace(/</g, '') + '</b>' +
+      (imp.minD ? (' · ' + imp.minD + (imp.maxD && imp.maxD !== imp.minD ? (' → ' + imp.maxD) : '')) : '') +
       '</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin-bottom:6px">' +
-      '<span>Mapped outflows <b>' + money(v.lastImp.debits || 0) + '</b></span>' +
-      '<span>Mapped inflows <b>' + money(v.lastImp.credits || 0) + '</b></span>' +
-      '<span>Net <b>' + money(v.lastImp.net || 0) + '</b></span>' +
-      '<span>Rows kept <b>' + (v.lastImp.rowCount || 0) + '</b>' +
-      (v.lastImp.skippedDup ? (' · skipped dups ' + v.lastImp.skippedDup) : '') + '</span></div>';
+    // Step 1: mapped
+    html += '<div style="font-size:12px;margin-bottom:4px"><b>1. Mapped from CSV</b> · ' +
+      (imp.mappedRows != null ? imp.mappedRows : (imp.rowCount || 0) + (imp.skippedDup || 0)) + ' rows · ' +
+      'out <b>' + money(v.amounts.mappedDr) + '</b> · in <b>' + money(v.amounts.mappedCr) + '</b></div>';
+    // Step 2: skipped dups
+    if (imp.skippedDup) {
+      html += '<div style="font-size:12px;margin-bottom:4px;color:var(--muted)"><b>2. Skipped duplicates</b> · ' +
+        imp.skippedDup + ' rows already on this account · out ' + money(v.amounts.skipDr) +
+        ' · in ' + money(v.amounts.skipCr) +
+        (v.amounts.skipDr + v.amounts.skipCr < 0.01 && imp.skippedDup
+          ? ' <span style="color:#92400e">(amounts not stored on older imports — re-import once for full breakdown)</span>'
+          : '') +
+        '</div>';
+    } else {
+      html += '<div style="font-size:12px;margin-bottom:4px;color:var(--muted)"><b>2. Skipped duplicates</b> · none</div>';
+    }
+    // Step 3: actually imported
+    html += '<div style="font-size:12px;margin-bottom:4px"><b>3. Imported into queue</b> · ' +
+      (imp.rowCount || 0) + ' rows · out <b>' + money(v.amounts.storedImpDr) + '</b> · in <b>' + money(v.amounts.storedImpCr) + '</b></div>';
+    // Step 4: this batch status
+    html += '<div style="font-size:12px;margin-bottom:6px;padding:8px 10px;border-radius:8px;background:var(--panel);border:1px solid var(--line)">' +
+      '<div style="font-weight:700;margin-bottom:4px">4. This batch right now</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:10px">' +
+      '<span>Pending <b>' + v.counts.batchPending + '</b> · out ' + money(v.amounts.batchPendingDr) + ' · in ' + money(v.amounts.batchPendingCr) + '</span>' +
+      '<span>Matched <b>' + v.counts.batchMatched + '</b></span>' +
+      '<span>Posted <b>' + v.counts.batchAdded + '</b> · out ' + money(v.amounts.batchAddedDr) + ' · in ' + money(v.amounts.batchAddedCr) + '</span>' +
+      '<span style="color:' + (v.counts.batchExcluded ? '#92400e' : 'inherit') + '">Excluded <b>' + v.counts.batchExcluded + '</b> · out ' + money(v.amounts.batchExcludedDr) + ' · in ' + money(v.amounts.batchExcludedCr) + '</span>' +
+      '</div></div>';
+    // Explain common gap: Apply rules modal only posts pending — excluded inflows not in "to post"
+    if (v.counts.batchExcluded > 0 && v.amounts.batchExcludedCr > 0.01) {
+      html += '<p class="section-sub" style="margin:6px 0 0;color:#92400e"><b>Why “in NGN 0” on Post selected?</b> ' +
+        money(v.amounts.batchExcludedCr) + ' of inflows sit in <b>Excluded</b> (not pending). ' +
+        'Re-include them if they should hit the books, or leave them out if they were intentional.</p>';
+    }
+    // Explicit outflow / inflow bridge so mapped − pending is never a mystery
+    const outInQueue = v.amounts.batchPendingDr + v.amounts.batchMatchedDr + v.amounts.batchAddedDr + v.amounts.batchExcludedDr;
+    const inInQueue = v.amounts.batchPendingCr + v.amounts.batchMatchedCr + v.amounts.batchAddedCr + v.amounts.batchExcludedCr;
+    // For older imports without skippedDebits, residual after queue = implied dups
+    let skipDrShow = v.amounts.skipDr;
+    let skipCrShow = v.amounts.skipCr;
+    let skipImplied = false;
+    if (imp.skippedDup && skipDrShow + skipCrShow < 0.01) {
+      skipDrShow = Math.max(0, v.amounts.mappedDr - outInQueue);
+      skipCrShow = Math.max(0, v.amounts.mappedCr - inInQueue);
+      skipImplied = true;
+    }
+    const outResidual = v.amounts.mappedDr - outInQueue - skipDrShow;
+    const inResidual = v.amounts.mappedCr - inInQueue - skipCrShow;
+
+    html += '<div style="margin-top:10px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#fff">';
+    html += '<div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Outflow bridge (mapped → queue)</div>';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    html += '<tr><td style="padding:3px 0">Mapped outflows (CSV)</td><td style="text-align:right;font-variant-numeric:tabular-nums"><b>' + money(v.amounts.mappedDr) + '</b></td></tr>';
+    html += '<tr><td style="padding:3px 0;color:var(--muted)">− Pending outflows</td><td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)">− ' + money(v.amounts.batchPendingDr) + '</td></tr>';
+    html += '<tr><td style="padding:3px 0;color:var(--muted)">− Matched outflows</td><td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)">− ' + money(v.amounts.batchMatchedDr) + '</td></tr>';
+    html += '<tr><td style="padding:3px 0;color:var(--muted)">− Posted outflows</td><td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)">− ' + money(v.amounts.batchAddedDr) + '</td></tr>';
+    html += '<tr><td style="padding:3px 0;color:var(--muted)">− Excluded outflows</td><td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)">− ' + money(v.amounts.batchExcludedDr) + '</td></tr>';
+    html += '<tr><td style="padding:3px 0;color:#92400e">− Skipped duplicates (out)' + (skipImplied ? ' <i>estimated</i>' : '') + '</td><td style="text-align:right;font-variant-numeric:tabular-nums;color:#92400e">− ' + money(skipDrShow) + '</td></tr>';
+    html += '<tr style="border-top:1px solid var(--line)"><td style="padding:6px 0 0"><b>Remainder</b></td><td style="text-align:right;padding-top:6px;font-variant-numeric:tabular-nums"><b style="color:' + (Math.abs(outResidual) < 1 ? 'var(--green-text)' : 'var(--red-text)') + '">' + money(outResidual) + '</b></td></tr>';
+    html += '</table>';
+
+    const gapOut = v.amounts.mappedDr - v.amounts.batchPendingDr;
+    if (Math.abs(gapOut) > 1) {
+      html += '<p style="margin:10px 0 0;font-size:13px;line-height:1.45"><b>Mapped out ' + money(v.amounts.mappedDr) +
+        ' − pending out ' + money(v.amounts.batchPendingDr) + ' = ' + money(gapOut) + '.</b> ';
+      if (skipDrShow > 0.01 && v.amounts.batchExcludedDr < 0.01 && v.amounts.batchMatchedDr < 0.01 && v.amounts.batchAddedDr < 0.01) {
+        html += 'That entire difference is <b>duplicate rows skipped on import</b> (' + (imp.skippedDup || '?') +
+          ' rows). They never entered For review — they were already on this Moniepoint account from an earlier import. Nothing is missing from the queue.</p>';
+      } else {
+        const parts = [];
+        if (v.amounts.batchExcludedDr > 0.01) parts.push(money(v.amounts.batchExcludedDr) + ' excluded');
+        if (v.amounts.batchMatchedDr > 0.01) parts.push(money(v.amounts.batchMatchedDr) + ' matched');
+        if (v.amounts.batchAddedDr > 0.01) parts.push(money(v.amounts.batchAddedDr) + ' posted');
+        if (skipDrShow > 0.01) parts.push(money(skipDrShow) + ' skipped dups');
+        html += 'Split: ' + (parts.length ? parts.join(' + ') : 'see bridge above') + '.</p>';
+      }
+    } else {
+      html += '<p class="section-sub" style="margin:8px 0 0">Outflows balance: every mapped naira is pending, matched, posted, excluded, or a skipped duplicate.</p>';
+    }
+
+    // Compact inflow bridge
+    html += '<div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);margin:14px 0 6px">Inflow bridge</div>';
+    html += '<div style="font-size:12px">Mapped in <b>' + money(v.amounts.mappedCr) + '</b>';
+    html += ' · pending ' + money(v.amounts.batchPendingCr);
+    html += ' · excluded ' + money(v.amounts.batchExcludedCr);
+    html += ' · skipped dups ' + money(skipCrShow);
+    html += ' · remainder <b style="color:' + (Math.abs(inResidual) < 1 ? 'var(--green-text)' : 'var(--red-text)') + '">' + money(inResidual) + '</b></div>';
+    html += '</div>';
+
+    // Identifiable skipped list (stored on import)
+    const skipList = Array.isArray(imp.skippedRows) ? imp.skippedRows : [];
+    if (imp.skippedDup) {
+      html += '<div style="margin-top:12px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel)">';
+      html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px">';
+      html += '<div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted)">Skipped duplicates · ' + imp.skippedDup +
+        (skipList.length && skipList.length < imp.skippedDup ? (' (showing ' + skipList.length + ')') : '') + '</div>';
+      if (skipList.length) {
+        html += '<button type="button" class="btn secondary" style="font-size:12px;padding:4px 10px" onclick="(function(b){var el=document.getElementById(\'bankSkipList\');if(!el)return;var on=el.style.display!==\'none\';el.style.display=on?\'none\':\'block\';b.textContent=on?\'Show list\':\'Hide list\'})(this)">Show list</button>';
+      }
+      html += '</div>';
+      if (!skipList.length) {
+        html += '<p class="section-sub" style="margin:0">This import was saved before we kept row-level skip details. <b>Clear pending</b> on this account (if any), then re-import the same CSV once — each skipped line will list date, narration, amount, and why (already on account vs repeated in the file).</p>';
+      } else {
+        html += '<div id="bankSkipList" style="display:none;max-height:280px;overflow:auto">';
+        html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+        html += '<thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--line)">' +
+          '<th style="padding:4px 6px 6px 0">Date</th><th style="padding:4px 6px">Narration</th>' +
+          '<th style="padding:4px 6px;text-align:right">Amount</th><th style="padding:4px 0 6px 6px">Why skipped</th></tr></thead><tbody>';
+        skipList.forEach(function (r) {
+          const isIn = Number(r.amount) >= 0;
+          const why = r.reason === 'file_dup'
+            ? 'Repeated in this CSV'
+            : ('Already on account' + (r.existingStatus ? (' · ' + r.existingStatus) : ''));
+          html += '<tr style="border-bottom:1px solid var(--line)">' +
+            '<td style="padding:6px 6px 6px 0;white-space:nowrap">' + String(r.date || '—').replace(/</g, '') + '</td>' +
+            '<td style="padding:6px;max-width:220px;overflow:hidden;text-overflow:ellipsis">' + String(r.description || '—').replace(/</g, '') + '</td>' +
+            '<td style="padding:6px;text-align:right;font-variant-numeric:tabular-nums;color:' + (isIn ? 'var(--green-text)' : 'var(--red-text)') + '">' +
+            (isIn ? '+' : '−') + money(Math.abs(Number(r.amount) || 0)) + '</td>' +
+            '<td style="padding:6px 0 6px 6px;color:var(--muted)">' + why + '</td></tr>';
+        });
+        html += '</tbody></table></div>';
+        const fileDups = skipList.filter(function (r) { return r.reason === 'file_dup'; }).length;
+        const existing = skipList.length - fileDups;
+        html += '<p class="section-sub" style="margin:8px 0 0">' +
+          (existing ? (existing + ' already on this account') : '') +
+          (existing && fileDups ? ' · ' : '') +
+          (fileDups ? (fileDups + ' repeated inside the CSV') : '') +
+          '. Fingerprint = date + amount + narration — same line on a second upload is skipped on purpose.</p>';
+      }
+      html += '</div>';
+    }
   }
-  html += '<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px">' +
+  // Account-wide summary
+  html += '<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">' +
+    '<span style="color:var(--muted)">All on this account:</span>' +
     '<span>Pending <b>' + v.counts.pending + '</b> · ' + money(v.amounts.pending) + '</span>' +
-    '<span>Matched <b>' + v.counts.matched + '</b> · ' + money(v.amounts.matched) + '</span>' +
-    '<span>Posted (Add) <b>' + v.counts.added + '</b> · ' + money(v.amounts.added) + '</span>' +
+    '<span>Matched <b>' + v.counts.matched + '</b></span>' +
+    '<span>Posted <b>' + v.counts.added + '</b></span>' +
     '<span style="color:' + (v.counts.excluded ? '#92400e' : 'inherit') + '">Excluded <b>' + v.counts.excluded + '</b> · ' + money(v.amounts.excluded) + '</span>' +
     '</div>';
   if (v.counts.pending > 0) {
-    html += '<p class="section-sub" style="margin:8px 0 0">Still to action: outflows ' + money(v.amounts.pendingDr) +
-      ' · inflows ' + money(v.amounts.pendingCr) + '. Match or Add before reconciling.</p>';
+    html += '<p class="section-sub" style="margin:8px 0 0">Still to action (pending): outflows ' + money(v.amounts.pendingDr) +
+      ' · inflows ' + money(v.amounts.pendingCr) + '. Match, Add, or Apply rules → Review.</p>';
   } else if (v.counts.excluded > 0) {
-    html += '<p class="section-sub" style="margin:8px 0 0">All pending cleared. Review <b>Excluded</b> below — re-include anything that should hit the books.</p>';
+    html += '<p class="section-sub" style="margin:8px 0 0">No pending lines. Review <b>Excluded</b> below — re-include anything that should post.</p>';
   } else {
     html += '<p class="section-sub" style="margin:8px 0 0">All lines matched or posted for this account.</p>';
   }
   html += '</div>';
+
+  if (filter !== 'all' || q) {
+    html += '<p class="section-sub" style="margin:0 0 8px">Showing <b>' + filtered.length + '</b> of ' + list.length +
+      (filter === 'out' ? ' · outflows' : filter === 'in' ? ' · inflows' : filter === 'rule' ? ' · with rule' : filter === 'norule' ? ' · no rule' : filter === 'pending' ? ' · pending' : filter === 'excluded' ? ' · excluded' : '') +
+      (q ? (' · “' + String(q).replace(/</g, '') + '”') : '') + '</p>';
+  }
 
   if (pending.length) {
     html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">For review · ' + pending.length + '</div>';
