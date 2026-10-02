@@ -25114,6 +25114,121 @@ function includeBankTx(id) {
   track('bank_tx_included', {});
 }
 
+/**
+ * Force-add a row that was skipped as a "duplicate" into For review.
+ * Many bank lines share date+amount+similar narration (stamp duty, same-day transfers)
+ * and are unique in reality — fingerprint is conservative on purpose.
+ */
+/**
+ * Force-add a row that was skipped as a "duplicate" into For review.
+ * Many bank lines share date+amount+similar narration (stamp duty, same-day transfers)
+ * and are unique in reality — fingerprint is conservative on purpose.
+ * @param {{ silent?: boolean }} opts
+ * @returns {boolean} true if a row was added
+ */
+function includeSkippedBankRow(importId, skipIndex, opts) {
+  opts = opts || {};
+  ensureBooksDb();
+  const imp = (db.statementImports || []).find(s => s.id === importId);
+  if (!imp || !Array.isArray(imp.skippedRows)) {
+    if (!opts.silent) toast('Import skip list not found');
+    return false;
+  }
+  const idx = Number(skipIndex);
+  if (!(idx >= 0) || idx >= imp.skippedRows.length) return false;
+  const r = imp.skippedRows[idx];
+  if (!r || r.included) {
+    if (!opts.silent) toast('Already added to review');
+    return false;
+  }
+  const accountId = imp.accountId || document.getElementById('bankTxAccount')?.value || '1000';
+  const amt = Number(r.amount) || 0;
+  if (!(Math.abs(amt) > 0.0001)) {
+    if (!opts.silent) toast('Zero amount — nothing to add');
+    return false;
+  }
+  // Unique fingerprint so a second identical-looking line can exist in the queue
+  const baseFp = bankTxFingerprint({ date: r.date, description: r.description, amount: amt });
+  const forceId = crypto.randomUUID().slice(0, 8);
+  const row = {
+    id: crypto.randomUUID(),
+    accountId,
+    date: r.date || (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10)),
+    description: r.description || '',
+    amount: amt,
+    status: 'pending',
+    matchedJournalId: null,
+    fingerprint: baseFp + '|force:' + forceId,
+    importBatchId: imp.id,
+    importedAt: new Date().toISOString(),
+    forceIncluded: true,
+    forceFromSkip: true
+  };
+  db.bankTransactions = db.bankTransactions || [];
+  db.bankTransactions.push(row);
+  r.included = true;
+  r.includedTxId = row.id;
+  imp.skippedDup = Math.max(0, (Number(imp.skippedDup) || 0) - 1);
+  if (amt < 0) {
+    const abs = -amt;
+    imp.skippedDebits = Math.max(0, (Number(imp.skippedDebits) || 0) - abs);
+    imp.importedDebits = (Number(imp.importedDebits) || 0) + abs;
+  } else if (amt > 0) {
+    imp.skippedCredits = Math.max(0, (Number(imp.skippedCredits) || 0) - amt);
+    imp.importedCredits = (Number(imp.importedCredits) || 0) + amt;
+  }
+  imp.rowCount = (Number(imp.rowCount) || 0) + 1;
+  imp.importedNet = (Number(imp.importedCredits) || 0) - (Number(imp.importedDebits) || 0);
+  try {
+    appendBooksAudit('bank.skip_included', 'bank_tx', row.id,
+      'Force-included skipped line · ' + (r.description || '').slice(0, 80),
+      { reason: r.reason }, { status: 'pending' }, {});
+  } catch {}
+  if (!opts.silent) {
+    save();
+    try { applyBankRulesToPending({ suggestOnly: true }); } catch {}
+    renderBankTransactions();
+    toast('Added to For review — map/post like any other line');
+    track('bank_tx_skip_included', { reason: r.reason || '' });
+  }
+  return true;
+}
+
+/** Force-add every not-yet-included skipped row for an import. */
+function includeAllSkippedBankRows(importId) {
+  ensureBooksDb();
+  const imp = (db.statementImports || []).find(s => s.id === importId);
+  if (!imp || !Array.isArray(imp.skippedRows) || !imp.skippedRows.length) {
+    toast('No skipped rows to add');
+    return;
+  }
+  const pending = imp.skippedRows
+    .map((r, i) => ({ r, i }))
+    .filter(x => x.r && !x.r.included);
+  if (!pending.length) {
+    toast('All skipped rows already added');
+    return;
+  }
+  confirmAction(
+    'Add skipped lines to review',
+    'Add ' + pending.length + ' skipped line(s) into For review?\n\n' +
+    'Use this when the same date + amount + similar narration are actually different transactions (common with stamp duty, POS, transfers).\n\n' +
+    'You can still Exclude any line after it lands in the queue.',
+    () => {
+      let n = 0;
+      pending.forEach(({ i }) => {
+        if (includeSkippedBankRow(importId, i, { silent: true })) n++;
+      });
+      save();
+      try { applyBankRulesToPending({ suggestOnly: true }); } catch {}
+      renderBankTransactions();
+      toast(n + ' line' + (n === 1 ? '' : 's') + ' added to For review');
+      track('bank_tx_skip_included_bulk', { n });
+    },
+    { okLabel: 'Add all to review' }
+  );
+}
+
 /** Statement batch vs reviewed amounts for the selected bank account. */
 function bankImportValidation(accountId) {
   ensureBooksDb();
@@ -25424,45 +25539,62 @@ function renderBankTransactions() {
     html += ' · remainder <b style="color:' + (Math.abs(inResidual) < 1 ? 'var(--green-text)' : 'var(--red-text)') + '">' + money(inResidual) + '</b></div>';
     html += '</div>';
 
-    // Identifiable skipped list (stored on import)
+    // Identifiable skipped list (stored on import) + force-include
     const skipList = Array.isArray(imp.skippedRows) ? imp.skippedRows : [];
-    if (imp.skippedDup) {
+    const skipOpen = skipList.filter(function (r) { return r && !r.included; }).length;
+    const skipDone = skipList.filter(function (r) { return r && r.included; }).length;
+    if (imp.skippedDup || skipList.length) {
       html += '<div style="margin-top:12px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel)">';
       html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px">';
-      html += '<div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted)">Skipped duplicates · ' + imp.skippedDup +
-        (skipList.length && skipList.length < imp.skippedDup ? (' (showing ' + skipList.length + ')') : '') + '</div>';
+      html += '<div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted)">Skipped duplicates · ' +
+        (skipOpen || imp.skippedDup || 0) +
+        (skipDone ? (' · ' + skipDone + ' already added') : '') + '</div>';
+      html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
       if (skipList.length) {
         html += '<button type="button" class="btn secondary" style="font-size:12px;padding:4px 10px" onclick="(function(b){var el=document.getElementById(\'bankSkipList\');if(!el)return;var on=el.style.display!==\'none\';el.style.display=on?\'none\':\'block\';b.textContent=on?\'Show list\':\'Hide list\'})(this)">Show list</button>';
       }
-      html += '</div>';
+      if (skipOpen > 0) {
+        html += '<button type="button" class="btn" style="font-size:12px;padding:4px 10px" onclick="includeAllSkippedBankRows(\'' +
+          String(imp.id).replace(/'/g, '') + '\')">Add all to review</button>';
+      }
+      html += '</div></div>';
       if (!skipList.length) {
-        html += '<p class="section-sub" style="margin:0">This import was saved before we kept row-level skip details. <b>Clear pending</b> on this account (if any), then re-import the same CSV once — each skipped line will list date, narration, amount, and why (already on account vs repeated in the file).</p>';
+        html += '<p class="section-sub" style="margin:0">No row-level skip details on this import yet. Re-upload the CSV → Continue on “File already imported” → map → import. Then you can review and force-include unique lines.</p>';
       } else {
-        html += '<div id="bankSkipList" style="display:none;max-height:280px;overflow:auto">';
+        html += '<div id="bankSkipList" style="display:none;max-height:320px;overflow:auto">';
         html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
         html += '<thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--line)">' +
           '<th style="padding:4px 6px 6px 0">Date</th><th style="padding:4px 6px">Narration</th>' +
-          '<th style="padding:4px 6px;text-align:right">Amount</th><th style="padding:4px 0 6px 6px">Why skipped</th></tr></thead><tbody>';
-        skipList.forEach(function (r) {
+          '<th style="padding:4px 6px;text-align:right">Amount</th><th style="padding:4px 6px">Why skipped</th>' +
+          '<th style="padding:4px 0 6px 6px"></th></tr></thead><tbody>';
+        skipList.forEach(function (r, idx) {
           const isIn = Number(r.amount) >= 0;
-          const why = r.reason === 'file_dup'
-            ? 'Repeated in this CSV'
-            : ('Already on account' + (r.existingStatus ? (' · ' + r.existingStatus) : ''));
-          html += '<tr style="border-bottom:1px solid var(--line)">' +
+          const why = r.included
+            ? 'Added to review'
+            : (r.reason === 'file_dup'
+              ? 'Repeated in this CSV'
+              : ('Already on account' + (r.existingStatus ? (' · ' + r.existingStatus) : '')));
+          html += '<tr style="border-bottom:1px solid var(--line);opacity:' + (r.included ? '0.55' : '1') + '">' +
             '<td style="padding:6px 6px 6px 0;white-space:nowrap">' + String(r.date || '—').replace(/</g, '') + '</td>' +
-            '<td style="padding:6px;max-width:220px;overflow:hidden;text-overflow:ellipsis">' + String(r.description || '—').replace(/</g, '') + '</td>' +
+            '<td style="padding:6px;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="' +
+              String(r.description || '').replace(/"/g, '&quot;').replace(/</g, '') + '">' +
+              String(r.description || '—').replace(/</g, '') + '</td>' +
             '<td style="padding:6px;text-align:right;font-variant-numeric:tabular-nums;color:' + (isIn ? 'var(--green-text)' : 'var(--red-text)') + '">' +
             (isIn ? '+' : '−') + money(Math.abs(Number(r.amount) || 0)) + '</td>' +
-            '<td style="padding:6px 0 6px 6px;color:var(--muted)">' + why + '</td></tr>';
+            '<td style="padding:6px;color:var(--muted)">' + why + '</td>' +
+            '<td style="padding:6px 0 6px 6px;white-space:nowrap">';
+          if (!r.included) {
+            html += '<button type="button" class="btn secondary" style="font-size:11px;padding:3px 8px" ' +
+              'onclick="includeSkippedBankRow(\'' + String(imp.id).replace(/'/g, '') + '\',' + idx + ')">Add to review</button>';
+          } else {
+            html += '<span style="font-size:11px;color:var(--muted)">In queue</span>';
+          }
+          html += '</td></tr>';
         });
         html += '</tbody></table></div>';
-        const fileDups = skipList.filter(function (r) { return r.reason === 'file_dup'; }).length;
-        const existing = skipList.length - fileDups;
-        html += '<p class="section-sub" style="margin:8px 0 0">' +
-          (existing ? (existing + ' already on this account') : '') +
-          (existing && fileDups ? ' · ' : '') +
-          (fileDups ? (fileDups + ' repeated inside the CSV') : '') +
-          '. Fingerprint = date + amount + narration — same line on a second upload is skipped on purpose.</p>';
+        html += '<p class="section-sub" style="margin:8px 0 0">Fingerprint is date + amount + narration — conservative on purpose. ' +
+          'If lines look the same but are different payments, use <b>Add to review</b> (or <b>Add all</b>). ' +
+          'You can still Exclude any line after it lands in the queue.</p>';
       }
       html += '</div>';
     }
