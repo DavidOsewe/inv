@@ -13313,33 +13313,46 @@ async function saveProductFromModal() {
       updated_at: now,
       cloudId: null
     };
+    // Opening qty must land on a store map — stock_qty alone is only a cache
+    const openingQty = Number.isNaN(stock) ? 0 : stock;
+    product.stock_qty = 0;
+    product.stock_by_location = {};
     db.products.push(product);
-    if (product.stock_qty) {
+    if (openingQty) {
       try {
         const loc = (typeof getActiveLocation === 'function' && getActiveLocation())
-          || (db.locations || []).find(l => l.is_default)
+          || (db.locations || []).find(l => l.is_default && l.active !== false)
+          || (db.locations || []).find(l => l.active !== false)
           || (db.locations || [])[0];
-        if (loc && typeof adjustLocationStock === 'function') {
-          adjustLocationStock(product.id, loc.id, product.stock_qty, {
+        if (loc && typeof stockApplyDelta === 'function') {
+          stockApplyDelta(product.id, loc.id, openingQty, {
+            reason: 'opening',
+            note: 'Opening stock'
+          });
+        } else if (loc && typeof adjustLocationStock === 'function') {
+          adjustLocationStock(product.id, loc.id, openingQty, {
             reason: 'opening',
             note: 'Opening stock'
           });
         } else {
+          product.stock_qty = openingQty;
           db.stockMovements.push({
             id: crypto.randomUUID(),
             product_id: product.id,
-            qty_change: product.stock_qty,
+            qty_change: openingQty,
             reason: 'opening',
             reference: null,
             note: 'Opening stock',
             created_at: now
           });
         }
-      } catch (_) {
+      } catch (e) {
+        console.warn('opening stock', e);
+        product.stock_qty = openingQty;
         db.stockMovements.push({
           id: crypto.randomUUID(),
           product_id: product.id,
-          qty_change: product.stock_qty,
+          qty_change: openingQty,
           reason: 'opening',
           reference: null,
           note: 'Opening stock',
@@ -14144,9 +14157,17 @@ function stockRecalcTotal(p) {
   if (!p) return 0;
   const map = ensureProductStockMap(p);
   const locs = (db.locations || []).filter(l => l.active !== false);
-  const total = locs.length
-    ? locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0)
-    : Object.values(map).reduce((n, v) => n + (Number(v) || 0), 0);
+  let total = 0;
+  if (locs.length) {
+    const activeIds = new Set(locs.map(l => l.id));
+    total = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
+    // Count orphan location keys too (pre-dedupe / stale ids) so opening is not invisible
+    Object.keys(map).forEach(lid => {
+      if (!activeIds.has(lid)) total += Number(map[lid]) || 0;
+    });
+  } else {
+    total = Object.values(map).reduce((n, v) => n + (Number(v) || 0), 0);
+  }
   p.stock_qty = total;
   p.updated_at = new Date().toISOString();
   return total;
@@ -14235,18 +14256,44 @@ function migrateProductStockToLocations() {
   const locs = (db.locations || []).filter(l => l.active !== false);
   if (!locs.length) return;
   const def = locs.find(l => l.is_default) || locs[0];
+  const activeIds = new Set(locs.map(l => l.id));
   (db.products || []).forEach(p => {
     if (!p || p.track_stock === false) return;
     const map = ensureProductStockMap(p);
     // Import any legacy locationStock rows once
     (db.locationStock || []).forEach(s => {
       if (s.product_id !== p.id || !s.location_id) return;
-      if (map[s.location_id] == null) map[s.location_id] = Number(s.qty) || 0;
+      const lid = activeIds.has(s.location_id) ? s.location_id : (def && def.id);
+      if (!lid) return;
+      if (map[lid] == null) map[lid] = 0;
+      // Only fill from mirror if map slot empty / zero and row has qty
+      if (Math.abs(Number(map[lid]) || 0) < 0.0001 && Math.abs(Number(s.qty) || 0) > 0.0001) {
+        map[lid] = Number(s.qty) || 0;
+      }
+    });
+    // Fold qty on dead/orphan location ids into main store so opening is not lost
+    Object.keys(map).forEach(lid => {
+      if (activeIds.has(lid)) return;
+      const q = Number(map[lid]) || 0;
+      if (q && def) map[def.id] = (Number(map[def.id]) || 0) + q;
+      delete map[lid];
     });
     let sum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
     const total = Number(p.stock_qty) || 0;
+    // Opening / legacy total sitting only on product.stock_qty
     if (Math.abs(sum) < 0.0001 && Math.abs(total) > 0.0001 && def) {
       map[def.id] = total;
+      sum = total;
+    }
+    // Rebuild from movements when map still empty (e.g. after site-data + partial cloud)
+    if (Math.abs(sum) < 0.0001 && def) {
+      const net = (db.stockMovements || [])
+        .filter(m => m && m.product_id === p.id)
+        .reduce((n, m) => n + (Number(m.qty_change) || 0), 0);
+      if (Math.abs(net) > 0.0001) {
+        map[def.id] = net;
+        sum = net;
+      }
     }
     locs.forEach(loc => {
       if (map[loc.id] == null) map[loc.id] = 0;
@@ -19083,15 +19130,24 @@ function approveExpenseBill(billId) {
 }
 
 /** Full COA picker for final expense post — no browser prompt. */
+/** Full chart of accounts for final AP/expense post — expense first, then rest. */
 function listExpenseCoaForPick() {
   const coa = (typeof getCoa === 'function' ? getCoa() : []) || [];
-  const expense = coa.filter(a => a && a.type === 'expense');
-  const extra = coa.filter(a => a && (a.type === 'income' || a.type === 'equity' || a.type === 'liability')
-    && !expense.some(e => e.id === a.id));
-  const stockish = coa.filter(a => a && a.type === 'asset' && /stock|inventory|cogs|1300|1400/i.test(String(a.id) + ' ' + (a.name || '')));
-  const merged = expense.concat(stockish).concat(extra);
-  if (!merged.length) return coa.slice();
-  return merged;
+  if (!coa.length) return [];
+  const rank = (t) => {
+    const x = String(t || '').toLowerCase();
+    if (x === 'expense') return 0;
+    if (x === 'asset') return 1;
+    if (x === 'liability') return 2;
+    if (x === 'equity') return 3;
+    if (x === 'income') return 4;
+    return 5;
+  };
+  return coa.slice().sort((a, b) => {
+    const rd = rank(a.type) - rank(b.type);
+    if (rd) return rd;
+    return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+  });
 }
 
 /**
