@@ -3545,10 +3545,12 @@ input:focus:not(:focus-visible) {
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center">
           <label style="font-size:12px;color:var(--muted)">Account</label>
           <select id="booksLedgerAccount" style="min-width:220px"></select>
+          <button type="button" class="button small" id="booksLedgerExportCsv" title="Download this account as CSV">Download CSV</button>
+          <button type="button" class="button small" id="booksLedgerExportPdf" title="Print / Save as PDF">Download PDF</button>
           <button type="button" class="button small" id="booksLedgerBackReports">← Statements</button>
         </div>
         <div class="insight"><h3>Account ledger</h3>
-          <p class="section-sub">Click a journal row to see the full entry and audit log.</p>
+          <p class="section-sub">Click a journal row to see the full entry and audit log. CSV and PDF use the period filter above.</p>
           <div id="booksLedger"></div>
         </div>
       </div>
@@ -20235,27 +20237,12 @@ function renderBooksTrial() {
 
 
 
-function renderBooksLedger() {
-  const sel = document.getElementById('booksLedgerAccount');
-  const el = document.getElementById('booksLedger');
-  const crumb = document.getElementById('booksLedgerCrumb');
-  if (!el) return;
-  const coa = getCoa();
-  if (sel) {
-    const cur = sel.value;
-    sel.innerHTML = coa.map(a =>
-      '<option value="' + a.id + '"' + (a.id === cur ? ' selected' : '') + '>' + a.id + ' · ' + a.name + '</option>'
-    ).join('');
-    sel.onchange = () => renderBooksLedger();
-  }
-  const accountId = sel?.value || '1000';
-  const acc = coa.find(a => a.id === accountId);
-  if (crumb) {
-    crumb.innerHTML = '<span style="color:var(--muted)">Financial statements</span> → <b>Ledger · ' +
-      (acc ? (acc.id + ' · ' + acc.name) : accountId) +
-      '</span> → <span style="color:var(--muted)">click a row for journal + audit</span>';
-  }
-  const range = booksDateRange();
+/** Build ledger rows for one account within the active books period. */
+function getAccountLedgerData(accountId) {
+  ensureBooksDb();
+  accountId = String(accountId || '');
+  const acc = getCoa().find(a => a.id === accountId) || { id: accountId, name: accountId, type: '' };
+  const range = typeof booksDateRange === 'function' ? booksDateRange() : { from: null, to: null };
   const lines = [];
   (db.journals || []).forEach(j => {
     if (!journalInDateRange(j, range)) return;
@@ -20272,28 +20259,211 @@ function renderBooksLedger() {
     });
   });
   lines.sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  let run = 0;
+  let opening = 0;
   if (range.from) {
     (db.journals || []).forEach(j => {
       if (String(j.date || '') >= range.from) return;
       (j.lines || []).forEach(l => {
         if (l.accountId !== accountId) return;
-        run += (Number(l.debit) || 0) - (Number(l.credit) || 0);
+        opening += (Number(l.debit) || 0) - (Number(l.credit) || 0);
       });
     });
   }
-  const opening = run;
-  if (!lines.length && Math.abs(opening) < 0.001) {
-    el.innerHTML = '<p class="section-sub">No movements on this account in the period. Try All time or Custom dates.</p>';
+  let run = opening;
+  const rows = lines.map(l => {
+    run += l.debit - l.credit;
+    return { ...l, balance: run };
+  });
+  const totalDebit = rows.reduce((n, r) => n + r.debit, 0);
+  const totalCredit = rows.reduce((n, r) => n + r.credit, 0);
+  return {
+    account: acc,
+    range,
+    opening,
+    closing: run,
+    rows,
+    totalDebit,
+    totalCredit,
+    periodLabel: typeof booksReportPeriodLabel === 'function' ? booksReportPeriodLabel() : 'Period'
+  };
+}
+
+function exportLedgerCsv(accountId) {
+  ensureBooksDb();
+  const sel = document.getElementById('booksLedgerAccount');
+  accountId = accountId || sel?.value || '';
+  if (!accountId) {
+    toast('Pick a ledger account first');
     return;
   }
-  const rangeLabel = range.from || range.to
-    ? (' · ' + (range.from || '…') + ' → ' + (range.to || 'today'))
+  const data = getAccountLedgerData(accountId);
+  const acc = data.account;
+  const esc = (s) => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
+  const lines = [
+    'Account,' + esc(acc.id + ' · ' + acc.name),
+    'Period,' + esc(data.periodLabel),
+    'Opening balance,' + data.opening,
+    '',
+    'Date,Memo,Source,Debit,Credit,Balance,Journal ID'
+  ];
+  data.rows.forEach(r => {
+    lines.push([
+      r.date || '',
+      esc(r.memo || ''),
+      esc(r.source || ''),
+      r.debit || 0,
+      r.credit || 0,
+      r.balance,
+      r.journalId || ''
+    ].join(','));
+  });
+  lines.push('');
+  lines.push('Totals,,,' + data.totalDebit + ',' + data.totalCredit + ',' + data.closing + ',');
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const safe = String(acc.id || 'account').replace(/[^\w.-]+/g, '_');
+  a.download = 'invoicedey-ledger-' + safe + '-' + (typeof today !== 'undefined' ? today : 'export') + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  track('ledger_csv_exported', { account: accountId, rows: data.rows.length });
+  toast('Ledger CSV downloaded · ' + acc.id + ' · ' + data.rows.length + ' lines');
+}
+
+function exportLedgerPdf(accountId) {
+  ensureBooksDb();
+  const sel = document.getElementById('booksLedgerAccount');
+  accountId = accountId || sel?.value || '';
+  if (!accountId) {
+    toast('Pick a ledger account first');
+    return;
+  }
+  const data = getAccountLedgerData(accountId);
+  const acc = data.account;
+  const biz = (db.profile && db.profile.name) || 'Business';
+  const currency = (db.profile && db.profile.reporting) || 'NGN';
+  const logo = (db.profile && db.profile.logo) || '';
+  const rangeLabel = data.range.from || data.range.to
+    ? ((data.range.from || '…') + ' → ' + (data.range.to || 'today'))
+    : 'All time';
+
+  let rowsHtml = '';
+  if (!data.rows.length) {
+    rowsHtml = '<tr><td colspan="5" style="padding:10px;color:#666">No movements in this period.</td></tr>';
+  } else {
+    data.rows.forEach(r => {
+      rowsHtml += '<tr>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eee">' + String(r.date || '—').replace(/</g, '') + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eee">' + String(r.memo || r.source || '').replace(/</g, '') + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eee;text-align:right">' + (r.debit ? money(r.debit) : '') + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eee;text-align:right">' + (r.credit ? money(r.credit) : '') + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eee;text-align:right">' + money(r.balance) + '</td>' +
+        '</tr>';
+    });
+  }
+
+  const body =
+    (logo ? '<div style="margin-bottom:8px"><img src="' + logo + '" alt="" style="max-height:48px;max-width:160px"></div>' : '') +
+    '<div style="font-size:11px;color:#666;margin-bottom:4px">' + String(biz).replace(/</g, '') + ' · ' + currency + '</div>' +
+    '<h1 style="font-size:18px;margin:0 0 4px">Account ledger</h1>' +
+    '<div style="font-size:14px;font-weight:700;margin-bottom:4px">' +
+      String(acc.id).replace(/</g, '') + ' · ' + String(acc.name || '').replace(/</g, '') +
+    '</div>' +
+    '<div style="font-size:12px;color:#555;margin-bottom:12px">Period: ' + String(data.periodLabel).replace(/</g, '') +
+      ' (' + rangeLabel + ') · Generated ' + new Date().toLocaleString() + '</div>' +
+    '<div style="font-size:12px;margin-bottom:10px">Opening balance <b>' + money(data.opening) + '</b></div>' +
+    '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
+    '<thead><tr>' +
+    '<th style="text-align:left;border-bottom:2px solid #111;padding:6px">Date</th>' +
+    '<th style="text-align:left;border-bottom:2px solid #111;padding:6px">Memo</th>' +
+    '<th style="text-align:right;border-bottom:2px solid #111;padding:6px">Debit</th>' +
+    '<th style="text-align:right;border-bottom:2px solid #111;padding:6px">Credit</th>' +
+    '<th style="text-align:right;border-bottom:2px solid #111;padding:6px">Balance</th>' +
+    '</tr></thead><tbody>' + rowsHtml + '</tbody>' +
+    '<tfoot><tr>' +
+    '<td colspan="2" style="padding:8px 6px;font-weight:700;border-top:2px solid #111">Totals / closing</td>' +
+    '<td style="padding:8px 6px;text-align:right;font-weight:700;border-top:2px solid #111">' + money(data.totalDebit) + '</td>' +
+    '<td style="padding:8px 6px;text-align:right;font-weight:700;border-top:2px solid #111">' + money(data.totalCredit) + '</td>' +
+    '<td style="padding:8px 6px;text-align:right;font-weight:700;border-top:2px solid #111">' + money(data.closing) + '</td>' +
+    '</tr></tfoot></table>' +
+    '<p style="font-size:10px;color:#888;margin-top:16px">Invoicedey · Account ledger export</p>';
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Ledger ${String(acc.id).replace(/</g, '')}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #111; background: #fff; margin: 0; padding: 12px; }
+</style>
+</head><body>${body}
+` + '<' + 'script>' + `
+  window.onload = function() {
+    setTimeout(function(){ try { window.focus(); window.print(); } catch(e) {} }, 250);
+  };
+` + '</' + 'script>' + `
+</body></html>`;
+
+  try {
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, '_blank');
+    if (!w) {
+      const iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+      iframe.src = url;
+      document.body.appendChild(iframe);
+      iframe.onload = () => {
+        try {
+          iframe.contentWindow.focus();
+          iframe.contentWindow.print();
+        } catch (e) { console.warn(e); }
+        setTimeout(() => { try { iframe.remove(); URL.revokeObjectURL(url); } catch {} }, 2000);
+      };
+      toast('Print dialog opening — choose Save as PDF');
+    } else {
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 60000);
+      toast('Print view opened — choose Save as PDF');
+    }
+    track('ledger_pdf_exported', { account: accountId, rows: data.rows.length });
+  } catch (err) {
+    console.warn(err);
+    toast('Could not open print view — allow pop-ups for this site');
+  }
+}
+
+function renderBooksLedger() {
+  const sel = document.getElementById('booksLedgerAccount');
+  const el = document.getElementById('booksLedger');
+  const crumb = document.getElementById('booksLedgerCrumb');
+  if (!el) return;
+  const coa = getCoa();
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = coa.map(a =>
+      '<option value="' + a.id + '"' + (a.id === cur ? ' selected' : '') + '>' + a.id + ' · ' + a.name + '</option>'
+    ).join('');
+    sel.onchange = () => renderBooksLedger();
+  }
+  const accountId = sel?.value || '1000';
+  const data = getAccountLedgerData(accountId);
+  const acc = data.account;
+  if (crumb) {
+    crumb.innerHTML = '<span style="color:var(--muted)">Financial statements</span> → <b>Ledger · ' +
+      (acc ? (acc.id + ' · ' + acc.name) : accountId) +
+      '</b> → <span style="color:var(--muted)">click a row for journal + audit</span>';
+  }
+  if (!data.rows.length && Math.abs(data.opening) < 0.001) {
+    el.innerHTML = '<p class="section-sub">No movements on this account in the period. Try All time or Custom dates. You can still download an empty CSV/PDF for this account.</p>';
+    return;
+  }
+  const rangeLabel = data.range.from || data.range.to
+    ? (' · ' + (data.range.from || '…') + ' → ' + (data.range.to || 'today'))
     : ' · all time';
-  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Opening: <b>' + money(opening) + '</b>' + rangeLabel + '</div>';
+  let run = data.opening;
+  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Opening: <b>' + money(data.opening) + '</b>' + rangeLabel +
+    ' · Closing: <b>' + money(data.closing) + '</b></div>';
   html += '<table class="table"><thead><tr><th>Date</th><th>Memo</th><th class="right">Debit</th><th class="right">Credit</th><th class="right">Balance</th><th></th></tr></thead><tbody>';
-  lines.forEach(l => {
-    run += l.debit - l.credit;
+  data.rows.forEach(l => {
+    run = l.balance;
     const d = l.date || '';
     html += '<tr class="books-ledger-row" data-journal-drill="' + l.journalId + '" style="cursor:pointer" title="Open journal + audit">' +
       '<td>' + (d || '—') + '</td>' +
@@ -20304,7 +20474,10 @@ function renderBooksLedger() {
       '<td><button type="button" class="button small" data-journal-drill="' + l.journalId + '">Entry</button></td>' +
       '</tr>';
   });
-  html += '</tbody></table>';
+  html += '</tbody><tfoot><tr><td colspan="2" style="font-weight:700">Totals</td>' +
+    '<td class="right" style="font-weight:700">' + money(data.totalDebit) + '</td>' +
+    '<td class="right" style="font-weight:700">' + money(data.totalCredit) + '</td>' +
+    '<td class="right" style="font-weight:700">' + money(data.closing) + '</td><td></td></tr></tfoot></table>';
   el.innerHTML = html;
   const openJ = (id) => {
     if (!id) return;
@@ -20399,12 +20572,15 @@ function renderBooksCoa() {
           '<option value="' + s + '"' + (a.cfSection === s ? ' selected' : '') + '>' + s + '</option>'
         ).join('') + '</select>';
       let action = '';
+      action += '<button type="button" class="button small" data-ledger-open="' + a.id + '" title="Open ledger">Ledger</button> ';
+      action += '<button type="button" class="button small" data-ledger-csv="' + a.id + '" title="Download CSV">CSV</button> ';
+      action += '<button type="button" class="button small" data-ledger-pdf="' + a.id + '" title="Download PDF">PDF</button> ';
       if (a.system) {
-        action = a.hidden
+        action += a.hidden
           ? '<button type="button" class="button small" data-unhide-account="' + a.id + '">Unhide</button>'
           : '<button type="button" class="button small" data-hide-account="' + a.id + '">Hide</button>';
       } else {
-        action = '<button type="button" class="button small danger" data-del-account="' + a.id + '">Remove</button>';
+        action += '<button type="button" class="button small danger" data-del-account="' + a.id + '">Remove</button>';
       }
       const hiddenMark = a.hidden ? ' <span class="mini">hidden</span>' : '';
       return '<tr style="' + (a.hidden ? 'opacity:0.55' : '') + '">' +
@@ -20415,7 +20591,7 @@ function renderBooksCoa() {
         '<td>' + fsCell + '</td>' +
         '<td>' + cfCell + '</td>' +
         '<td class="right">' + money(display) + '</td>' +
-        '<td>' + action + '</td></tr>';
+        '<td style="white-space:nowrap">' + action + '</td></tr>';
     }).join('') + '</tbody></table>';
 
   const persistMeta = (id, patch) => {
@@ -20499,6 +20675,24 @@ function renderBooksCoa() {
       try { save(); } catch (_) {}
       renderBooksCoa();
       toast('Custom account removed');
+    });
+  });
+  el.querySelectorAll('[data-ledger-open]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-ledger-open');
+      if (id) drillToLedger(id);
+    });
+  });
+  el.querySelectorAll('[data-ledger-csv]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-ledger-csv');
+      if (id) exportLedgerCsv(id);
+    });
+  });
+  el.querySelectorAll('[data-ledger-pdf]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-ledger-pdf');
+      if (id) exportLedgerPdf(id);
     });
   });
 }
@@ -25981,6 +26175,12 @@ document.getElementById('btnExportJournals')?.addEventListener('click', () => ex
 document.getElementById('btnSampleJournalCsv')?.addEventListener('click', () => downloadSampleJournalCsv());
 document.getElementById('btnPostSampleJournals')?.addEventListener('click', () => postSampleJournalsNow());
 document.getElementById('journalImportConfirm')?.addEventListener('click', () => commitJournalImport());
+document.getElementById('booksLedgerExportCsv')?.addEventListener('click', () => {
+  exportLedgerCsv(document.getElementById('booksLedgerAccount')?.value);
+});
+document.getElementById('booksLedgerExportPdf')?.addEventListener('click', () => {
+  exportLedgerPdf(document.getElementById('booksLedgerAccount')?.value);
+});
 document.getElementById('booksLedgerBackReports')?.addEventListener('click', () => {
   setBooksPage('reports', 'trial');
   try { renderBooksTrial(); } catch {}
