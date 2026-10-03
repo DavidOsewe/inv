@@ -3583,6 +3583,19 @@ input:focus:not(:focus-visible) {
         <div id="booksReceivablesList"></div>
       </div>
       <div id="booksPanelCoa" hidden>
+        <div class="insight" style="margin-bottom:14px">
+          <h3 style="margin:0 0 6px">Period lock</h3>
+          <p class="section-sub" style="margin:0 0 10px">Close books through a date. Journals, reversals, and bank postings dated on or before the lock cannot be posted until you unlock or move the lock forward.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
+            <div class="field" style="margin:0;min-width:160px">
+              <label for="booksLockThrough">Locked through</label>
+              <input type="date" id="booksLockThrough">
+            </div>
+            <button type="button" class="button small primary" id="booksLockSave">Save lock</button>
+            <button type="button" class="button small secondary" id="booksLockClear">Unlock all</button>
+          </div>
+          <p id="booksLockStatus" class="section-sub" style="margin:8px 0 0"></p>
+        </div>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <div>
             <h3 style="margin:0">Chart of accounts</h3>
@@ -4983,6 +4996,7 @@ input:focus:not(:focus-visible) {
     <h2>Manual journal entry</h2>
     <p class="section-sub">Debits must equal credits. Use for opening balances, adjustments, and non-invoice activity.</p>
     <div class="field"><label>Date</label><input id="jeDate" type="date"></div>
+    <p id="jeDateLockHint" class="section-sub" style="margin:0 0 8px;display:none;color:#92400e"></p>
     <div class="field"><label>Memo</label><input id="jeMemo" placeholder="e.g. Opening balances, correction"></div>
     <div class="field"><label>Supporting documents</label>
       <input id="jeDocs" type="file" multiple accept="image/*,.pdf,.png,.jpg,.jpeg">
@@ -4994,6 +5008,31 @@ input:focus:not(:focus-visible) {
     <div style="display:flex;gap:8px;margin-top:12px">
       <button class="button primary" type="button" id="jeSave">Post journal</button>
       <button class="button" type="button" id="jeCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="reverseJournalModal">
+  <div class="modal" style="max-width:480px">
+    <h2>Reverse journal</h2>
+    <p class="section-sub" style="margin:0 0 12px">Posts a balancing entry. The original stays for the audit trail.</p>
+    <div id="rjOriginalSummary" style="font-size:13px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);margin-bottom:12px"></div>
+    <div class="field">
+      <label>Reversal date</label>
+      <input id="rjDate" type="date">
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+        <button type="button" class="button small secondary" id="rjUseOriginalDate">Use original date</button>
+        <button type="button" class="button small secondary" id="rjUseToday">Use today</button>
+      </div>
+    </div>
+    <p id="rjDateLockHint" class="section-sub" style="margin:0 0 8px;display:none;color:#92400e"></p>
+    <div class="field">
+      <label>Reason (optional)</label>
+      <input id="rjReason" placeholder="e.g. Posted in error, duplicate bank line">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+      <button class="button primary" type="button" id="rjConfirm">Post reversal</button>
+      <button class="button" type="button" id="rjCancel">Cancel</button>
     </div>
   </div>
 </div>
@@ -17636,9 +17675,147 @@ function appendBooksAudit(action, entityType, entityId, summary, before, after, 
   return ev;
 }
 
-function postJournal({ date, memo, source, sourceKey, lines, currency, reversedFrom, reverseOf, documents }) {
+/** Period closed through this date (inclusive). Empty = no lock. */
+function booksPeriodLockedThrough() {
+  ensureBooksDb();
+  const d = db.booksSettings && db.booksSettings.periodLockedThrough;
+  if (!d) return null;
+  const s = String(d).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+function isBooksDateLocked(dateStr) {
+  const lock = booksPeriodLockedThrough();
+  if (!lock) return false;
+  const d = String(dateStr || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+  return d <= lock;
+}
+
+/**
+ * @returns {{ ok: boolean, locked: boolean, message: string, lockThrough: string|null }}
+ */
+function assertBooksDateOpen(dateStr, opts) {
+  opts = opts || {};
+  const lock = booksPeriodLockedThrough();
+  const d = String(dateStr || '').slice(0, 10);
+  if (!lock) return { ok: true, locked: false, message: '', lockThrough: null };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    return { ok: false, locked: true, message: 'Pick a valid journal date', lockThrough: lock };
+  }
+  if (d <= lock) {
+    return {
+      ok: false,
+      locked: true,
+      lockThrough: lock,
+      message: 'Period locked through ' + lock + '. Choose a date after the lock, or unlock in Books → Settings → Chart of accounts (Period lock).'
+    };
+  }
+  return { ok: true, locked: false, message: '', lockThrough: lock };
+}
+
+function updateDateLockHint(inputId, hintId) {
+  const inp = document.getElementById(inputId);
+  const hint = document.getElementById(hintId);
+  if (!hint) return;
+  const d = inp && inp.value;
+  const check = assertBooksDateOpen(d || '');
+  if (check.locked && d) {
+    hint.style.display = 'block';
+    hint.textContent = check.message;
+  } else if (check.lockThrough) {
+    hint.style.display = 'block';
+    hint.style.color = 'var(--muted)';
+    hint.textContent = 'Books locked through ' + check.lockThrough + ' · postings must be after that date';
+  } else {
+    hint.style.display = 'none';
+    hint.textContent = '';
+  }
+}
+
+function syncBooksPeriodLockUI() {
+  ensureBooksDb();
+  const lock = booksPeriodLockedThrough();
+  const inp = document.getElementById('booksLockThrough');
+  const status = document.getElementById('booksLockStatus');
+  if (inp && document.activeElement !== inp) inp.value = lock || '';
+  if (status) {
+    if (lock) {
+      status.innerHTML = 'Active: periods on or before <b>' + lock + '</b> are closed. New journals and reversals in that range are blocked.';
+      status.style.color = '#92400e';
+    } else {
+      status.textContent = 'No period lock — any date can be posted.';
+      status.style.color = '';
+    }
+  }
+}
+
+function saveBooksPeriodLock() {
+  ensureBooksDb();
+  if (!db.booksSettings) db.booksSettings = {};
+  const raw = (document.getElementById('booksLockThrough')?.value || '').slice(0, 10);
+  if (raw && !/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    toast('Invalid lock date');
+    return;
+  }
+  const prev = db.booksSettings.periodLockedThrough || null;
+  db.booksSettings.periodLockedThrough = raw || null;
+  try {
+    appendBooksAudit(
+      raw ? 'books.period_locked' : 'books.period_unlocked',
+      'books_settings',
+      'period_lock',
+      raw ? ('Period locked through ' + raw) : 'Period lock cleared',
+      { periodLockedThrough: prev },
+      { periodLockedThrough: raw || null },
+      {}
+    );
+  } catch {}
+  save();
+  syncBooksPeriodLockUI();
+  toast(raw ? ('Period locked through ' + raw) : 'Period lock cleared');
+  track('books_period_lock', { through: raw || null });
+}
+
+function clearBooksPeriodLock() {
+  ensureBooksDb();
+  if (!db.booksSettings) db.booksSettings = {};
+  const prev = db.booksSettings.periodLockedThrough || null;
+  if (!prev) {
+    toast('No period lock set');
+    return;
+  }
+  confirmAction(
+    'Unlock all periods',
+    'Clear the period lock through ' + prev + '? Journals can then be posted to any date again.',
+    () => {
+      db.booksSettings.periodLockedThrough = null;
+      const inp = document.getElementById('booksLockThrough');
+      if (inp) inp.value = '';
+      try {
+        appendBooksAudit('books.period_unlocked', 'books_settings', 'period_lock', 'Period lock cleared',
+          { periodLockedThrough: prev }, { periodLockedThrough: null }, {});
+      } catch {}
+      save();
+      syncBooksPeriodLockUI();
+      toast('Period lock cleared');
+    },
+    { okLabel: 'Unlock all' }
+  );
+}
+
+function postJournal({ date, memo, source, sourceKey, lines, currency, reversedFrom, reverseOf, documents, skipPeriodLock }) {
   ensureBooksDb();
   if (sourceKey && db.journals.some(j => j.sourceKey === sourceKey)) return null;
+  const entryDate = date || (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+  if (!skipPeriodLock) {
+    const lockCheck = assertBooksDateOpen(entryDate);
+    if (!lockCheck.ok) {
+      console.warn('period locked', entryDate, lockCheck.message);
+      try { toast(lockCheck.message); } catch {}
+      return null;
+    }
+  }
   const rep = (db.profile && db.profile.reporting) || 'NGN';
   const cur = currency || rep;
   const normalized = (lines || []).map(l => ({
@@ -17676,7 +17853,7 @@ function postJournal({ date, memo, source, sourceKey, lines, currency, reversedF
   const actor = booksActor();
   const entry = {
     id: crypto.randomUUID(),
-    date: date || today,
+    date: entryDate,
     memo: memo || '',
     source: source || 'manual',
     sourceKey: sourceKey || null,
@@ -17708,44 +17885,117 @@ function postJournal({ date, memo, source, sourceKey, lines, currency, reversedF
 }
 
 /** V2: never hard-delete posted journals — post a reversing entry instead. */
-function reverseJournal(journalId, reason) {
+function reverseJournal(journalId, reason, dateOpt) {
   ensureBooksDb();
   const j = (db.journals || []).find(x => x.id === journalId);
   if (!j) { toast('Journal not found'); return null; }
   if (j.reversed) { toast('Already reversed'); return null; }
   if (j.reverseOf) { toast('This is already a reversing entry'); return null; }
+  const revDate = (dateOpt && String(dateOpt).slice(0, 10)) ||
+    (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+  const lockCheck = assertBooksDateOpen(revDate);
+  if (!lockCheck.ok) {
+    toast(lockCheck.message);
+    return null;
+  }
   const lines = (j.lines || []).map(l => ({
     accountId: l.accountId,
     debit: Number(l.credit) || 0,
     credit: Number(l.debit) || 0
   }));
   const rev = postJournal({
-    date: today,
+    date: revDate,
     memo: 'REVERSAL · ' + (j.memo || j.id) + (reason ? ' · ' + reason : ''),
     source: 'reversal',
     sourceKey: 'j:rev:' + j.id,
     lines,
     reverseOf: j.id
   });
-  if (!rev) { toast('Could not post reversal'); return null; }
+  if (!rev) {
+    if (!assertBooksDateOpen(revDate).ok) return null;
+    toast('Could not post reversal');
+    return null;
+  }
   j.reversed = true;
   j.reversedById = rev.id;
   j.reversedAt = new Date().toISOString();
+  j.reversedDate = revDate;
   try {
     appendBooksAudit(
       'journal.marked_reversed',
       'journal',
       j.id,
-      'Marked reversed · ' + (j.memo || j.id),
+      'Marked reversed · ' + (j.memo || j.id) + ' · rev date ' + revDate,
       { reversed: false },
-      { reversed: true, reversedById: rev.id },
-      { reason: reason || null }
+      { reversed: true, reversedById: rev.id, reversedDate: revDate },
+      { reason: reason || null, reversalDate: revDate }
     );
   } catch {}
   save();
   try { queueBooksCloudSync(); } catch {}
-  toast('Reversal posted — original kept for audit');
+  toast('Reversal posted on ' + revDate + ' — original kept for audit');
   return rev;
+}
+
+let _pendingReverseJournalId = null;
+
+function openReverseJournalModal(journalId) {
+  ensureBooksDb();
+  const j = (db.journals || []).find(x => x.id === journalId);
+  if (!j) { toast('Journal not found'); return; }
+  if (j.reversed) { toast('Already reversed'); return; }
+  if (j.reverseOf) { toast('This is already a reversing entry'); return; }
+  _pendingReverseJournalId = journalId;
+  const sum = document.getElementById('rjOriginalSummary');
+  if (sum) {
+    const lines = (j.lines || []).map(l => {
+      const nm = (typeof coaName === 'function' ? coaName(l.accountId) : l.accountId);
+      const side = (Number(l.debit) > 0) ? ('Dr ' + money(l.debit)) : ('Cr ' + money(l.credit));
+      return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px"><span>' +
+        String(l.accountId + ' · ' + nm).replace(/</g, '') + '</span><span>' + side + '</span></div>';
+    }).join('');
+    sum.innerHTML = '<div style="font-weight:700;margin-bottom:4px">' +
+      String(j.date || '') + ' · ' + String(j.memo || 'Entry').replace(/</g, '') + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">' + String(j.source || '').replace(/</g, '') + '</div>' +
+      lines;
+  }
+  const dateEl = document.getElementById('rjDate');
+  const todayStr = (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+  // Prefer original date if open; else today if open; else empty for user to pick
+  let defaultDate = j.date || todayStr;
+  if (isBooksDateLocked(defaultDate) && !isBooksDateLocked(todayStr)) defaultDate = todayStr;
+  if (dateEl) dateEl.value = defaultDate;
+  const reasonEl = document.getElementById('rjReason');
+  if (reasonEl) reasonEl.value = '';
+  updateDateLockHint('rjDate', 'rjDateLockHint');
+  document.getElementById('reverseJournalModal')?.classList.add('show');
+}
+
+function closeReverseJournalModal() {
+  _pendingReverseJournalId = null;
+  document.getElementById('reverseJournalModal')?.classList.remove('show');
+}
+
+function confirmReverseJournalFromModal() {
+  const jid = _pendingReverseJournalId;
+  if (!jid) { closeReverseJournalModal(); return; }
+  const date = document.getElementById('rjDate')?.value || '';
+  const reason = (document.getElementById('rjReason')?.value || '').trim();
+  if (!date) {
+    toast('Pick a reversal date');
+    return;
+  }
+  const lockCheck = assertBooksDateOpen(date);
+  if (!lockCheck.ok) {
+    toast(lockCheck.message);
+    updateDateLockHint('rjDate', 'rjDateLockHint');
+    return;
+  }
+  const rev = reverseJournal(jid, reason || null, date);
+  closeReverseJournalModal();
+  if (rev) {
+    try { booksView(); } catch {}
+  }
 }
 
 function journalActivity(journalId) {
@@ -18685,13 +18935,7 @@ function renderBooksJournal() {
   });
   el.querySelectorAll('[data-j-reverse]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const jid = btn.getAttribute('data-j-reverse');
-      confirmAction(
-        'Reverse journal',
-        'Post a reversing journal? The original stays for the audit trail.',
-        () => { reverseJournal(jid); booksView(); },
-        { okLabel: 'Post reversal' }
-      );
+      openReverseJournalModal(btn.getAttribute('data-j-reverse'));
     });
   });
 }
@@ -20950,6 +21194,7 @@ function booksView() {
   try { restoreBooksPeriodPreference(); } catch {}
   try { syncBooksCustomDateUI(); } catch {}
   try { syncBooksPeriodChips(); } catch {}
+  try { syncBooksPeriodLockUI(); } catch {}
 
   // purge accidental binary statement imports
   try {
@@ -26090,6 +26335,7 @@ function openJournalModal() {
   document.getElementById('jeMemo').value = '';
   jeLineCount = 2;
   jeRenderLines();
+  try { updateDateLockHint('jeDate', 'jeDateLockHint'); } catch (_) {}
   if (typeof showModal === 'function') showModal('journalModal');
   else m.classList.add('show');
   try { initSearchableSelects(m); } catch (_) {}
@@ -26384,15 +26630,25 @@ document.getElementById('jeSave')?.addEventListener('click', async () => {
   const cr = lines.reduce((n, l) => n + l.credit, 0);
   if (lines.length < 2) { toast('Add at least two lines'); return; }
   if (Math.abs(dr - cr) > 0.02) { toast('Debits must equal credits'); return; }
+  const jeDate = document.getElementById('jeDate')?.value || today;
+  const lockCheck = assertBooksDateOpen(jeDate);
+  if (!lockCheck.ok) {
+    toast(lockCheck.message);
+    updateDateLockHint('jeDate', 'jeDateLockHint');
+    return;
+  }
   const entry = postJournal({
-    date: document.getElementById('jeDate')?.value || today,
+    date: jeDate,
     memo: (document.getElementById('jeMemo')?.value || '').trim() || 'Manual journal',
     source: 'manual_journal',
     sourceKey: 'j:manual:' + crypto.randomUUID(),
     lines,
     documents: (typeof jeDocs !== 'undefined' ? jeDocs : [])
   });
-  if (!entry) { toast('Could not post journal'); return; }
+  if (!entry) {
+    toast(assertBooksDateOpen(jeDate).ok ? 'Could not post journal' : assertBooksDateOpen(jeDate).message);
+    return;
+  }
   save();
   closeJournalModal();
   toast('Journal posted');
@@ -26400,6 +26656,27 @@ document.getElementById('jeSave')?.addEventListener('click', async () => {
   booksView();
   track('manual_journal_posted', { lines: lines.length });
 });
+
+document.getElementById('jeDate')?.addEventListener('change', () => updateDateLockHint('jeDate', 'jeDateLockHint'));
+document.getElementById('rjDate')?.addEventListener('change', () => updateDateLockHint('rjDate', 'rjDateLockHint'));
+document.getElementById('rjUseOriginalDate')?.addEventListener('click', () => {
+  const j = (db.journals || []).find(x => x.id === _pendingReverseJournalId);
+  const dateEl = document.getElementById('rjDate');
+  if (dateEl && j && j.date) dateEl.value = String(j.date).slice(0, 10);
+  updateDateLockHint('rjDate', 'rjDateLockHint');
+});
+document.getElementById('rjUseToday')?.addEventListener('click', () => {
+  const dateEl = document.getElementById('rjDate');
+  if (dateEl) dateEl.value = (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+  updateDateLockHint('rjDate', 'rjDateLockHint');
+});
+document.getElementById('rjConfirm')?.addEventListener('click', () => confirmReverseJournalFromModal());
+document.getElementById('rjCancel')?.addEventListener('click', () => closeReverseJournalModal());
+document.getElementById('reverseJournalModal')?.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'reverseJournalModal') closeReverseJournalModal();
+});
+document.getElementById('booksLockSave')?.addEventListener('click', () => saveBooksPeriodLock());
+document.getElementById('booksLockClear')?.addEventListener('click', () => clearBooksPeriodLock());
 document.getElementById('btnAddAccount')?.addEventListener('click', openAccountModal);
 document.getElementById('btnDownloadCoaSample')?.addEventListener('click', downloadCoaSampleCsv);
 document.getElementById('coaCsvFile')?.addEventListener('change', (e) => {
