@@ -3498,6 +3498,7 @@ input:focus:not(:focus-visible) {
             <input type="date" id="booksDateTo" title="To date">
           </span>
           <span id="booksPeriodLabel" style="font-size:12px;color:var(--muted)"></span>
+          <span id="booksLockBadge" hidden class="badge" style="background:#fef3c7;color:#92400e;border:1px solid #f59e0b;cursor:pointer" title="Open period lock settings"></span>
           <span id="booksFeedNote">Invoice feed on</span>
         </div>
       </div>
@@ -3582,20 +3583,37 @@ input:focus:not(:focus-visible) {
         <p class="books-panel-lead">Open invoices, oldest first. Tap an invoice to collect.</p>
         <div id="booksReceivablesList"></div>
       </div>
-      <div id="booksPanelCoa" hidden>
-        <div class="insight" style="margin-bottom:14px">
+      <div id="booksPanelPeriodLock" hidden>
+        <div class="insight">
           <h3 style="margin:0 0 6px">Period lock</h3>
-          <p class="section-sub" style="margin:0 0 10px">Close books through a date. Journals, reversals, and bank postings dated on or before the lock cannot be posted until you unlock or move the lock forward.</p>
-          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
-            <div class="field" style="margin:0;min-width:160px">
-              <label for="booksLockThrough">Locked through</label>
+          <p class="section-sub" style="margin:0 0 12px">
+            Close the books through a date. Any journal, reversal, bank post, or manual entry dated
+            <b>on or before</b> the lock is blocked. Unlock or move the date forward to post into an older period.
+          </p>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:10px">
+            <div class="field" style="margin:0;min-width:180px">
+              <label for="booksLockThrough">Locked through (inclusive)</label>
               <input type="date" id="booksLockThrough">
             </div>
             <button type="button" class="button small primary" id="booksLockSave">Save lock</button>
+            <button type="button" class="button small secondary" id="booksLockPrevMonth">Lock through last month</button>
             <button type="button" class="button small secondary" id="booksLockClear">Unlock all</button>
           </div>
-          <p id="booksLockStatus" class="section-sub" style="margin:8px 0 0"></p>
+          <p id="booksLockStatus" class="section-sub" style="margin:0 0 12px"></p>
+          <div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2);font-size:13px;line-height:1.5">
+            <div style="font-weight:700;margin-bottom:6px">How locked dates are used</div>
+            <ul style="margin:0;padding-left:18px;color:var(--muted)">
+              <li>Manual journals and reversals must use a date <b>after</b> the lock.</li>
+              <li>Bank “Add to books” and import postings use the transaction date — locked dates are refused.</li>
+              <li>Reversal modal defaults to the original date if open, otherwise the first open day (or today).</li>
+              <li>New manual journals default to today, or the first open day if today is locked.</li>
+              <li>Changes are written to the audit trail.</li>
+            </ul>
+          </div>
+          <p id="booksLockNextOpen" class="section-sub" style="margin:12px 0 0"></p>
         </div>
+      </div>
+      <div id="booksPanelCoa" hidden>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <div>
             <h3 style="margin:0">Chart of accounts</h3>
@@ -17692,6 +17710,27 @@ function isBooksDateLocked(dateStr) {
   return d <= lock;
 }
 
+/** First calendar day after the lock (or today if no lock / already open). */
+function nextOpenBooksDate(preferred) {
+  const todayStr = (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+  let d = String(preferred || todayStr).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) d = todayStr;
+  const lock = booksPeriodLockedThrough();
+  if (!lock) return d;
+  if (d > lock) return d;
+  // day after lock
+  const parts = lock.split('-').map(Number);
+  const dt = new Date(parts[0], parts[1] - 1, parts[2] + 1);
+  return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+}
+
+/** End of previous calendar month YYYY-MM-DD */
+function endOfPreviousMonthDate() {
+  const now = new Date();
+  const end = new Date(now.getFullYear(), now.getMonth(), 0);
+  return end.getFullYear() + '-' + String(end.getMonth() + 1).padStart(2, '0') + '-' + String(end.getDate()).padStart(2, '0');
+}
+
 /**
  * @returns {{ ok: boolean, locked: boolean, message: string, lockThrough: string|null }}
  */
@@ -17738,6 +17777,8 @@ function syncBooksPeriodLockUI() {
   const lock = booksPeriodLockedThrough();
   const inp = document.getElementById('booksLockThrough');
   const status = document.getElementById('booksLockStatus');
+  const nextEl = document.getElementById('booksLockNextOpen');
+  const badge = document.getElementById('booksLockBadge');
   if (inp && document.activeElement !== inp) inp.value = lock || '';
   if (status) {
     if (lock) {
@@ -17746,6 +17787,23 @@ function syncBooksPeriodLockUI() {
     } else {
       status.textContent = 'No period lock — any date can be posted.';
       status.style.color = '';
+    }
+  }
+  if (nextEl) {
+    if (lock) {
+      nextEl.innerHTML = 'First open posting date: <b>' + nextOpenBooksDate() + '</b> (used as default when today or the original date is locked).';
+    } else {
+      nextEl.textContent = '';
+    }
+  }
+  if (badge) {
+    if (lock) {
+      badge.hidden = false;
+      badge.textContent = 'Locked through ' + lock;
+      badge.title = 'Books → Settings → Period lock. Postings on or before this date are blocked.';
+    } else {
+      badge.hidden = true;
+      badge.textContent = '';
     }
   }
 }
@@ -17960,11 +18018,9 @@ function openReverseJournalModal(journalId) {
       lines;
   }
   const dateEl = document.getElementById('rjDate');
-  const todayStr = (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
-  // Prefer original date if open; else today if open; else empty for user to pick
-  let defaultDate = j.date || todayStr;
-  if (isBooksDateLocked(defaultDate) && !isBooksDateLocked(todayStr)) defaultDate = todayStr;
-  if (dateEl) dateEl.value = defaultDate;
+  // Prefer original date if open; otherwise first open day after lock
+  const preferred = j.date || (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+  if (dateEl) dateEl.value = nextOpenBooksDate(preferred);
   const reasonEl = document.getElementById('rjReason');
   if (reasonEl) reasonEl.value = '';
   updateDateLockHint('rjDate', 'rjDateLockHint');
@@ -18428,10 +18484,11 @@ const BOOKS_PAGES = {
   },
   setup: {
     tabs: [
+      { id: 'periodlock', label: 'Period lock' },
       { id: 'coa', label: 'Chart of accounts' },
       { id: 'audit', label: 'Audit trail' }
     ],
-    defaultTab: 'coa',
+    defaultTab: 'periodlock',
     actionLabel: 'Opening balances',
     action: 'opening'
   }
@@ -18526,6 +18583,7 @@ function setBooksTab(tab) {
     payables: 'booksPanelPayables',
     receivables: 'booksPanelReceivables',
     coa: 'booksPanelCoa',
+    periodlock: 'booksPanelPeriodLock',
     trial: 'booksPanelTrial',
     cashflow: 'booksPanelCashflow',
     cash: 'booksPanelCash',
@@ -26331,7 +26389,8 @@ function openJournalModal() {
   const m = document.getElementById('journalModal');
   try { wireDocsPreview('jeDocs', 'jeDocsList'); } catch (_) {}
   if (!m) return;
-  document.getElementById('jeDate').value = today;
+  const todayStr = (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+  document.getElementById('jeDate').value = nextOpenBooksDate(todayStr);
   document.getElementById('jeMemo').value = '';
   jeLineCount = 2;
   jeRenderLines();
@@ -26677,6 +26736,14 @@ document.getElementById('reverseJournalModal')?.addEventListener('click', (e) =>
 });
 document.getElementById('booksLockSave')?.addEventListener('click', () => saveBooksPeriodLock());
 document.getElementById('booksLockClear')?.addEventListener('click', () => clearBooksPeriodLock());
+document.getElementById('booksLockPrevMonth')?.addEventListener('click', () => {
+  const inp = document.getElementById('booksLockThrough');
+  if (inp) inp.value = endOfPreviousMonthDate();
+  saveBooksPeriodLock();
+});
+document.getElementById('booksLockBadge')?.addEventListener('click', () => {
+  try { setBooksPage('setup', 'periodlock'); booksView(); } catch (_) {}
+});
 document.getElementById('btnAddAccount')?.addEventListener('click', openAccountModal);
 document.getElementById('btnDownloadCoaSample')?.addEventListener('click', downloadCoaSampleCsv);
 document.getElementById('coaCsvFile')?.addEventListener('change', (e) => {
