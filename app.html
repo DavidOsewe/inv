@@ -5031,22 +5031,22 @@ input:focus:not(:focus-visible) {
 </div>
 
 <div class="modalback" id="reverseJournalModal">
-  <div class="modal" style="max-width:480px">
+  <div class="modal" style="max-width:min(480px,94vw);width:100%;box-sizing:border-box;overflow-x:hidden;max-height:90vh;overflow-y:auto">
     <h2>Reverse journal</h2>
     <p class="section-sub" style="margin:0 0 12px">Posts a balancing entry. The original stays for the audit trail.</p>
-    <div id="rjOriginalSummary" style="font-size:13px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);margin-bottom:12px"></div>
+    <div id="rjOriginalSummary" style="font-size:13px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);margin-bottom:12px;max-height:220px;overflow:auto;overflow-wrap:anywhere;word-break:break-word;box-sizing:border-box"></div>
     <div class="field">
       <label>Reversal date</label>
-      <input id="rjDate" type="date">
+      <input id="rjDate" type="date" style="max-width:100%;box-sizing:border-box">
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
         <button type="button" class="button small secondary" id="rjUseOriginalDate">Use original date</button>
         <button type="button" class="button small secondary" id="rjUseToday">Use today</button>
       </div>
     </div>
-    <p id="rjDateLockHint" class="section-sub" style="margin:0 0 8px;display:none;color:#92400e"></p>
+    <p id="rjDateLockHint" class="section-sub" style="margin:0 0 8px;display:none;color:#92400e;overflow-wrap:anywhere"></p>
     <div class="field">
       <label>Reason (optional)</label>
-      <input id="rjReason" placeholder="e.g. Posted in error, duplicate bank line">
+      <input id="rjReason" placeholder="e.g. Posted in error, duplicate bank line" style="max-width:100%;box-sizing:border-box">
     </div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="button primary" type="button" id="rjConfirm">Post reversal</button>
@@ -18006,15 +18006,20 @@ function openReverseJournalModal(journalId) {
   _pendingReverseJournalId = journalId;
   const sum = document.getElementById('rjOriginalSummary');
   if (sum) {
+    const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
     const lines = (j.lines || []).map(l => {
       const nm = (typeof coaName === 'function' ? coaName(l.accountId) : l.accountId);
       const side = (Number(l.debit) > 0) ? ('Dr ' + money(l.debit)) : ('Cr ' + money(l.credit));
-      return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px"><span>' +
-        String(l.accountId + ' · ' + nm).replace(/</g, '') + '</span><span>' + side + '</span></div>';
+      return '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;font-size:12px;margin-top:4px">' +
+        '<span style="min-width:0;flex:1;overflow-wrap:anywhere;word-break:break-word">' +
+        esc(l.accountId + ' · ' + nm) + '</span>' +
+        '<span style="flex-shrink:0;white-space:nowrap;font-variant-numeric:tabular-nums">' + side + '</span></div>';
     }).join('');
-    sum.innerHTML = '<div style="font-weight:700;margin-bottom:4px">' +
-      String(j.date || '') + ' · ' + String(j.memo || 'Entry').replace(/</g, '') + '</div>' +
-      '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">' + String(j.source || '').replace(/</g, '') + '</div>' +
+    const memo = String(j.memo || 'Entry');
+    sum.innerHTML =
+      '<div style="font-weight:700;margin-bottom:4px;overflow-wrap:anywhere;word-break:break-word" title="' + esc(memo) + '">' +
+      esc(j.date || '') + ' · ' + esc(memo) + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;overflow-wrap:anywhere">' + esc(j.source || '') + '</div>' +
       lines;
   }
   const dateEl = document.getElementById('rjDate');
