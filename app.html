@@ -18186,9 +18186,8 @@ function booksPeriodCutoff(period) {
     return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-01';
   }
   const days = period === '90' ? 90 : 30;
-  const d = new Date(now);
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
 /** Last calendar day of current month (YYYY-MM-DD). */
@@ -18214,10 +18213,39 @@ function booksDateRange() {
   return { from: booksPeriodCutoff(period), to: null };
 }
 
+/** Normalize any journal/bank date to YYYY-MM-DD for range compares (strips time / ISO). */
+function booksDateOnly(val) {
+  const s = String(val || '').trim();
+  if (!s) return '';
+  // Already YYYY-MM-DD or starts with it
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return m[1];
+  // DD/MM/YYYY or DD-MM-YYYY
+  const m2 = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+  if (m2) {
+    return m2[3] + '-' + String(m2[2]).padStart(2, '0') + '-' + String(m2[1]).padStart(2, '0');
+  }
+  try {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return y + '-' + mo + '-' + day;
+    }
+  } catch (_) {}
+  return s.slice(0, 10);
+}
+
 function journalInDateRange(j, range) {
-  const d = String(j.date || '');
-  if (range.from && d < range.from) return false;
-  if (range.to && d > range.to) return false;
+  if (!range) return true;
+  const d = booksDateOnly(j && j.date);
+  // Undated journals: include only when no lower bound (All time); otherwise skip
+  if (!d) return !(range.from);
+  const from = range.from ? booksDateOnly(range.from) : null;
+  const to = range.to ? booksDateOnly(range.to) : null;
+  if (from && d < from) return false;
+  if (to && d > to) return false;
   return true;
 }
 
@@ -18322,15 +18350,21 @@ function drillToLedger(accountId, dateOpt) {
 function journalsInPeriod() {
   ensureBooksDb();
   const range = booksDateRange();
-  return db.journals.filter(j => journalInDateRange(j, range));
+  return (db.journals || []).filter(j => {
+    // Legacy POS rows used entry_date
+    if (!j.date && j.entry_date) j.date = j.entry_date;
+    return journalInDateRange(j, range);
+  });
 }
 
 function accountBalances(asOfCut) {
   ensureBooksDb();
   const balances = {};
   getCoa().forEach(a => { balances[a.id] = 0; });
+  const cut = asOfCut ? booksDateOnly(asOfCut) : null;
   db.journals.forEach(j => {
-    if (asOfCut && String(j.date || '') > asOfCut) return;
+    const jd = booksDateOnly(j.date);
+    if (cut && jd && jd > cut) return;
     (j.lines || []).forEach(l => {
       balances[l.accountId] = (balances[l.accountId] || 0) + (Number(l.debit) || 0) - (Number(l.credit) || 0);
     });
@@ -18942,6 +18976,7 @@ function renderBooksJournal() {
   const el = document.getElementById('booksJournal');
   if (!el) return;
   const q = (document.getElementById('journalSearch')?.value || '').trim().toLowerCase();
+  const allCount = (db.journals || []).length;
   let list = journalsInPeriod().sort((a, b) => String(b.date || b.entry_date || '').localeCompare(String(a.date || a.entry_date || '')));
   // Normalize legacy pos.html journals that used entry_date
   list.forEach(j => { if (!j.date && j.entry_date) j.date = j.entry_date; });
@@ -18956,12 +18991,19 @@ function renderBooksJournal() {
     });
   }
   if (!list.length) {
+    const periodNote = allCount > 0
+      ? '<p class="section-sub" style="color:#92400e"><b>' + allCount + '</b> journal(s) exist in total but none fall in the selected period. Click <b>All time</b> (or expand 30/90 days) in the period chips above.</p>'
+      : '<p class="section-sub">No journal entries yet. Send an invoice or record an expense to post entries.</p>';
     el.innerHTML = q
-      ? '<p class="section-sub">No journals match that search.</p>'
-      : '<p class="section-sub">No journal entries in this period. Send an invoice or record an expense to post entries.</p>';
+      ? '<p class="section-sub">No journals match that search in this period.</p>' + (allCount ? periodNote : '')
+      : periodNote;
     return;
   }
-  el.innerHTML = list.map(j => {
+  const head = '<p class="section-sub" style="margin:0 0 10px">Showing <b>' + list.length + '</b> of <b>' + allCount +
+    '</b> journal(s) · period filter above' +
+    (list.length < allCount ? ' · <button type="button" class="button small secondary" style="padding:2px 8px;font-size:11px" onclick="setBooksPeriod(\'all\')">Show all time</button>' : '') +
+    '</p>';
+  el.innerHTML = head + list.map(j => {
     const lines = (j.lines || []).map(l =>
       `<div style="display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:2px 0 2px 12px">
         <span>${coaName(l.accountId)}</span>
@@ -20546,12 +20588,15 @@ function getAccountLedgerData(accountId) {
   const acc = getCoa().find(a => a.id === accountId) || { id: accountId, name: accountId, type: '' };
   const range = typeof booksDateRange === 'function' ? booksDateRange() : { from: null, to: null };
   const lines = [];
+  let totalOnAccount = 0;
   (db.journals || []).forEach(j => {
+    const onAcct = (j.lines || []).some(l => l.accountId === accountId);
+    if (onAcct) totalOnAccount++;
     if (!journalInDateRange(j, range)) return;
     (j.lines || []).forEach(l => {
       if (l.accountId !== accountId) return;
       lines.push({
-        date: j.date,
+        date: booksDateOnly(j.date) || j.date,
         memo: j.memo,
         source: j.source,
         debit: Number(l.debit) || 0,
@@ -20563,8 +20608,10 @@ function getAccountLedgerData(accountId) {
   lines.sort((a, b) => String(a.date).localeCompare(String(b.date)));
   let opening = 0;
   if (range.from) {
+    const from = booksDateOnly(range.from);
     (db.journals || []).forEach(j => {
-      if (String(j.date || '') >= range.from) return;
+      const jd = booksDateOnly(j.date);
+      if (!jd || jd >= from) return;
       (j.lines || []).forEach(l => {
         if (l.accountId !== accountId) return;
         opening += (Number(l.debit) || 0) - (Number(l.credit) || 0);
@@ -20586,6 +20633,7 @@ function getAccountLedgerData(accountId) {
     rows,
     totalDebit,
     totalCredit,
+    totalOnAccount,
     periodLabel: typeof booksReportPeriodLabel === 'function' ? booksReportPeriodLabel() : 'Period'
   };
 }
@@ -20753,16 +20801,26 @@ function renderBooksLedger() {
       (acc ? (acc.id + ' · ' + acc.name) : accountId) +
       '</b> → <span style="color:var(--muted)">click a row for journal + audit</span>';
   }
-  if (!data.rows.length && Math.abs(data.opening) < 0.001) {
-    el.innerHTML = '<p class="section-sub">No movements on this account in the period. Try All time or Custom dates. You can still download an empty CSV/PDF for this account.</p>';
-    return;
-  }
   const rangeLabel = data.range.from || data.range.to
     ? (' · ' + (data.range.from || '…') + ' → ' + (data.range.to || 'today'))
     : ' · all time';
+  const outsideHint = (data.totalOnAccount > data.rows.length)
+    ? (' · <span style="color:#92400e">' + (data.totalOnAccount - data.rows.length) +
+      ' other journal(s) on this account sit outside the selected period — switch to <b>All time</b></span>')
+    : '';
+  if (!data.rows.length && Math.abs(data.opening) < 0.001) {
+    el.innerHTML = '<p class="section-sub">No movements on this account in the selected period' + rangeLabel +
+      '.</p>' +
+      (data.totalOnAccount
+        ? '<p class="section-sub" style="color:#92400e">This account has <b>' + data.totalOnAccount +
+          '</b> journal(s) in total — they fall outside the current filter. Click <b>All time</b> in the period chips above.</p>'
+        : '<p class="section-sub">You can still download an empty CSV/PDF for this account.</p>');
+    return;
+  }
   let run = data.opening;
   let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Opening: <b>' + money(data.opening) + '</b>' + rangeLabel +
-    ' · Closing: <b>' + money(data.closing) + '</b></div>';
+    ' · Closing: <b>' + money(data.closing) + '</b>' +
+    ' · Showing <b>' + data.rows.length + '</b> line(s)' + outsideHint + '</div>';
   html += '<table class="table"><thead><tr><th>Date</th><th>Memo</th><th class="right">Debit</th><th class="right">Credit</th><th class="right">Balance</th><th></th></tr></thead><tbody>';
   data.rows.forEach(l => {
     run = l.balance;
