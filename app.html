@@ -2965,29 +2965,17 @@ input:focus:not(:focus-visible) {
 </head>
 <body>
 <div class="app">
-  <aside class="side">
+  <aside class="side compact" id="appSide" title="Invoicedey">
     <div class="logo">invoice<em>dey</em></div>
-    <nav class="nav">
-      <div class="nav-section">Home</div>
-      <button class="active" data-view="dashboard"><span>⌂</span> Home</button>
-
-      <div class="nav-section">Sales</div>
-      <button data-view="invoices"><span>▤</span> Invoices</button>
-      <button data-view="receipts"><span>◈</span> Receipts</button>
-      <button data-view="recurring"><span>↻</span> Recurring</button>
-      <button data-view="clients"><span>♙</span> Clients</button>
-
-      <div class="nav-section">Stock &amp; shops</div>
-      <button data-view="inventory"><span>■</span> Inventory <span class="nav-badge" id="inventoryNavBadge" hidden></span></button>
-      <a class="nav-link-pos" href="/pos.html"><span>▣</span> POS</a>
-
-      <div class="nav-section">Books</div>
-      <button data-view="books"><span>◎</span> Books</button>
-
-      <div class="nav-section">Account</div>
-      <button data-view="chat"><span>💬</span> Chat <span class="nav-badge" id="chatNavBadge" hidden></span></button>
-      <button data-view="profile"><span>⚙</span> Profile</button>
-      <button data-view="plan"><span>◆</span> Plan</button>
+    <nav class="nav" aria-label="Primary">
+      <button class="active" data-view="dashboard" title="Home — apps"><span>⌂</span> Home</button>
+      <button data-view="pulse" title="Dashboard — metrics"><span>◫</span> Dashboard</button>
+      <button data-view="chat" title="Team chat"><span>💬</span> Chat <span class="nav-badge" id="chatNavBadge" hidden></span></button>
+      <button data-view="books" title="Books" data-role-hide="books.view"><span>◎</span> Books</button>
+      <button data-view="inventory" title="Inventory"><span>■</span> Inventory <span class="nav-badge" id="inventoryNavBadge" hidden></span></button>
+      <a class="nav-link-pos" href="/pos.html" title="POS checkout"><span>▣</span> POS</a>
+      <button data-view="profile" title="Settings"><span>⚙</span> Settings</button>
+      <button data-view="plan" title="Plan &amp; team"><span>◆</span> Plan</button>
     </nav>
     <div class="side-footer">
     <div class="side-note">
@@ -3045,6 +3033,20 @@ input:focus:not(:focus-visible) {
       <div class="eco-home" id="ecoHome" aria-label="Invoicedey apps">
         <p class="eco-home-label">Apps</p>
         <div class="eco-grid" id="ecoGrid"></div>
+      </div>
+    </section>
+
+    <section class="view" id="pulse">
+      <div class="dash-hero" style="margin-bottom:18px">
+        <div class="dash-hero-text">
+          <div class="dash-greeting">Dashboard</div>
+          <h1 class="dash-title">Business pulse</h1>
+          <p class="dash-sub">Outstanding, collections, and what needs attention.</p>
+        </div>
+        <div class="dash-hero-actions">
+          <button class="button primary" type="button" onclick="switchTo('dashboard')">← Apps</button>
+          <button class="button" type="button" onclick="switchTo('invoices')">Invoices</button>
+        </div>
       </div>
       <div class="cards" id="dashCards">
         <div class="card card-accent" id="cardOutstanding">
@@ -4572,9 +4574,9 @@ input:focus:not(:focus-visible) {
 
 <nav class="bottom-nav">
   <button class="active" data-view="dashboard"><span>⌂</span>Home</button>
+  <button data-view="pulse"><span>▣</span>Dashboard</button>
   <button data-view="invoices"><span>▤</span>Invoices</button>
-  <button data-view="clients"><span>♙</span>Clients</button>
-  <button data-view="profile"><span>⚙</span>Profile</button>
+  <button data-view="chat"><span>💬</span>Chat</button>
   <button type="button" id="btnMoreNav" aria-label="More"><span>⋯</span>More</button>
 </nav>
 
@@ -8415,7 +8417,8 @@ function switchTo(v) {
   });
   try { saveNavState(v); } catch (_) {}
   const h = {
-    dashboard: ['Invoice control centre', 'Know what has been paid and what needs attention.'],
+    dashboard: ['Home', 'Open an app — invoices, books, shops, team.'],
+    pulse: ['Dashboard', 'Outstanding, collections, and what needs attention.'],
     invoices: ['Invoices', 'Simple invoicing. Nothing you do not need.'],
     receipts: ['Receipts', 'Download payment confirmations for your records.'],
     recurring: ['Recurring invoices', 'Schedules that create the next invoice when due.'],
@@ -8448,6 +8451,7 @@ function switchTo(v) {
   }
   updateGrowthMeter();
   if (v === 'dashboard') { dashboard(); try { chatRefreshUnread(); } catch (_) {} }
+  if (v === 'pulse') { pulseView(); try { chatRefreshUnread(); } catch (_) {} }
   if (v === 'books') booksView();
   if (v === 'inventory') inventoryView(_invTab || 'today');
   if (v === 'chat') chatView();
@@ -8765,6 +8769,14 @@ function ecoAppCatalog() {
   const biz = (db && db.profile && db.profile.name) || 'your business';
   return [
     {
+      id: 'pulse',
+      name: 'Dashboard',
+      desc: 'Money pulse',
+      icon: '📊',
+      view: 'pulse',
+      when: () => true
+    },
+    {
       id: 'invoices',
       name: 'Invoices',
       desc: 'Bill & collect',
@@ -8947,13 +8959,18 @@ function renderEcosystemHome() {
     if (title) title.textContent = 'Your business OS';
     if (sub) {
       const roleLabel = role === 'owner' ? 'Owner' : role === 'manager' ? 'Manager' : 'Team member';
-      sub.textContent = roleLabel + ' access · open an app below — sidebar still works for power users.';
+      sub.textContent = roleLabel + ' access · open an app. Dashboard is the money pulse.';
     }
   } catch (_) {}
 }
 
+/** Home = apps launcher only. */
 function dashboard() {
   try { renderEcosystemHome(); } catch (e) { console.warn('eco home', e); }
+}
+
+/** Dashboard = metrics, aging, collections (former home body). */
+function pulseView() {
   const all = db.invoices;
   const open = all.filter(i => { syncPaidFlag(i); return balanceDue(i) > 0.001 && i.status !== 'Draft'; });
   const over = open.filter(i => new Date(i.due + 'T12:00:00') < new Date());
