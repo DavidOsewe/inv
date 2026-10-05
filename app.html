@@ -927,6 +927,295 @@ input:focus:not(:focus-visible) {
   padding: 36px 24px;
 }
 
+/* Clients workspace */
+#clients.view.active {
+  position: relative;
+}
+#clients.view.active::before {
+  content: '';
+  position: absolute;
+  inset: -24px -8% auto;
+  height: min(300px, 40vh);
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 65% 80% at 14% 0%, color-mix(in srgb, #0ea5e9 22%, transparent), transparent 60%),
+    radial-gradient(ellipse 45% 55% at 90% 10%, color-mix(in srgb, #3b82f6 12%, transparent), transparent 55%);
+  opacity: 0.85;
+}
+#clients.view.active > * { position: relative; z-index: 1; }
+[data-theme="dark"] #clients.view.active::before { opacity: 0.5; }
+
+#clients .clients-hero {
+  margin-bottom: 18px;
+  padding: 24px 22px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#clients .clients-hero .dash-title {
+  font-size: clamp(24px, 4vw, 30px);
+  letter-spacing: -0.04em;
+}
+#clients .clients-hero .button {
+  border-radius: 999px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+#clients #clientList .table {
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 4%, transparent);
+}
+#clients #clientList .mobile-card {
+  border-radius: 16px;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--text) 4%, transparent);
+}
+#clients .empty {
+  border-radius: 18px;
+  border: 1px dashed color-mix(in srgb, #0ea5e9 28%, var(--line));
+  background: color-mix(in srgb, #0ea5e9 5%, var(--panel));
+  padding: 36px 24px;
+}
+
+/* Books workspace */
+#books.view.active {
+  position: relative;
+}
+#books.view.active::before {
+  content: '';
+  position: absolute;
+  inset: -24px -8% auto;
+  height: min(280px, 38vh);
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 65% 80% at 12% 0%, color-mix(in srgb, #6366f1 22%, transparent), transparent 60%),
+    radial-gradient(ellipse 45% 55% at 88% 10%, color-mix(in srgb, #8b5cf6 14%, transparent), transparent 55%);
+  opacity: 0.85;
+}
+#books.view.active > * { position: relative; z-index: 1; }
+[data-theme="dark"] #books.view.active::before { opacity: 0.5; }
+
+#books .books-hero {
+  margin-bottom: 16px;
+  padding: 22px 20px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#books .books-hero .dash-title {
+  font-size: clamp(24px, 4vw, 30px);
+  letter-spacing: -0.04em;
+}
+#books .books-hero .button {
+  border-radius: 999px;
+  padding-left: 14px;
+  padding-right: 14px;
+}
+#books .books-nav {
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 4%, transparent);
+  backdrop-filter: blur(8px);
+}
+#books .books-nav [data-books-page].primary {
+  background: color-mix(in srgb, #6366f1 12%, var(--panel)) !important;
+  color: color-mix(in srgb, #6366f1 70%, var(--text)) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #6366f1 25%, transparent) !important;
+}
+#books .books-toolbar {
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--text) 3%, transparent);
+}
+#books .insight {
+  border-radius: 16px;
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+/* Inventory workspace */
+#inventory.view.active {
+  position: relative;
+}
+#inventory.view.active::before {
+  content: '';
+  position: absolute;
+  inset: -24px -8% auto;
+  height: min(280px, 38vh);
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 65% 80% at 12% 0%, color-mix(in srgb, #14b8a6 22%, transparent), transparent 60%),
+    radial-gradient(ellipse 45% 55% at 90% 10%, color-mix(in srgb, #22c55e 12%, transparent), transparent 55%);
+  opacity: 0.85;
+}
+#inventory.view.active > * { position: relative; z-index: 1; }
+[data-theme="dark"] #inventory.view.active::before { opacity: 0.5; }
+
+#inventory .inv-stock-hero {
+  margin-bottom: 16px;
+  padding: 22px 20px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#inventory .inv-stock-hero .dash-title {
+  font-size: clamp(24px, 4vw, 30px);
+  letter-spacing: -0.04em;
+}
+#inventory .inv-stock-hero .button,
+#inventory .inv-stock-hero a.button {
+  border-radius: 999px;
+  padding-left: 16px;
+  padding-right: 16px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+#inventory .inv-tabs {
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 4%, transparent);
+  backdrop-filter: blur(8px);
+}
+#inventory .inv-tab.primary,
+#inventory .inv-tab[aria-selected="true"] {
+  background: color-mix(in srgb, #14b8a6 12%, var(--panel)) !important;
+  color: color-mix(in srgb, #0f766e 75%, var(--text)) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #14b8a6 28%, transparent) !important;
+}
+#inventory .inv-panel .insight,
+#inventory .inv-panel .section-head + * {
+  border-radius: 16px;
+}
+#inventory .insight {
+  border-radius: 16px;
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+/* Receipts + Recurring */
+#receipts.view.active,
+#recurring.view.active {
+  position: relative;
+}
+#receipts.view.active::before,
+#recurring.view.active::before {
+  content: '';
+  position: absolute;
+  inset: -24px -8% auto;
+  height: min(260px, 36vh);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.85;
+}
+#receipts.view.active::before {
+  background:
+    radial-gradient(ellipse 65% 80% at 12% 0%, color-mix(in srgb, #f97316 20%, transparent), transparent 60%),
+    radial-gradient(ellipse 45% 55% at 88% 12%, color-mix(in srgb, #f59e0b 12%, transparent), transparent 55%);
+}
+#recurring.view.active::before {
+  background:
+    radial-gradient(ellipse 65% 80% at 12% 0%, color-mix(in srgb, #06b6d4 20%, transparent), transparent 60%),
+    radial-gradient(ellipse 45% 55% at 88% 12%, color-mix(in srgb, #0ea5e9 12%, transparent), transparent 55%);
+}
+#receipts.view.active > *,
+#recurring.view.active > * { position: relative; z-index: 1; }
+[data-theme="dark"] #receipts.view.active::before,
+[data-theme="dark"] #recurring.view.active::before { opacity: 0.5; }
+
+#receipts .receipts-hero,
+#recurring .recurring-hero {
+  margin-bottom: 18px;
+  padding: 22px 20px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#receipts .receipts-hero .dash-title,
+#recurring .recurring-hero .dash-title {
+  font-size: clamp(24px, 4vw, 30px);
+  letter-spacing: -0.04em;
+}
+#receipts .receipts-hero .button,
+#recurring .recurring-hero .button {
+  border-radius: 999px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+#receipts .team-locked,
+#recurring .team-locked {
+  border-radius: 16px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+  padding: 24px 20px;
+  margin-bottom: 16px;
+}
+#receipts #receiptList .table,
+#recurring #recurringList .table {
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+/* Team chat */
+#chat.view.active {
+  position: relative;
+}
+#chat.view.active::before {
+  content: '';
+  position: absolute;
+  inset: -24px -8% auto;
+  height: min(240px, 32vh);
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 65% 80% at 12% 0%, color-mix(in srgb, #ec4899 18%, transparent), transparent 60%),
+    radial-gradient(ellipse 45% 55% at 88% 10%, color-mix(in srgb, #a78bfa 12%, transparent), transparent 55%);
+  opacity: 0.85;
+}
+#chat.view.active > * { position: relative; z-index: 1; }
+[data-theme="dark"] #chat.view.active::before { opacity: 0.5; }
+
+#chat .chat-hero {
+  margin-bottom: 16px;
+  padding: 20px 18px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#chat .chat-hero .dash-title {
+  font-size: clamp(24px, 4vw, 30px);
+  letter-spacing: -0.04em;
+}
+#chat .chat-hero .button {
+  border-radius: 999px;
+  padding-left: 14px;
+  padding-right: 14px;
+}
+#chat .chat-layout {
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--text) 4%, transparent),
+    0 12px 32px color-mix(in srgb, var(--text) 5%, transparent);
+  min-height: min(72vh, 680px);
+}
+#chat .chat-sidebar {
+  background: color-mix(in srgb, var(--panel-2) 95%, transparent);
+}
+#chat .chat-channel-btn.active {
+  background: color-mix(in srgb, #ec4899 12%, var(--panel));
+  color: color-mix(in srgb, #be185d 70%, var(--text));
+}
+#chat .chat-compose {
+  border-top: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+}
+
 /* ---- Light UI polish: lists, next action, sticky editor ---- */
 .next-action {
   display: flex;
@@ -3446,10 +3735,15 @@ input:focus:not(:focus-visible) {
     </section>
 
     <section class="view" id="inventory">
-      <div class="section-head" style="margin-bottom:8px">
-        <div>
-          <h2>Inventory</h2>
-          <div class="client-count" id="inventoryFlowHint">Buy once → move to shops → sell → count weekly</div>
+      <div class="dash-hero inv-stock-hero">
+        <div class="dash-hero-text">
+          <div class="dash-greeting">Inventory</div>
+          <h1 class="dash-title">Stock &amp; shops</h1>
+          <p class="dash-sub" id="inventoryFlowHint">Buy once → move to outlets → sell → count weekly.</p>
+        </div>
+        <div class="dash-hero-actions">
+          <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
+          <a class="button primary" href="/pos.html">Open POS</a>
         </div>
       </div>
       <div class="inv-tabs" id="inventoryTabs" role="tablist" aria-label="Inventory">
@@ -3826,24 +4120,37 @@ input:focus:not(:focus-visible) {
     </section>
 
     <section class="view" id="clients">
-      <div class="section-head">
-        <div>
-          <h2>Clients</h2>
-          <div class="client-count" id="clientCount">0 clients</div>
+      <div class="dash-hero clients-hero">
+        <div class="dash-hero-text">
+          <div class="dash-greeting">Clients</div>
+          <h1 class="dash-title">Your directory</h1>
+          <p class="dash-sub">Save people once — invoice, remind, and track who still owes.</p>
         </div>
-        <button class="button primary" id="addClient" type="button">+ Add client</button>
+        <div class="dash-hero-actions">
+          <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
+          <button class="button primary" id="addClient" type="button">+ Add client</button>
+        </div>
       </div>
-      <div class="client-toolbar">
-        <div class="search-bar" style="margin:0;flex:1;max-width:520px"><input type="search" id="clientSearch" placeholder="Search clients by name or email…"></div>
+      <div class="inv-summary" id="clientSummary" aria-live="polite"></div>
+      <div class="client-toolbar inv-toolbar">
+        <div class="search-bar inv-search" style="margin:0">
+          <input type="search" id="clientSearch" placeholder="Search by name, email, or tax ID…">
+        </div>
+        <div class="client-count" id="clientCount" style="font-size:13px;color:var(--muted);font-weight:600">0 clients</div>
       </div>
       <div id="clientList"></div>
     </section>
 
     <section class="view" id="receipts">
-      <div class="section-head">
-        <div>
-          <h2>Receipts</h2>
-          <div class="client-count" id="receiptCount">Payment confirmations</div>
+      <div class="dash-hero receipts-hero">
+        <div class="dash-hero-text">
+          <div class="dash-greeting">Receipts</div>
+          <h1 class="dash-title">Payment proofs</h1>
+          <p class="dash-sub" id="receiptCount">Download confirmations for recorded payments.</p>
+        </div>
+        <div class="dash-hero-actions">
+          <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
+          <button class="button primary" type="button" onclick="switchTo('invoices')">Invoices</button>
         </div>
       </div>
       <div id="receiptsLocked" class="team-locked" style="display:none">
@@ -3853,8 +4160,8 @@ input:focus:not(:focus-visible) {
         <button class="button primary" type="button" data-plan-page-upgrade="starter">Upgrade to Starter</button>
       </div>
       <div id="receiptsPanel" style="display:none">
-        <div class="client-toolbar">
-          <div class="search-bar" style="margin:0;flex:1;max-width:520px">
+        <div class="client-toolbar inv-toolbar">
+          <div class="search-bar inv-search" style="margin:0">
             <input type="search" id="receiptSearch" placeholder="Search by client, invoice, or note…">
           </div>
         </div>
@@ -3863,10 +4170,15 @@ input:focus:not(:focus-visible) {
     </section>
 
     <section class="view" id="recurring">
-      <div class="section-head">
-        <div>
-          <h2>Recurring invoices</h2>
-          <div class="client-count" id="recurringCount">Auto-create invoices on a schedule</div>
+      <div class="dash-hero recurring-hero">
+        <div class="dash-hero-text">
+          <div class="dash-greeting">Recurring</div>
+          <h1 class="dash-title">Auto invoices</h1>
+          <p class="dash-sub" id="recurringCount">Schedules that create the next invoice when due.</p>
+        </div>
+        <div class="dash-hero-actions">
+          <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
+          <button class="button primary" type="button" onclick="switchTo('invoices')">Invoices</button>
         </div>
       </div>
       <div id="recurringLocked" class="team-locked" style="display:none">
@@ -3885,14 +4197,14 @@ input:focus:not(:focus-visible) {
 
 
     <section class="view books-shell" id="books">
-      <div class="section-head">
-        <div>
-          <h2>Books</h2>
-          <p class="section-sub">See money in, money out, and whether your bank matches — without drowning in menus.</p>
+      <div class="dash-hero books-hero">
+        <div class="dash-hero-text">
+          <div class="dash-greeting">Books</div>
+          <h1 class="dash-title">Ledger &amp; cash</h1>
+          <p class="dash-sub">Money in, money out, bank match, and reports — without drowning in menus.</p>
         </div>
-        <!-- legacy id stubs removed: duplicate IDs stole event listeners from real buttons -->
-        <div style="display:none" aria-hidden="true"></div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center" id="booksPrimaryActions">
+        <div class="dash-hero-actions" id="booksPrimaryActions">
+          <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
           <div style="position:relative" id="booksCreateWrap">
             <button class="button primary" type="button" id="btnBooksCreate">+ Create</button>
             <div id="booksCreateMenu" class="books-create-menu" hidden style="position:absolute;right:0;top:calc(100% + 6px);z-index:40;min-width:220px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-lg);padding:8px">
@@ -4213,12 +4525,14 @@ input:focus:not(:focus-visible) {
 
 
     <section class="view" id="chat">
-      <div class="section-head">
-        <div>
-          <h2>Team chat</h2>
-          <div class="client-count" id="chatSubtitle">Channels and direct messages for your team</div>
+      <div class="dash-hero chat-hero">
+        <div class="dash-hero-text">
+          <div class="dash-greeting">Team chat</div>
+          <h1 class="dash-title">Channels &amp; DMs</h1>
+          <p class="dash-sub" id="chatSubtitle">Live conversation for your organisation — approvals, stock, and day-to-day.</p>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="dash-hero-actions">
+          <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
           <button class="button" type="button" id="chatRefreshBtn">Refresh</button>
           <button class="button primary" type="button" id="chatNewChannelBtn">+ Channel</button>
         </div>
@@ -8774,7 +9088,9 @@ function switchTo(v) {
   $('#heading').textContent = h[0];
   $('#subheading').textContent = h[1];
   try {
-    document.querySelector('.main')?.classList.toggle('main-eco-focus', v === 'dashboard' || v === 'pulse' || v === 'invoices');
+    document.querySelector('.main')?.classList.toggle('main-eco-focus',
+      v === 'dashboard' || v === 'pulse' || v === 'invoices' || v === 'clients' ||
+      v === 'books' || v === 'inventory' || v === 'receipts' || v === 'recurring' || v === 'chat');
   } catch (_) {}
   const bottomNav = document.querySelector('.bottom-nav');
   if (bottomNav) {
@@ -17263,12 +17579,46 @@ async function pushPosSaleToCloud(sale) {
   sale.cloudId = data.id;
 }
 
+function renderClientSummary() {
+  const el = document.getElementById('clientSummary');
+  if (!el) return;
+  const all = db.clients || [];
+  let withEmail = 0, owing = 0, settled = 0, neverInvoiced = 0;
+  let owingAmt = 0;
+  const rep = (db.profile && db.profile.reporting) || 'NGN';
+  all.forEach(c => {
+    if (c.email) withEmail++;
+    const invs = (db.invoices || []).filter(i => i.client === c.id);
+    if (!invs.length) { neverInvoiced++; return; }
+    let open = 0;
+    invs.forEach(i => {
+      syncPaidFlag(i);
+      const bal = balanceDue(i);
+      if (bal > 0.001 && i.status !== 'Draft') {
+        open += bal * ((fx[i.currency] ?? 1) / (fx[rep] ?? 1));
+      }
+    });
+    if (open > 0.001) { owing++; owingAmt += open; }
+    else settled++;
+  });
+  el.innerHTML =
+    '<div class="inv-summary-pill" data-tone="blue"><small>Clients</small><b>' + all.length + '</b></div>' +
+    '<div class="inv-summary-pill" data-tone="rose"><small>Owing</small><b>' + owing +
+      (owing ? '<span class="mini" style="display:block;margin-top:4px;font-size:12px;font-weight:600;color:var(--muted)">' + money(owingAmt) + '</span>' : '') +
+      '</b></div>' +
+    '<div class="inv-summary-pill" data-tone="green"><small>Settled</small><b>' + settled + '</b></div>' +
+    '<div class="inv-summary-pill" data-tone="amber"><small>Not invoiced yet</small><b>' + neverInvoiced + '</b></div>';
+}
+
 function clients() {
   const query = (document.getElementById('clientSearch')?.value || '').trim().toLowerCase();
   const all = db.clients.slice();
   const list = all.filter(c => !query || [c.name, c.email, c.address, c.taxId].some(v => String(v || '').toLowerCase().includes(query)));
   const countEl = document.getElementById('clientCount');
-  if (countEl) countEl.textContent = `${all.length} client${all.length === 1 ? '' : 's'}`;
+  if (countEl) countEl.textContent = list.length === all.length
+    ? `${all.length} client${all.length === 1 ? '' : 's'}`
+    : `${list.length} of ${all.length}`;
+  try { renderClientSummary(); } catch (_) {}
 
   if (!all.length) {
     $('#clientList').innerHTML = `<div class="empty">
