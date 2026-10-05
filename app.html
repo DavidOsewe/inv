@@ -790,9 +790,141 @@ input:focus:not(:focus-visible) {
   box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 3%, transparent);
 }
 
-/* Hide redundant page chrome on Home / Dashboard — hero is the title */
+/* Hide redundant page chrome on Home / Dashboard / Invoices — hero is the title */
 .main.main-eco-focus .top {
   display: none;
+}
+
+/* Invoices workspace */
+#invoices.view.active {
+  position: relative;
+}
+#invoices.view.active::before {
+  content: '';
+  position: absolute;
+  inset: -24px -8% auto;
+  height: min(300px, 40vh);
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 65% 80% at 12% 0%, color-mix(in srgb, #3b82f6 22%, transparent), transparent 60%),
+    radial-gradient(ellipse 45% 55% at 88% 12%, color-mix(in srgb, #0ea5e9 14%, transparent), transparent 55%);
+  opacity: 0.85;
+}
+#invoices.view.active > * { position: relative; z-index: 1; }
+[data-theme="dark"] #invoices.view.active::before { opacity: 0.5; }
+
+#invoices .inv-hero {
+  margin-bottom: 18px;
+  padding: 24px 22px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#invoices .inv-hero .dash-title {
+  font-size: clamp(24px, 4vw, 30px);
+  letter-spacing: -0.04em;
+}
+#invoices .inv-hero .button {
+  border-radius: 999px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.inv-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+@media (min-width: 640px) {
+  .inv-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+.inv-summary-pill {
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), var(--panel));
+  padding: 14px 16px;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--text) 3%, transparent);
+}
+.inv-summary-pill small {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.inv-summary-pill b {
+  display: block;
+  margin-top: 6px;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.inv-summary-pill[data-tone="blue"] { border-color: color-mix(in srgb, #3b82f6 28%, var(--line)); }
+.inv-summary-pill[data-tone="amber"] { border-color: color-mix(in srgb, #f59e0b 28%, var(--line)); }
+.inv-summary-pill[data-tone="rose"] { border-color: color-mix(in srgb, #f43f5e 28%, var(--line)); }
+.inv-summary-pill[data-tone="green"] { border-color: color-mix(in srgb, #22c55e 28%, var(--line)); }
+
+.inv-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+@media (min-width: 720px) {
+  .inv-toolbar {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .inv-search { flex: 1; max-width: 360px; margin: 0; }
+}
+.inv-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.inv-filter {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.inv-filter:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  color: var(--text);
+}
+.inv-filter.primary,
+.inv-filter[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+#invoices #invoiceList .table {
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 4%, transparent);
+}
+#invoices #invoiceList .mobile-card {
+  border-radius: 16px;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--text) 4%, transparent);
+}
+#invoices .empty {
+  border-radius: 18px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 25%, var(--line));
+  background: color-mix(in srgb, var(--accent) 4%, var(--panel));
+  padding: 36px 24px;
 }
 
 /* ---- Light UI polish: lists, next action, sticky editor ---- */
@@ -3286,11 +3418,29 @@ input:focus:not(:focus-visible) {
     </section>
 
     <section class="view" id="invoices">
-      <div class="section-head">
-        <h2>All invoices</h2>
+      <div class="dash-hero inv-hero">
+        <div class="dash-hero-text">
+          <div class="dash-greeting">Invoices</div>
+          <h1 class="dash-title">Bill &amp; collect</h1>
+          <p class="dash-sub">Create clear invoices, track what’s unpaid, and follow up from one list.</p>
+        </div>
+        <div class="dash-hero-actions">
+          <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
+          <button class="button primary" type="button" onclick="newInvoice()">+ New invoice</button>
+        </div>
       </div>
-      <div class="search-bar">
-        <input type="search" id="invoiceSearch" placeholder="Search by number, title, client or status…">
+      <div class="inv-summary" id="invSummary" aria-live="polite"></div>
+      <div class="inv-toolbar">
+        <div class="search-bar inv-search">
+          <input type="search" id="invoiceSearch" placeholder="Search number, client, title, status…">
+        </div>
+        <div class="inv-filters" id="invFilters" role="tablist" aria-label="Filter invoices">
+          <button type="button" class="inv-filter primary" data-inv-filter="all" aria-pressed="true">All</button>
+          <button type="button" class="inv-filter" data-inv-filter="unpaid" aria-pressed="false">Unpaid</button>
+          <button type="button" class="inv-filter" data-inv-filter="overdue" aria-pressed="false">Overdue</button>
+          <button type="button" class="inv-filter" data-inv-filter="paid" aria-pressed="false">Paid</button>
+          <button type="button" class="inv-filter" data-inv-filter="draft" aria-pressed="false">Draft</button>
+        </div>
       </div>
       <div id="invoiceList"></div>
     </section>
@@ -8624,7 +8774,7 @@ function switchTo(v) {
   $('#heading').textContent = h[0];
   $('#subheading').textContent = h[1];
   try {
-    document.querySelector('.main')?.classList.toggle('main-eco-focus', v === 'dashboard' || v === 'pulse');
+    document.querySelector('.main')?.classList.toggle('main-eco-focus', v === 'dashboard' || v === 'pulse' || v === 'invoices');
   } catch (_) {}
   const bottomNav = document.querySelector('.bottom-nav');
   if (bottomNav) {
@@ -9368,9 +9518,66 @@ function pulseView() {
   if (insights) insights.style.display = showAging ? '' : 'none';
 }
 
+let _invoiceFilter = 'all';
+
+function invoiceMatchesFilter(i, filter) {
+  syncPaidFlag(i);
+  const st = status(i);
+  const bal = balanceDue(i);
+  if (filter === 'all') return true;
+  if (filter === 'draft') return st === 'Draft' || i.status === 'Draft';
+  if (filter === 'paid') return !!i.paid || bal <= 0.001;
+  if (filter === 'unpaid') return !i.paid && bal > 0.001 && st !== 'Draft';
+  if (filter === 'overdue') {
+    if (i.paid || bal <= 0.001 || st === 'Draft') return false;
+    if (!i.due) return false;
+    return new Date(i.due + 'T12:00:00') < new Date();
+  }
+  return true;
+}
+
+function renderInvoiceSummary() {
+  const el = document.getElementById('invSummary');
+  if (!el) return;
+  const all = db.invoices || [];
+  let unpaid = 0, overdue = 0, paid = 0, drafts = 0;
+  let unpaidAmt = 0, overdueAmt = 0;
+  const rep = (db.profile && db.profile.reporting) || 'NGN';
+  all.forEach(i => {
+    syncPaidFlag(i);
+    const st = status(i);
+    const bal = balanceDue(i);
+    if (st === 'Draft' || i.status === 'Draft') { drafts++; return; }
+    if (i.paid || bal <= 0.001) { paid++; return; }
+    unpaid++;
+    const fxAmt = bal * ((fx[i.currency] ?? 1) / (fx[rep] ?? 1));
+    unpaidAmt += fxAmt;
+    if (i.due && new Date(i.due + 'T12:00:00') < new Date()) {
+      overdue++;
+      overdueAmt += fxAmt;
+    }
+  });
+  el.innerHTML =
+    '<div class="inv-summary-pill" data-tone="blue"><small>Total</small><b>' + all.length + '</b></div>' +
+    '<div class="inv-summary-pill" data-tone="amber"><small>Unpaid</small><b>' + unpaid +
+      (unpaid ? '<span class="mini" style="display:block;margin-top:4px;font-size:12px;font-weight:600;color:var(--muted)">' + money(unpaidAmt) + '</span>' : '') +
+      '</b></div>' +
+    '<div class="inv-summary-pill" data-tone="rose"><small>Overdue</small><b>' + overdue +
+      (overdue ? '<span class="mini" style="display:block;margin-top:4px;font-size:12px;font-weight:600;color:var(--muted)">' + money(overdueAmt) + '</span>' : '') +
+      '</b></div>' +
+    '<div class="inv-summary-pill" data-tone="green"><small>Paid · Drafts</small><b>' + paid + ' · ' + drafts + '</b></div>';
+}
+
 function invoices() {
   const q = ($('#invoiceSearch')?.value || '').trim().toLowerCase();
-  let list = db.invoices;
+  const filter = _invoiceFilter || 'all';
+  document.querySelectorAll('#invFilters [data-inv-filter]').forEach(btn => {
+    const on = btn.getAttribute('data-inv-filter') === filter;
+    btn.classList.toggle('primary', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  try { renderInvoiceSummary(); } catch (_) {}
+  let list = (db.invoices || []).filter(i => invoiceMatchesFilter(i, filter));
   if (q) {
     list = list.filter(i => {
       const cName = (client(i.client)?.name || '').toLowerCase();
@@ -9381,11 +9588,11 @@ function invoices() {
              st.includes(q);
     });
   }
-  if (q && !list.length && db.invoices.length) {
+  if (q && !list.length && (db.invoices || []).length) {
     $('#invoiceList').innerHTML = `<div class="empty">
       <div class="empty-icon">⌕</div>
       <h3>No matches</h3>
-      <p>Nothing matched “${q.replace(/[<>&]/g, '')}”. Try another number, client, or status.</p>
+      <p>Nothing matched “${q.replace(/[<>&]/g, '')}” in this filter. Try another search or switch filter.</p>
       <div class="empty-actions">
         <button class="button" type="button" onclick="document.getElementById('invoiceSearch').value='';invoices()">Clear search</button>
       </div>
@@ -28271,6 +28478,11 @@ document.addEventListener('input', e => {
   if (e.target.id === 'invoiceSearch') invoices();
   if (e.target.id === 'clientSearch') clients();
   if (e.target.id === 'receiptSearch') receiptsView();
+  const invFilterBtn = e.target.closest && e.target.closest('#invFilters [data-inv-filter]');
+  if (invFilterBtn) {
+    _invoiceFilter = invFilterBtn.getAttribute('data-inv-filter') || 'all';
+    invoices();
+  }
   if (e.target.id === 'issue' || e.target.id === 'due') {
     const issue = $('#issue')?.value || edit?.issue;
     const due = $('#due')?.value || edit?.due;
