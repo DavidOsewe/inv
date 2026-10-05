@@ -1,7 +1,7 @@
 
 
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -502,6 +502,111 @@ input:focus:not(:focus-visible) {
 .card-accent {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Ecosystem launcher (Proton-style product tiles) */
+.eco-home {
+  margin: 0 0 22px;
+}
+.eco-home-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+.eco-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (min-width: 560px) {
+  .eco-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 900px) {
+  .eco-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+.eco-tile {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--card, var(--bg));
+  border-radius: 16px;
+  padding: 16px 12px 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  min-height: 112px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text);
+  font: inherit;
+  position: relative;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 4%, transparent);
+}
+.eco-tile:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--text) 8%, transparent);
+}
+.eco-tile:active { transform: translateY(0); }
+.eco-tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.eco-tile-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  line-height: 1;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 16%, #fff), color-mix(in srgb, var(--accent) 6%, var(--card, #f8fafc)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.eco-tile-name {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.eco-tile-desc {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+  max-width: 14ch;
+}
+.eco-tile-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+}
+.eco-tile-badge.eco-badge-new {
+  background: #ede9fe;
+  color: #5b21b6;
+  border-color: #a78bfa;
+}
+.eco-tile[disabled],
+.eco-tile.eco-tile-locked {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+.eco-tile.eco-tile-locked:hover {
+  transform: none;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 4%, transparent);
+  border-color: var(--line);
 }
 
 /* ---- Light UI polish: lists, next action, sticky editor ---- */
@@ -2929,13 +3034,17 @@ input:focus:not(:focus-visible) {
       <div class="dash-hero" id="dashHero">
         <div class="dash-hero-text">
           <div class="dash-greeting" id="dashGreeting">Welcome back</div>
-          <h1 class="dash-title" id="dashTitle">Your business at a glance</h1>
-          <p class="dash-sub" id="dashSub">Create invoices, track payments, stay on top of what’s due.</p>
+          <h1 class="dash-title" id="dashTitle">Your business OS</h1>
+          <p class="dash-sub" id="dashSub">One organisation · invoices, books, shops, and team — open what you need.</p>
         </div>
         <div class="dash-hero-actions">
           <button class="button" type="button" id="dashRequestExpenseBtn" data-role-gate="expenses.request">+ Expense request</button>
           <button class="button" type="button" onclick="switchTo('clients')">Clients</button>
         </div>
+      </div>
+      <div class="eco-home" id="ecoHome" aria-label="Invoicedey apps">
+        <p class="eco-home-label">Apps</p>
+        <div class="eco-grid" id="ecoGrid"></div>
       </div>
       <div class="cards" id="dashCards">
         <div class="card card-accent" id="cardOutstanding">
@@ -8651,7 +8760,200 @@ function renderCollectionsPanel() {
 }
 
 
+/** Product tiles for the ecosystem home launcher. */
+function ecoAppCatalog() {
+  const biz = (db && db.profile && db.profile.name) || 'your business';
+  return [
+    {
+      id: 'invoices',
+      name: 'Invoices',
+      desc: 'Bill & collect',
+      icon: '▤',
+      view: 'invoices',
+      when: () => true
+    },
+    {
+      id: 'clients',
+      name: 'Clients',
+      desc: 'Directory',
+      icon: '♙',
+      view: 'clients',
+      when: () => true
+    },
+    {
+      id: 'books',
+      name: 'Books',
+      desc: 'Ledger & bank',
+      icon: '◎',
+      view: 'books',
+      need: 'books.view',
+      when: () => can('books.view')
+    },
+    {
+      id: 'pos',
+      name: 'POS',
+      desc: 'Checkout',
+      icon: '▣',
+      href: '/pos.html',
+      need: 'pos.sell',
+      when: () => can('pos.sell')
+    },
+    {
+      id: 'inventory',
+      name: 'Inventory',
+      desc: 'Stock & shops',
+      icon: '■',
+      view: 'inventory',
+      need: null,
+      when: () => can('inventory.manage') || can('transfers.create') || can('purchases.create') || can('pos.sell')
+    },
+    {
+      id: 'approvals',
+      name: 'Approvals',
+      desc: 'Requests',
+      icon: '✓',
+      view: 'books',
+      booksTab: 'payables',
+      need: null,
+      badge: () => {
+        try {
+          const n = (typeof pendingApprovalCount === 'function') ? pendingApprovalCount() :
+            ((db.expenseRequests || []).filter(r => r.status === 'pending' || r.status === 'submitted').length);
+          return n > 0 ? String(n) : '';
+        } catch (_) { return ''; }
+      },
+      when: () => can('expenses.request') || can('expenses.approve') || can('expenses.review') ||
+        can('transfers.approve') || can('purchases.approve')
+    },
+    {
+      id: 'chat',
+      name: 'Team chat',
+      desc: 'Channels & DMs',
+      icon: '💬',
+      view: 'chat',
+      when: () => !!(cloud && cloud.user),
+      badge: () => {
+        try {
+          const el = document.getElementById('chatNavBadge');
+          if (el && !el.hidden && el.textContent) return el.textContent;
+        } catch (_) {}
+        return '';
+      }
+    },
+    {
+      id: 'recurring',
+      name: 'Recurring',
+      desc: 'Auto invoices',
+      icon: '↻',
+      view: 'recurring',
+      when: () => true
+    },
+    {
+      id: 'receipts',
+      name: 'Receipts',
+      desc: 'Payment proofs',
+      icon: '◈',
+      view: 'receipts',
+      when: () => true
+    },
+    {
+      id: 'plan',
+      name: 'Plan',
+      desc: 'Billing & team',
+      icon: '◆',
+      view: 'plan',
+      when: () => true
+    },
+    {
+      id: 'profile',
+      name: 'Settings',
+      desc: biz.length > 18 ? 'Business profile' : biz,
+      icon: '⚙',
+      view: 'profile',
+      when: () => true
+    }
+  ];
+}
+
+function openEcoApp(tile) {
+  if (!tile) return;
+  if (tile.need && !can(tile.need)) {
+    toast(typeof roleGateMessage === 'function' ? roleGateMessage(tile.need) : 'No access');
+    return;
+  }
+  if (tile.href) {
+    window.location.href = tile.href;
+    return;
+  }
+  if (tile.view === 'books' && tile.booksTab) {
+    try {
+      switchTo('books');
+      setTimeout(() => {
+        try {
+          if (typeof setBooksPage === 'function') setBooksPage('ap', tile.booksTab);
+          else if (typeof setBooksTab === 'function') setBooksTab(tile.booksTab);
+        } catch (_) {}
+      }, 40);
+    } catch (_) { switchTo('books'); }
+    return;
+  }
+  if (tile.view) switchTo(tile.view);
+}
+
+function renderEcosystemHome() {
+  const grid = document.getElementById('ecoGrid');
+  if (!grid) return;
+  const role = (typeof currentOrgRole === 'function') ? currentOrgRole() : 'owner';
+  const tiles = ecoAppCatalog().filter(t => {
+    try { return typeof t.when === 'function' ? t.when() : true; } catch (_) { return true; }
+  });
+  // Locked tiles (visible but gated) for discoverability — only for signed-in members
+  const locked = [];
+  if (role === 'member') {
+    ecoAppCatalog().forEach(t => {
+      if (tiles.find(x => x.id === t.id)) return;
+      if (t.id === 'books') locked.push({ ...t, locked: true });
+    });
+  }
+  const all = tiles.concat(locked);
+  grid.innerHTML = all.map(t => {
+    const badge = (!t.locked && typeof t.badge === 'function') ? (t.badge() || '') : (t.locked ? 'Role' : '');
+    const badgeCls = t.locked ? 'eco-tile-badge' : 'eco-tile-badge eco-badge-new';
+    return '<button type="button" class="eco-tile' + (t.locked ? ' eco-tile-locked' : '') +
+      '" data-eco-id="' + t.id + '"' + (t.locked ? ' disabled title="Requires a higher role"' : '') + '>' +
+      (badge ? '<span class="' + badgeCls + '">' + String(badge).replace(/</g, '') + '</span>' : '') +
+      '<span class="eco-tile-icon" aria-hidden="true">' + (t.icon || '·') + '</span>' +
+      '<span class="eco-tile-name">' + String(t.name).replace(/</g, '') + '</span>' +
+      '<span class="eco-tile-desc">' + String(t.desc || '').replace(/</g, '') + '</span>' +
+      '</button>';
+  }).join('');
+  grid.querySelectorAll('.eco-tile:not([disabled])').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-eco-id');
+      const tile = ecoAppCatalog().find(x => x.id === id);
+      openEcoApp(tile);
+    });
+  });
+  try {
+    const greet = document.getElementById('dashGreeting');
+    const title = document.getElementById('dashTitle');
+    const sub = document.getElementById('dashSub');
+    const name = (db && db.profile && db.profile.name) || '';
+    if (greet) {
+      const hour = new Date().getHours();
+      const part = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+      greet.textContent = part + (name ? ' · ' + name : '');
+    }
+    if (title) title.textContent = 'Your business OS';
+    if (sub) {
+      const roleLabel = role === 'owner' ? 'Owner' : role === 'manager' ? 'Manager' : 'Team member';
+      sub.textContent = roleLabel + ' access · open an app below — sidebar still works for power users.';
+    }
+  } catch (_) {}
+}
+
 function dashboard() {
+  try { renderEcosystemHome(); } catch (e) { console.warn('eco home', e); }
   const all = db.invoices;
   const open = all.filter(i => { syncPaidFlag(i); return balanceDue(i) > 0.001 && i.status !== 'Draft'; });
   const over = open.filter(i => new Date(i.due + 'T12:00:00') < new Date());
