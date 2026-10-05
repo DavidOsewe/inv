@@ -714,6 +714,87 @@ input:focus:not(:focus-visible) {
 .eco-tile[data-tone="pink"] { --eco-tone: #ec4899; }
 .eco-tile[data-tone="cyan"] { --eco-tone: #06b6d4; }
 
+/* Dashboard (pulse) — match home polish */
+#pulse.view.active {
+  position: relative;
+}
+#pulse.view.active::before {
+  content: '';
+  position: absolute;
+  inset: -24px -8% auto;
+  height: min(320px, 42vh);
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 65% 80% at 20% 0%, color-mix(in srgb, #8b5cf6 20%, transparent), transparent 60%),
+    radial-gradient(ellipse 45% 55% at 90% 15%, color-mix(in srgb, #3b82f6 14%, transparent), transparent 55%);
+  opacity: 0.85;
+}
+#pulse.view.active > * { position: relative; z-index: 1; }
+[data-theme="dark"] #pulse.view.active::before { opacity: 0.5; }
+
+#pulse .dash-hero {
+  margin-bottom: 22px;
+  padding: 24px 22px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#pulse .dash-title {
+  font-size: clamp(24px, 4vw, 30px);
+  letter-spacing: -0.04em;
+}
+#pulse .dash-hero-actions .button {
+  border-radius: 999px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+#pulse #dashCards .card {
+  border-radius: 18px;
+  padding: 22px 20px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), var(--panel));
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--text) 4%, transparent),
+    0 10px 28px color-mix(in srgb, var(--text) 4%, transparent);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+#pulse #dashCards .card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 4px 8px color-mix(in srgb, var(--text) 5%, transparent),
+    0 14px 32px color-mix(in srgb, var(--text) 6%, transparent);
+}
+#pulse #cardOutstanding {
+  border-color: color-mix(in srgb, #3b82f6 28%, var(--line));
+  box-shadow: 0 10px 28px color-mix(in srgb, #3b82f6 10%, transparent);
+}
+#pulse #cardOverdue {
+  border-color: color-mix(in srgb, #f43f5e 22%, var(--line));
+}
+#pulse #cardCollected {
+  border-color: color-mix(in srgb, #22c55e 22%, var(--line));
+}
+#pulse #cardRate {
+  border-color: color-mix(in srgb, #8b5cf6 22%, var(--line));
+}
+#pulse .section-head h2 {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+#pulse .insight {
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+/* Hide redundant page chrome on Home / Dashboard — hero is the title */
+.main.main-eco-focus .top {
+  display: none;
+}
+
 /* ---- Light UI polish: lists, next action, sticky editor ---- */
 .next-action {
   display: flex;
@@ -3142,15 +3223,15 @@ input:focus:not(:focus-visible) {
     </section>
 
     <section class="view" id="pulse">
-      <div class="dash-hero" style="margin-bottom:18px">
+      <div class="dash-hero">
         <div class="dash-hero-text">
           <div class="dash-greeting">Dashboard</div>
           <h1 class="dash-title">Business pulse</h1>
-          <p class="dash-sub">Outstanding, collections, and what needs attention.</p>
+          <p class="dash-sub">Outstanding, collections, and what needs attention right now.</p>
         </div>
         <div class="dash-hero-actions">
-          <button class="button primary" type="button" onclick="switchTo('dashboard')">← Apps</button>
-          <button class="button" type="button" onclick="switchTo('invoices')">Invoices</button>
+          <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
+          <button class="button primary" type="button" onclick="switchTo('invoices')">Invoices</button>
         </div>
       </div>
       <div class="cards" id="dashCards">
@@ -8542,6 +8623,9 @@ function switchTo(v) {
   }[v] || ['invoicedey', ''];
   $('#heading').textContent = h[0];
   $('#subheading').textContent = h[1];
+  try {
+    document.querySelector('.main')?.classList.toggle('main-eco-focus', v === 'dashboard' || v === 'pulse');
+  } catch (_) {}
   const bottomNav = document.querySelector('.bottom-nav');
   if (bottomNav) {
     bottomNav.classList.toggle('nav-hidden', v === 'editor');
