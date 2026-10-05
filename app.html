@@ -504,93 +504,182 @@ input:focus:not(:focus-visible) {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-/* Ecosystem launcher (Proton-style product tiles) */
+/* Ecosystem launcher — polished home */
+#dashboard.view.active {
+  position: relative;
+}
+#dashboard.view.active::before {
+  content: '';
+  position: absolute;
+  inset: -24px -8% auto;
+  height: min(420px, 55vh);
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 70% 80% at 15% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
+    radial-gradient(ellipse 50% 60% at 85% 10%, color-mix(in srgb, #a78bfa 18%, transparent), transparent 55%),
+    radial-gradient(ellipse 40% 50% at 50% 30%, color-mix(in srgb, #38bdf8 10%, transparent), transparent 50%);
+  opacity: 0.9;
+}
+#dashboard.view.active > * { position: relative; z-index: 1; }
+[data-theme="dark"] #dashboard.view.active::before {
+  opacity: 0.55;
+}
+
+#dashboard .dash-hero {
+  margin-bottom: 28px;
+  padding: 28px 26px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#dashboard .dash-title {
+  font-size: clamp(26px, 4.5vw, 34px);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.12;
+}
+#dashboard .dash-sub {
+  max-width: 36ch;
+  font-size: 14.5px;
+  margin-top: 10px;
+  color: color-mix(in srgb, var(--muted) 90%, var(--text));
+}
+#dashboard .dash-hero-actions .button {
+  border-radius: 999px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
 .eco-home {
-  margin: 0 0 22px;
+  margin: 0 auto 8px;
+  max-width: 920px;
 }
 .eco-home-label {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0 0 12px;
+  margin: 0 0 16px;
+  text-align: center;
 }
 .eco-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 14px;
+  justify-items: stretch;
 }
 @media (min-width: 560px) {
-  .eco-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .eco-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 }
 @media (min-width: 900px) {
-  .eco-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .eco-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
 }
 .eco-tile {
   appearance: none;
-  border: 1px solid var(--line);
-  background: var(--card, var(--bg));
-  border-radius: 16px;
-  padding: 16px 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel, #fff) 92%, transparent) 0%, var(--card, var(--panel, #fff)) 100%);
+  border-radius: 20px;
+  padding: 22px 14px 18px;
   text-align: center;
   cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  min-height: 112px;
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  min-height: 132px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 10px;
   color: var(--text);
   font: inherit;
   position: relative;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 4%, transparent);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--text) 4%, transparent),
+    0 8px 24px color-mix(in srgb, var(--text) 3%, transparent);
+  animation: ecoTileIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.eco-tile:nth-child(1) { animation-delay: 0.02s; }
+.eco-tile:nth-child(2) { animation-delay: 0.05s; }
+.eco-tile:nth-child(3) { animation-delay: 0.08s; }
+.eco-tile:nth-child(4) { animation-delay: 0.11s; }
+.eco-tile:nth-child(5) { animation-delay: 0.14s; }
+.eco-tile:nth-child(6) { animation-delay: 0.17s; }
+.eco-tile:nth-child(7) { animation-delay: 0.2s; }
+.eco-tile:nth-child(8) { animation-delay: 0.23s; }
+.eco-tile:nth-child(9) { animation-delay: 0.26s; }
+.eco-tile:nth-child(10) { animation-delay: 0.29s; }
+.eco-tile:nth-child(11) { animation-delay: 0.32s; }
+.eco-tile:nth-child(12) { animation-delay: 0.35s; }
+@keyframes ecoTileIn {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .eco-tile { animation: none; }
 }
 .eco-tile:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
-  box-shadow: 0 8px 20px color-mix(in srgb, var(--text) 8%, transparent);
+  transform: translateY(-4px) scale(1.02);
+  border-color: color-mix(in srgb, var(--eco-tone, var(--accent)) 45%, var(--line));
+  box-shadow:
+    0 4px 8px color-mix(in srgb, var(--text) 5%, transparent),
+    0 16px 36px color-mix(in srgb, var(--eco-tone, var(--accent)) 16%, transparent);
 }
-.eco-tile:active { transform: translateY(0); }
+.eco-tile:active { transform: translateY(-1px) scale(1.01); }
 .eco-tile:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: 3px;
 }
 .eco-tile-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 22px;
+  font-size: 26px;
   line-height: 1;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 16%, #fff), color-mix(in srgb, var(--accent) 6%, var(--card, #f8fafc)));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--eco-tone, var(--accent)) 28%, #fff),
+    color-mix(in srgb, var(--eco-tone, var(--accent)) 12%, var(--card, #f8fafc)));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--eco-tone, var(--accent)) 22%, transparent),
+    0 6px 14px color-mix(in srgb, var(--eco-tone, var(--accent)) 18%, transparent);
+  transition: transform 0.2s ease;
+}
+.eco-tile:hover .eco-tile-icon {
+  transform: scale(1.06);
+}
+[data-theme="dark"] .eco-tile-icon {
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--eco-tone, var(--accent)) 40%, #1e293b),
+    color-mix(in srgb, var(--eco-tone, var(--accent)) 18%, #0f172a));
 }
 .eco-tile-name {
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-top: 2px;
 }
 .eco-tile-desc {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   line-height: 1.35;
-  max-width: 14ch;
+  max-width: 16ch;
 }
 .eco-tile-badge {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 10px;
+  right: 10px;
   font-size: 10px;
-  font-weight: 700;
-  padding: 2px 7px;
+  font-weight: 800;
+  padding: 3px 8px;
   border-radius: 999px;
   background: #fef3c7;
   color: #92400e;
   border: 1px solid #f59e0b;
+  letter-spacing: 0.02em;
 }
 .eco-tile-badge.eco-badge-new {
   background: #ede9fe;
@@ -599,15 +688,31 @@ input:focus:not(:focus-visible) {
 }
 .eco-tile[disabled],
 .eco-tile.eco-tile-locked {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
   transform: none;
+  filter: grayscale(0.35);
 }
 .eco-tile.eco-tile-locked:hover {
   transform: none;
   box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 4%, transparent);
   border-color: var(--line);
 }
+.eco-tile.eco-tile-locked:hover .eco-tile-icon { transform: none; }
+
+/* Per-app color accents */
+.eco-tile[data-tone="violet"] { --eco-tone: #8b5cf6; }
+.eco-tile[data-tone="blue"] { --eco-tone: #3b82f6; }
+.eco-tile[data-tone="sky"] { --eco-tone: #0ea5e9; }
+.eco-tile[data-tone="teal"] { --eco-tone: #14b8a6; }
+.eco-tile[data-tone="green"] { --eco-tone: #22c55e; }
+.eco-tile[data-tone="amber"] { --eco-tone: #f59e0b; }
+.eco-tile[data-tone="orange"] { --eco-tone: #f97316; }
+.eco-tile[data-tone="rose"] { --eco-tone: #f43f5e; }
+.eco-tile[data-tone="indigo"] { --eco-tone: #6366f1; }
+.eco-tile[data-tone="slate"] { --eco-tone: #64748b; }
+.eco-tile[data-tone="pink"] { --eco-tone: #ec4899; }
+.eco-tile[data-tone="cyan"] { --eco-tone: #06b6d4; }
 
 /* ---- Light UI polish: lists, next action, sticky editor ---- */
 .next-action {
@@ -3031,7 +3136,7 @@ input:focus:not(:focus-visible) {
         </div>
       </div>
       <div class="eco-home" id="ecoHome" aria-label="Invoicedey apps">
-        <p class="eco-home-label">Apps</p>
+        <p class="eco-home-label">Your apps</p>
         <div class="eco-grid" id="ecoGrid"></div>
       </div>
     </section>
@@ -8773,6 +8878,7 @@ function ecoAppCatalog() {
       name: 'Dashboard',
       desc: 'Money pulse',
       icon: '📊',
+      tone: 'violet',
       view: 'pulse',
       when: () => true
     },
@@ -8781,6 +8887,7 @@ function ecoAppCatalog() {
       name: 'Invoices',
       desc: 'Bill & collect',
       icon: '▤',
+      tone: 'blue',
       view: 'invoices',
       when: () => true
     },
@@ -8789,6 +8896,7 @@ function ecoAppCatalog() {
       name: 'Clients',
       desc: 'Directory',
       icon: '♙',
+      tone: 'sky',
       view: 'clients',
       when: () => true
     },
@@ -8797,6 +8905,7 @@ function ecoAppCatalog() {
       name: 'Books',
       desc: 'Ledger & bank',
       icon: '◎',
+      tone: 'indigo',
       view: 'books',
       need: 'books.view',
       when: () => can('books.view')
@@ -8806,6 +8915,7 @@ function ecoAppCatalog() {
       name: 'POS',
       desc: 'Checkout',
       icon: '▣',
+      tone: 'green',
       href: '/pos.html',
       need: 'pos.sell',
       when: () => can('pos.sell')
@@ -8815,6 +8925,7 @@ function ecoAppCatalog() {
       name: 'Inventory',
       desc: 'Stock & shops',
       icon: '■',
+      tone: 'teal',
       view: 'inventory',
       need: null,
       when: () => can('inventory.manage') || can('transfers.create') || can('purchases.create') || can('pos.sell')
@@ -8824,6 +8935,7 @@ function ecoAppCatalog() {
       name: 'Approvals',
       desc: 'Requests',
       icon: '✓',
+      tone: 'amber',
       view: 'books',
       booksTab: 'payables',
       need: null,
@@ -8842,6 +8954,7 @@ function ecoAppCatalog() {
       name: 'Team chat',
       desc: 'Channels & DMs',
       icon: '💬',
+      tone: 'pink',
       view: 'chat',
       when: () => !!(cloud && cloud.user),
       badge: () => {
@@ -8857,6 +8970,7 @@ function ecoAppCatalog() {
       name: 'Recurring',
       desc: 'Auto invoices',
       icon: '↻',
+      tone: 'cyan',
       view: 'recurring',
       when: () => true
     },
@@ -8865,6 +8979,7 @@ function ecoAppCatalog() {
       name: 'Receipts',
       desc: 'Payment proofs',
       icon: '◈',
+      tone: 'orange',
       view: 'receipts',
       when: () => true
     },
@@ -8873,6 +8988,7 @@ function ecoAppCatalog() {
       name: 'Plan',
       desc: 'Billing & team',
       icon: '◆',
+      tone: 'rose',
       view: 'plan',
       when: () => true
     },
@@ -8881,6 +8997,7 @@ function ecoAppCatalog() {
       name: 'Settings',
       desc: biz.length > 18 ? 'Business profile' : biz,
       icon: '⚙',
+      tone: 'slate',
       view: 'profile',
       when: () => true
     }
@@ -8931,8 +9048,10 @@ function renderEcosystemHome() {
   grid.innerHTML = all.map(t => {
     const badge = (!t.locked && typeof t.badge === 'function') ? (t.badge() || '') : (t.locked ? 'Role' : '');
     const badgeCls = t.locked ? 'eco-tile-badge' : 'eco-tile-badge eco-badge-new';
+    const tone = t.tone || 'blue';
     return '<button type="button" class="eco-tile' + (t.locked ? ' eco-tile-locked' : '') +
-      '" data-eco-id="' + t.id + '"' + (t.locked ? ' disabled title="Requires a higher role"' : '') + '>' +
+      '" data-eco-id="' + t.id + '" data-tone="' + tone + '"' +
+      (t.locked ? ' disabled title="Requires a higher role"' : ' title="' + String(t.name).replace(/"/g, '') + '"') + '>' +
       (badge ? '<span class="' + badgeCls + '">' + String(badge).replace(/</g, '') + '</span>' : '') +
       '<span class="eco-tile-icon" aria-hidden="true">' + (t.icon || '·') + '</span>' +
       '<span class="eco-tile-name">' + String(t.name).replace(/</g, '') + '</span>' +
