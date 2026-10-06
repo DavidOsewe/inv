@@ -855,6 +855,144 @@ input:focus:not(:focus-visible) {
   opacity: 1;
   transform: translateY(0);
 }
+
+/* Approvals workspace (member-safe) */
+#approvals.view.active { position: relative; }
+#approvals.view.active::before {
+  content: '';
+  position: absolute;
+  inset: -24px -8% auto;
+  height: min(260px, 36vh);
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 65% 80% at 12% 0%, color-mix(in srgb, #f59e0b 20%, transparent), transparent 60%),
+    radial-gradient(ellipse 45% 55% at 88% 12%, color-mix(in srgb, #fbbf24 12%, transparent), transparent 55%);
+  opacity: 0.85;
+}
+#approvals.view.active > * { position: relative; z-index: 1; }
+[data-theme="dark"] #approvals.view.active::before { opacity: 0.5; }
+#approvals .approvals-hero {
+  margin-bottom: 16px;
+  padding: 22px 20px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#approvals .approvals-hero .dash-title {
+  font-size: clamp(24px, 4vw, 30px);
+  letter-spacing: -0.04em;
+}
+#approvals .approvals-hero .button { border-radius: 999px; padding-left: 16px; padding-right: 16px; }
+.appr-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  background: var(--panel);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--text) 3%, transparent);
+}
+.appr-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.appr-card-title { font-weight: 800; font-size: 14px; }
+.appr-card-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.appr-badge {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.appr-badge.pending { background: #fef3c7; color: #92400e; }
+.appr-badge.rejected { background: #fee2e2; color: #991b1b; }
+.appr-badge.posted { background: #dcfce7; color: #166534; }
+.appr-badge.other { background: var(--panel-2); color: var(--muted); }
+.appr-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+/* Notification bell + panel */
+.notif-bell {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 120;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 10%, transparent);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+.notif-bell:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--text) 12%, transparent);
+}
+.notif-bell-icon { font-size: 18px; line-height: 1; }
+.notif-bell .nav-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  margin: 0;
+}
+.notif-panel {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  z-index: 130;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(70vh, 480px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 16px 48px color-mix(in srgb, var(--text) 14%, transparent);
+  overflow: hidden;
+}
+.notif-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.notif-panel-list {
+  overflow: auto;
+  flex: 1;
+}
+.notif-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  padding: 12px 14px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.notif-item:hover { background: var(--panel-2, color-mix(in srgb, var(--text) 4%, transparent)); }
+.notif-item.is-unread {
+  background: color-mix(in srgb, #f59e0b 8%, transparent);
+}
+.notif-item-title { font-weight: 800; font-size: 13px; }
+.notif-item-body { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.45; }
+.notif-item-meta { font-size: 11px; color: var(--muted); margin-top: 4px; opacity: 0.85; }
+@media (max-width: 640px) {
+  .notif-bell { top: auto; bottom: 72px; right: 14px; }
+  .notif-panel { top: auto; bottom: 124px; right: 12px; left: 12px; width: auto; }
+}
 .pulse-tooltip b {
   color: #fff;
   font-weight: 700;
@@ -3818,7 +3956,7 @@ input:focus:not(:focus-visible) {
           <p class="dash-sub" id="dashSub">One organisation · invoices, books, shops, and team — open what you need.</p>
         </div>
         <div class="dash-hero-actions">
-          <button class="button" type="button" id="dashRequestExpenseBtn" data-role-gate="expenses.request">+ Expense request</button>
+          <button class="button" type="button" id="homeExpenseRequestBtn" data-role-gate="expenses.request">+ Expense request</button>
           <button class="button" type="button" onclick="switchTo('clients')">Clients</button>
         </div>
       </div>
@@ -3826,6 +3964,29 @@ input:focus:not(:focus-visible) {
         <p class="eco-home-label">Your apps</p>
         <div class="eco-grid" id="ecoGrid"></div>
       </div>
+    </section>
+
+    <!-- Member-safe Approvals workspace (no Books access required) -->
+    <section class="view" id="approvals">
+      <div class="dash-hero approvals-hero">
+        <div class="dash-hero-text">
+          <div class="dash-greeting">Approvals</div>
+          <h1 class="dash-title">Requests &amp; status</h1>
+          <p class="dash-sub">Submit expenses, track who approved, and open receipts — no ledger access needed.</p>
+        </div>
+        <div class="dash-hero-actions">
+          <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
+          <button class="button primary" type="button" id="approvalsNewRequestBtn" data-role-gate="expenses.request">+ Expense request</button>
+        </div>
+      </div>
+      <div class="inv-tabs" id="approvalsTabs" role="tablist" aria-label="Approvals">
+        <button type="button" class="inv-tab primary" data-appr-tab="mine" aria-selected="true">My requests</button>
+        <button type="button" class="inv-tab" data-appr-tab="action" aria-selected="false">Needs action <span class="nav-badge" id="approvalsActionBadge" hidden></span></button>
+        <button type="button" class="inv-tab" data-appr-tab="all" aria-selected="false">In progress</button>
+      </div>
+      <div id="approvalsPanelMine" class="appr-panel"></div>
+      <div id="approvalsPanelAction" class="appr-panel" hidden></div>
+      <div id="approvalsPanelAll" class="appr-panel" hidden></div>
     </section>
 
     <section class="view" id="pulse">
@@ -9351,6 +9512,7 @@ function switchTo(v) {
     profile: ['Business profile', 'Set your business details and reporting preference.'],
     plan: ['Plan & billing', 'Manage your plan, usage and feature access.'],
     chat: ['Team chat', 'Live channels and DMs for your organisation.'],
+    approvals: ['Approvals', 'Submit requests, track status, and view receipts — no Books required.'],
     editor: ['Invoice editor', 'Create a clear invoice your client can pay.']
   }[v] || ['invoicedey', ''];
   $('#heading').textContent = h[0];
@@ -9358,7 +9520,7 @@ function switchTo(v) {
   try {
     document.querySelector('.main')?.classList.toggle('main-eco-focus',
       v === 'dashboard' || v === 'pulse' || v === 'invoices' || v === 'clients' ||
-      v === 'books' || v === 'inventory' || v === 'receipts' || v === 'recurring' || v === 'chat');
+      v === 'books' || v === 'inventory' || v === 'receipts' || v === 'recurring' || v === 'chat' || v === 'approvals');
   } catch (_) {}
   const bottomNav = document.querySelector('.bottom-nav');
   if (bottomNav) {
@@ -9378,6 +9540,7 @@ function switchTo(v) {
   if (v === 'books') booksView();
   if (v === 'inventory') inventoryView(_invTab || 'today');
   if (v === 'chat') chatView();
+  if (v === 'approvals') approvalsView();
   if (v === 'pos') posView();
   if (v === 'invoices') invoices();
   if (v === 'receipts') receiptsView();
@@ -9754,18 +9917,21 @@ function ecoAppCatalog() {
       desc: 'Requests',
       icon: '✓',
       tone: 'amber',
-      view: 'books',
-      booksTab: 'payables',
+      view: 'approvals',
       need: null,
       badge: () => {
         try {
-          const n = (typeof pendingApprovalCount === 'function') ? pendingApprovalCount() :
-            ((db.expenseRequests || []).filter(r => r.status === 'pending' || r.status === 'submitted').length);
-          return n > 0 ? String(n) : '';
+          if (typeof pendingApprovalsCount === 'function') {
+            const n = pendingApprovalsCount();
+            if (n > 0) return String(n > 99 ? '99+' : n);
+          }
+          const mine = typeof listMyExpenseRequests === 'function' ? listMyExpenseRequests() : [];
+          const pendingMine = mine.filter(r => r.status === 'pending_approval' || r.status === 'pending_review').length;
+          return pendingMine > 0 ? String(pendingMine) : '';
         } catch (_) { return ''; }
       },
       when: () => can('expenses.request') || can('expenses.approve') || can('expenses.review') ||
-        can('transfers.approve') || can('purchases.approve')
+        can('transfers.approve') || can('purchases.approve') || can('transfers.create') || can('purchases.create')
     },
     {
       id: 'chat',
@@ -9904,6 +10070,21 @@ function renderEcosystemHome() {
 /** Home = apps launcher only. */
 function dashboard() {
   try { renderEcosystemHome(); } catch (e) { console.warn('eco home', e); }
+  try {
+    const btn = document.getElementById('homeExpenseRequestBtn');
+    if (btn) {
+      const ok = typeof canRequestExpense === 'function' ? canRequestExpense() : can('expenses.request');
+      btn.style.display = ok ? '' : 'none';
+      btn.onclick = () => {
+        try { openBillModal(); } catch (err) { toast(err.message || 'Could not open request'); }
+      };
+    }
+  } catch (_) {}
+  try { applyRoleGates(); } catch (_) {}
+  try {
+    syncPendingApprovalNotifs();
+    refreshNotificationUi();
+  } catch (_) {}
 }
 
 /** Dashboard = live books metrics + invoice aging / collections. */
@@ -12659,7 +12840,294 @@ function listMyExpenseRequests() {
   return mine.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 12);
 }
 
+function apprStatusBadge(st) {
+  if (st === 'pending_approval' || st === 'pending_review') {
+    return '<span class="appr-badge pending">Pending</span>';
+  }
+  if (st === 'rejected') return '<span class="appr-badge rejected">Rejected</span>';
+  if (st === 'open' || st === 'posted') return '<span class="appr-badge posted">Posted</span>';
+  return '<span class="appr-badge other">' + String(st || '—').replace(/</g, '') + '</span>';
+}
+
+function apprEntityDocs(entity) {
+  if (!entity) return [];
+  if (Array.isArray(entity.documents) && entity.documents.length) return entity.documents;
+  if (Array.isArray(entity.docs) && entity.docs.length) return entity.docs;
+  return [];
+}
+
+function apprChainDetailHtml(entity) {
+  if (!entity) return '';
+  let chain = entity.approval_chain;
+  if ((!chain || !chain.length) && (entity.status === 'pending_approval' || entity.status === 'pending_review')) {
+    try { attachExpenseApprovalChain(entity, entity.amount); chain = entity.approval_chain; } catch (_) {}
+  }
+  const requester = entity.requested_by_email || entity.requested_by || 'Requester';
+  let html = '<div style="font-size:12px;margin:8px 0 4px"><b>Requester</b> · ' +
+    String(requester).replace(/</g, '') +
+    (entity.requested_at ? (' · ' + String(entity.requested_at).replace('T', ' ').slice(0, 16)) : '') +
+    '</div>';
+  if (!chain || !chain.length) {
+    html += expenseChainProgressHtml(entity) || '';
+    return html;
+  }
+  html += '<div style="margin-top:6px">' + chain.map((l, i) => {
+    const st = l.status || (i < (entity.approval_level_index || 0) ? 'approved' : (i === (entity.approval_level_index || 0) ? 'current' : 'waiting'));
+    const who = l.acted_by_email || l.acted_by || l.approver_label ||
+      (l.approver_type === 'user' ? ((l.approver_emails || [])[0] || 'Named approver') : (l.role || l.label || 'Approver'));
+    const when = l.acted_at ? String(l.acted_at).replace('T', ' ').slice(0, 16) : '';
+    let mark = '○ waiting';
+    let color = 'var(--muted)';
+    if (entity.status === 'rejected' && i === (entity.approval_level_index || 0)) { mark = '✗ rejected'; color = '#991b1b'; }
+    else if (st === 'approved' || i < (entity.approval_level_index || 0) || entity.status === 'open' || entity.status === 'posted') {
+      mark = '✓ approved'; color = '#166534';
+    } else if (st === 'current' || i === (entity.approval_level_index || 0)) {
+      mark = '● current'; color = '#92400e';
+    }
+    return '<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px">' +
+      '<span><b>' + String(l.label || ('Level ' + (l.level || i + 1))).replace(/</g, '') + '</b>' +
+      '<span style="color:var(--muted)"> · ' + String(who).replace(/</g, '') + '</span></span>' +
+      '<span style="color:' + color + ';font-weight:700;white-space:nowrap">' + mark +
+      (when ? (' · ' + when) : '') + '</span></div>';
+  }).join('') + '</div>';
+  if (entity.rejection_note) {
+    html += '<p class="section-sub" style="color:#991b1b;margin:8px 0 0">Rejection note: ' +
+      String(entity.rejection_note).replace(/</g, '') + '</p>';
+  }
+  return html;
+}
+
+function openApprovalDetail(kind, id) {
+  let entity = null;
+  if (kind === 'bill') entity = (db.bills || []).find(b => b.id === id);
+  else if (kind === 'cash') entity = (db.cashEntries || []).find(c => c.id === id);
+  else if (kind === 'transfer') entity = (db.stockTransfers || []).find(t => t.id === id);
+  else if (kind === 'purchase') entity = (db.purchases || db.purchaseOrders || []).find(p => p.id === id);
+  if (!entity) { toast('Request not found'); return; }
+
+  let m = document.getElementById('approvalDetailModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.className = 'modalback';
+    m.id = 'approvalDetailModal';
+    m.innerHTML = '<div class="modal" style="max-width:560px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+      '<h2 style="margin:0" id="approvalDetailTitle">Request</h2>' +
+      '<button type="button" class="button small" id="approvalDetailClose">Close</button></div>' +
+      '<div id="approvalDetailBody" style="margin-top:12px"></div>' +
+      '<div class="buttons" style="margin-top:16px;justify-content:flex-end" id="approvalDetailActions"></div></div>';
+    document.body.appendChild(m);
+    m.addEventListener('click', (e) => { if (e.target === m) { m.classList.remove('show'); m.style.display = ''; } });
+    document.getElementById('approvalDetailClose')?.addEventListener('click', () => {
+      m.classList.remove('show'); m.style.display = '';
+    });
+  }
+  const title = document.getElementById('approvalDetailTitle');
+  const body = document.getElementById('approvalDetailBody');
+  const actions = document.getElementById('approvalDetailActions');
+  const label = kind === 'bill' ? (entity.supplier || 'Expense bill')
+    : kind === 'cash' ? (entity.note || 'Cash expense')
+    : kind === 'transfer' ? ('Transfer ' + (entity.number || ''))
+    : (entity.number || entity.supplier || 'Request');
+  if (title) title.textContent = label;
+  const docs = apprEntityDocs(entity);
+  const amt = entity.amount != null ? (typeof money === 'function' ? money(entity.amount, entity.currency) : entity.amount) : '';
+  let html = '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">' +
+    apprStatusBadge(entity.status) +
+    (amt ? '<b>' + amt + '</b>' : '') + '</div>';
+  html += '<p class="section-sub" style="margin:8px 0">' + String(kind).toUpperCase() +
+    (entity.date ? (' · ' + entity.date) : '') +
+    (entity.note && kind !== 'cash' ? (' · ' + String(entity.note).replace(/</g, '')) : '') + '</p>';
+  html += apprChainDetailHtml(entity);
+  html += expenseChainProgressHtml(entity);
+  if (docs.length) {
+    html += '<div style="margin-top:14px"><div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Supporting documents</div>' +
+      supportingDocsHtml(docs, true) + '</div>';
+  } else {
+    html += '<p class="section-sub" style="margin-top:12px">No supporting documents attached.</p>';
+  }
+  if (body) body.innerHTML = html;
+  // Bind doc open buttons
+  if (body) {
+    body.querySelectorAll('[data-audit-doc-idx]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const idx = Number(btn.getAttribute('data-audit-doc-idx'));
+        const doc = docs[idx];
+        if (doc && typeof openSupportingDocument === 'function') openSupportingDocument(doc);
+        else if (doc && doc.dataUrl) window.open(doc.dataUrl, '_blank');
+      });
+    });
+  }
+  if (actions) {
+    actions.innerHTML = '';
+    // Reuse inbox action buttons when current user can act
+    try {
+      const items = listPendingApprovalItems().filter(i => i.id === id && i.kind === kind && i.canAct);
+      if (items.length) {
+        actions.innerHTML = inboxItemHtml(items[0]).match(/<button[\s\S]*?<\/button>/g)?.join('') || '';
+        bindApprovalsInboxActions(actions);
+      }
+    } catch (_) {}
+  }
+  m.classList.add('show');
+  m.style.display = 'grid';
+}
+
+let _apprTab = 'mine';
+function setApprovalsTab(tab) {
+  _apprTab = tab || 'mine';
+  document.querySelectorAll('#approvalsTabs [data-appr-tab]').forEach(btn => {
+    const on = btn.getAttribute('data-appr-tab') === _apprTab;
+    btn.classList.toggle('primary', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  ['mine', 'action', 'all'].forEach(t => {
+    const el = document.getElementById('approvalsPanel' + t.charAt(0).toUpperCase() + t.slice(1));
+    if (el) el.hidden = t !== _apprTab;
+  });
+}
+
+function approvalsRequestCardHtml(r, showActions) {
+  const entity = r.entity || r;
+  const title = r.title || entity.supplier || entity.note || 'Request';
+  const kind = r.kind || 'bill';
+  const st = r.status || entity.status || '';
+  const amt = r.amount != null ? r.amount : entity.amount;
+  const cur = r.currency || entity.currency;
+  const docs = apprEntityDocs(entity);
+  let html = '<div class="appr-card" data-appr-kind="' + kind + '" data-appr-id="' + (r.id || entity.id) + '">' +
+    '<div class="appr-card-head">' +
+    '<div><div class="appr-card-title">' + String(title).replace(/</g, '') + '</div>' +
+    '<div class="appr-card-meta">' + String(kind).toUpperCase() +
+    (amt != null ? (' · ' + (typeof money === 'function' ? money(amt, cur) : amt)) : '') +
+    (entity.date ? (' · ' + entity.date) : '') +
+    (docs.length ? (' · 📎 ' + docs.length) : '') +
+    '</div></div>' + apprStatusBadge(st) + '</div>' +
+    expenseChainProgressHtml(entity) +
+    '<div class="appr-actions">' +
+    '<button type="button" class="button small" data-appr-open="' + kind + ':' + (r.id || entity.id) + '">View details</button>';
+  if (showActions && r.canAct) {
+    html += (inboxItemHtml(r).match(/data-inbox-[\s\S]*?<\/button>/g) || []).map(s => '<button type="button" class="button small ' +
+      (s.indexOf('danger') >= 0 ? 'danger' : 'primary') + '" ' + s).join('') || '';
+  }
+  html += '</div></div>';
+  return html;
+}
+
+function renderApprovalsWorkspace() {
+  const mineEl = document.getElementById('approvalsPanelMine');
+  const actionEl = document.getElementById('approvalsPanelAction');
+  const allEl = document.getElementById('approvalsPanelAll');
+  const items = typeof listPendingApprovalItems === 'function' ? listPendingApprovalItems() : [];
+  const actionItems = items.filter(i => i.canAct);
+  const waitingItems = items.filter(i => !i.canAct);
+  const mine = typeof listMyExpenseRequests === 'function' ? listMyExpenseRequests() : [];
+
+  const badge = document.getElementById('approvalsActionBadge');
+  if (badge) {
+    if (actionItems.length) {
+      badge.hidden = false;
+      badge.textContent = actionItems.length > 99 ? '99+' : String(actionItems.length);
+    } else {
+      badge.hidden = true;
+      badge.textContent = '';
+    }
+  }
+
+  if (mineEl) {
+    if (!mine.length) {
+      mineEl.innerHTML = '<div class="empty" style="padding:24px">' +
+        '<h3 style="margin:0 0 6px">No requests yet</h3>' +
+        '<p class="section-sub">Submit an expense with a receipt. You can track status here without opening Books.</p>' +
+        '<button type="button" class="button primary" id="approvalsEmptyRequest" data-role-gate="expenses.request">+ Expense request</button></div>';
+    } else {
+      mineEl.innerHTML = mine.map(r => {
+        return '<div class="appr-card">' +
+          '<div class="appr-card-head"><div><div class="appr-card-title">' + String(r.title).replace(/</g, '') + '</div>' +
+          '<div class="appr-card-meta">' + String(r.kind).toUpperCase() + ' · ' +
+          (typeof money === 'function' ? money(r.amount, r.currency) : r.amount) +
+          (apprEntityDocs(r.entity).length ? (' · 📎 ' + apprEntityDocs(r.entity).length) : '') +
+          '</div></div>' + apprStatusBadge(r.status) + '</div>' +
+          expenseChainProgressHtml(r.entity) +
+          '<div class="appr-actions">' +
+          '<button type="button" class="button small" data-appr-open="' + r.kind + ':' + r.id + '">View details</button>' +
+          '</div></div>';
+      }).join('');
+    }
+  }
+
+  if (actionEl) {
+    if (!actionItems.length) {
+      actionEl.innerHTML = '<div class="empty" style="padding:24px"><h3 style="margin:0 0 6px">Nothing waiting on you</h3>' +
+        '<p class="section-sub">When someone submits a request at your approval level, it appears here.</p></div>';
+    } else {
+      actionEl.innerHTML = actionItems.map(it => {
+        const title = it.title || it.kind;
+        return '<div class="appr-card">' +
+          '<div class="appr-card-head"><div><div class="appr-card-title">' + String(title).replace(/</g, '') + '</div>' +
+          '<div class="appr-card-meta">' + String(it.kind).toUpperCase() +
+          (it.amount != null ? (' · ' + (typeof money === 'function' ? money(it.amount, it.currency) : it.amount)) : '') +
+          '</div></div>' + apprStatusBadge(it.status || 'pending_approval') + '</div>' +
+          (it.entity ? expenseChainProgressHtml(it.entity) : '') +
+          '<div class="appr-actions" data-inbox-bind="1">' +
+          '<button type="button" class="button small" data-appr-open="' + it.kind + ':' + it.id + '">View details</button>' +
+          (inboxItemHtml(it).match(/<button[^>]*data-inbox-[\s\S]*?<\/button>/g) || []).join('') +
+          '</div></div>';
+      }).join('');
+      actionEl.querySelectorAll('[data-inbox-bind]').forEach(el => bindApprovalsInboxActions(el));
+    }
+  }
+
+  if (allEl) {
+    if (!waitingItems.length && !actionItems.length) {
+      allEl.innerHTML = '<div class="empty" style="padding:24px"><h3 style="margin:0 0 6px">No requests in progress</h3>' +
+        '<p class="section-sub">Pending matrix items across the organisation show here.</p></div>';
+    } else {
+      const all = actionItems.concat(waitingItems);
+      allEl.innerHTML = all.map(it => {
+        return '<div class="appr-card">' +
+          '<div class="appr-card-head"><div><div class="appr-card-title">' + String(it.title || it.kind).replace(/</g, '') + '</div>' +
+          '<div class="appr-card-meta">' + String(it.kind).toUpperCase() +
+          (it.levelLabel ? (' · waiting on ' + String(it.levelLabel).replace(/</g, '')) : '') +
+          (it.isMine ? ' · you submitted' : '') +
+          '</div></div>' + apprStatusBadge(it.status || 'pending_approval') + '</div>' +
+          (it.entity ? expenseChainProgressHtml(it.entity) : '') +
+          '<div class="appr-actions">' +
+          '<button type="button" class="button small" data-appr-open="' + it.kind + ':' + it.id + '">View details</button>' +
+          '</div></div>';
+      }).join('');
+    }
+  }
+
+  document.querySelectorAll('#approvals [data-appr-open]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const raw = btn.getAttribute('data-appr-open') || '';
+      const idx = raw.indexOf(':');
+      if (idx < 0) return;
+      openApprovalDetail(raw.slice(0, idx), raw.slice(idx + 1));
+    });
+  });
+  document.getElementById('approvalsEmptyRequest')?.addEventListener('click', () => {
+    try { openBillModal(); } catch (e) { toast(e.message || 'Could not open request'); }
+  });
+}
+
+function approvalsView() {
+  setApprovalsTab(_apprTab || 'mine');
+  renderApprovalsWorkspace();
+  try { applyRoleGates(); } catch (_) {}
+  try { refreshNotificationUi(); } catch (_) {}
+}
+
 function openApprovalsInbox() {
+  // Prefer full workspace; fall back to modal
+  try {
+    if (document.getElementById('approvals')) {
+      switchTo('approvals');
+      return;
+    }
+  } catch (_) {}
   let m = document.getElementById('approvalsInboxModal');
   if (!m) {
     m = document.createElement('div');
@@ -12948,6 +13416,289 @@ function pendingApprovalsCount() {
   const exp = (db.bills || []).filter(x => x.status === 'pending_review' || x.status === 'pending_approval').length
     + (db.cashEntries || []).filter(x => x.status === 'pending_review' || x.status === 'pending_approval').length;
   return t + p + exp;
+}
+
+/* ---------- Approvals notification centre ---------- */
+function ensureNotificationsDb() {
+  if (!db.notifications) db.notifications = [];
+  return db.notifications;
+}
+
+function notifActorKey() {
+  try {
+    const me = typeof expenseActorMeta === 'function' ? expenseActorMeta() : {};
+    return {
+      userId: me.userId || (cloud && cloud.user && cloud.user.id) || null,
+      email: String(me.email || (cloud && cloud.user && cloud.user.email) || '').toLowerCase() || null
+    };
+  } catch (_) {
+    return { userId: null, email: null };
+  }
+}
+
+function notifIsForMe(n) {
+  if (!n) return false;
+  const me = notifActorKey();
+  // Audience: specific user
+  if (n.for_user_id && me.userId && String(n.for_user_id) === String(me.userId)) return true;
+  if (n.for_email && me.email && String(n.for_email).toLowerCase() === me.email) return true;
+  // Audience: anyone who can act on approvals right now
+  if (n.audience === 'approvers') {
+    try {
+      if (typeof canApproveApprovals === 'function' && canApproveApprovals()) return true;
+      if (typeof can === 'function' && (can('expenses.approve') || can('expenses.review') || can('transfers.approve') || can('purchases.approve'))) return true;
+    } catch (_) {}
+  }
+  // Audience: open org broadcast (rare)
+  if (n.audience === 'org') return true;
+  // Fallback: if no targeting, show to current user only when they match requester fields stored on notif
+  if (!n.for_user_id && !n.for_email && n.audience !== 'approvers') {
+    // treat as for-me if created by others and title implies us — skip
+    return false;
+  }
+  return false;
+}
+
+function listMyNotifications() {
+  ensureNotificationsDb();
+  return (db.notifications || []).filter(notifIsForMe).slice(0, 40);
+}
+
+function unreadNotificationCount() {
+  return listMyNotifications().filter(n => !n.read).length;
+}
+
+function pushApprovalNotification(opts) {
+  opts = opts || {};
+  ensureNotificationsDb();
+  const n = {
+    id: (typeof uid === 'function' ? uid() : ('n' + Date.now() + Math.random().toString(36).slice(2, 7))),
+    created_at: new Date().toISOString(),
+    read: false,
+    type: opts.type || 'info', // pending | level_approved | approved | rejected | posted
+    title: opts.title || 'Approval update',
+    body: opts.body || '',
+    kind: opts.kind || null,
+    entity_id: opts.entityId || null,
+    for_user_id: opts.forUserId || null,
+    for_email: opts.forEmail ? String(opts.forEmail).toLowerCase() : null,
+    audience: opts.audience || null,
+    deep_link: opts.deepLink || 'approvals'
+  };
+  // Avoid exact duplicates in the last minute (same type + entity)
+  const recent = (db.notifications || []).find(x =>
+    x.type === n.type && x.entity_id === n.entity_id &&
+    x.for_email === n.for_email && x.audience === n.audience &&
+    Math.abs(new Date(x.created_at) - new Date(n.created_at)) < 60000
+  );
+  if (recent) return recent;
+  db.notifications.unshift(n);
+  if (db.notifications.length > 120) db.notifications = db.notifications.slice(0, 120);
+  try { save(); } catch (_) {}
+  try { refreshNotificationUi(); } catch (_) {}
+  try { maybeBrowserNotify(n); } catch (_) {}
+  return n;
+}
+
+function notifyApproversOfRequest(entity, kind, title) {
+  if (!entity) return;
+  const amt = entity.amount != null && typeof money === 'function'
+    ? money(entity.amount, entity.currency) : (entity.amount || '');
+  pushApprovalNotification({
+    type: 'pending',
+    title: title || 'Approval needed',
+    body: (entity.supplier || entity.note || kind || 'Request') + (amt ? (' · ' + amt) : ''),
+    kind: kind || 'bill',
+    entityId: entity.id,
+    audience: 'approvers',
+    deepLink: 'approvals'
+  });
+}
+
+function notifyRequesterOfStatus(entity, kind, type, title, body) {
+  if (!entity) return;
+  const email = entity.requested_by_email || null;
+  const userId = entity.requested_by || entity.requested_by_user_id || null;
+  if (!email && !userId) return;
+  pushApprovalNotification({
+    type: type || 'info',
+    title: title || 'Request update',
+    body: body || '',
+    kind: kind || 'bill',
+    entityId: entity.id,
+    forUserId: userId,
+    forEmail: email,
+    deepLink: 'approvals'
+  });
+}
+
+function markNotificationRead(id) {
+  ensureNotificationsDb();
+  const n = (db.notifications || []).find(x => x.id === id);
+  if (n) { n.read = true; try { save(); } catch (_) {} }
+  refreshNotificationUi();
+}
+
+function markAllNotificationsRead() {
+  listMyNotifications().forEach(n => { n.read = true; });
+  try { save(); } catch (_) {}
+  refreshNotificationUi();
+}
+
+function maybeBrowserNotify(n) {
+  if (!n || n.read) return;
+  if (typeof document !== 'undefined' && document.visibilityState === 'visible') return;
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission !== 'granted') return;
+  try {
+    const note = new Notification(n.title || 'Invoicedey', {
+      body: n.body || '',
+      tag: n.entity_id || n.id,
+      silent: false
+    });
+    note.onclick = () => {
+      try { window.focus(); } catch (_) {}
+      try { switchTo('approvals'); } catch (_) {}
+      note.close();
+    };
+  } catch (_) {}
+}
+
+function requestBrowserNotifyPermission() {
+  if (typeof Notification === 'undefined') {
+    toast('Browser notifications not supported here');
+    return;
+  }
+  Notification.requestPermission().then(p => {
+    if (p === 'granted') toast('Desktop alerts enabled for approvals');
+    else toast('Permission declined — in-app alerts still work');
+    refreshNotificationUi();
+  }).catch(() => toast('Could not request permission'));
+}
+
+function ensureNotifUiShell() {
+  if (document.getElementById('notifBell')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = 'notifBell';
+  btn.className = 'notif-bell';
+  btn.setAttribute('aria-label', 'Notifications');
+  btn.innerHTML = '<span class="notif-bell-icon" aria-hidden="true">🔔</span><span class="nav-badge" id="notifBellBadge" hidden></span>';
+  document.body.appendChild(btn);
+
+  const panel = document.createElement('div');
+  panel.id = 'notifPanel';
+  panel.className = 'notif-panel';
+  panel.hidden = true;
+  panel.innerHTML =
+    '<div class="notif-panel-head">' +
+    '<b>Notifications</b>' +
+    '<div style="display:flex;gap:6px">' +
+    '<button type="button" class="button small" id="notifEnableDesktop">Desktop alerts</button>' +
+    '<button type="button" class="button small" id="notifMarkAll">Mark all read</button>' +
+    '<button type="button" class="button small" id="notifPanelClose">Close</button>' +
+    '</div></div>' +
+    '<div id="notifPanelList" class="notif-panel-list"></div>';
+  document.body.appendChild(panel);
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = panel.hidden;
+    panel.hidden = !open;
+    if (open) renderNotificationPanel();
+  });
+  document.getElementById('notifPanelClose')?.addEventListener('click', () => { panel.hidden = true; });
+  document.getElementById('notifMarkAll')?.addEventListener('click', () => markAllNotificationsRead());
+  document.getElementById('notifEnableDesktop')?.addEventListener('click', () => requestBrowserNotifyPermission());
+  document.addEventListener('click', (e) => {
+    if (!panel.hidden && !panel.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+      panel.hidden = true;
+    }
+  });
+}
+
+function renderNotificationPanel() {
+  ensureNotifUiShell();
+  const list = document.getElementById('notifPanelList');
+  if (!list) return;
+  const items = listMyNotifications();
+  if (!items.length) {
+    list.innerHTML = '<div class="section-sub" style="padding:16px">No notifications yet. Approvers get alerts when requests land; requesters get updates on approve / reject.</div>';
+    return;
+  }
+  list.innerHTML = items.map(n => {
+    const unread = !n.read;
+    const when = n.created_at ? String(n.created_at).replace('T', ' ').slice(0, 16) : '';
+    return '<button type="button" class="notif-item' + (unread ? ' is-unread' : '') + '" data-notif-id="' + n.id + '">' +
+      '<div class="notif-item-title">' + String(n.title || '').replace(/</g, '') + '</div>' +
+      '<div class="notif-item-body">' + String(n.body || '').replace(/</g, '') + '</div>' +
+      '<div class="notif-item-meta">' + when + (n.kind ? (' · ' + n.kind) : '') + '</div></button>';
+  }).join('');
+  list.querySelectorAll('[data-notif-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-notif-id');
+      const n = (db.notifications || []).find(x => x.id === id);
+      markNotificationRead(id);
+      try {
+        if (n && n.kind && n.entity_id && typeof openApprovalDetail === 'function') {
+          openApprovalDetail(n.kind, n.entity_id);
+        } else {
+          switchTo(n && n.deep_link ? n.deep_link : 'approvals');
+        }
+      } catch (_) {
+        try { switchTo('approvals'); } catch (__) {}
+      }
+      const panel = document.getElementById('notifPanel');
+      if (panel) panel.hidden = true;
+    });
+  });
+}
+
+function refreshNotificationUi() {
+  ensureNotifUiShell();
+  const count = unreadNotificationCount();
+  const badge = document.getElementById('notifBellBadge');
+  if (badge) {
+    if (count > 0) {
+      badge.hidden = false;
+      badge.textContent = count > 99 ? '99+' : String(count);
+    } else {
+      badge.hidden = true;
+      badge.textContent = '';
+    }
+  }
+  // Sync Approvals tile badge via eco re-render when on home
+  try {
+    if (document.getElementById('dashboard')?.classList.contains('active')) {
+      renderEcosystemHome();
+    }
+  } catch (_) {}
+  try {
+    if (document.getElementById('approvals')?.classList.contains('active')) {
+      const ab = document.getElementById('approvalsActionBadge');
+      // leave action badge to approvalsView; only update notif panel if open
+    }
+  } catch (_) {}
+  const panel = document.getElementById('notifPanel');
+  if (panel && !panel.hidden) renderNotificationPanel();
+}
+
+/** Seed notifs from live pending queue (approvers) — idempotent-ish via duplicate guard. */
+function syncPendingApprovalNotifs() {
+  try {
+    if (typeof listPendingApprovalItems !== 'function') return;
+    const items = listPendingApprovalItems().filter(i => i.canAct);
+    items.slice(0, 15).forEach(it => {
+      pushApprovalNotification({
+        type: 'pending',
+        title: 'Needs your approval',
+        body: (it.title || it.kind) + (it.amount != null && typeof money === 'function' ? (' · ' + money(it.amount, it.currency)) : ''),
+        kind: it.kind,
+        entityId: it.id,
+        audience: 'approvers'
+      });
+    });
+  } catch (_) {}
 }
 
 /* ---------- Stock transfers (Phase B) ---------- */
@@ -21271,8 +22022,14 @@ function advanceExpenseBillLevel(billId, opts) {
     save();
     try { queueBooksCloudSync(); pushBooksApprovalsImmediate(); } catch (_) {}
     toast('Level ' + (idx + 1) + ' approved → now waiting: ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)));
+    try {
+      notifyRequesterOfStatus(bill, 'bill', 'level_approved', 'Level approved',
+        (bill.supplier || 'Your request') + ' · now waiting on ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)));
+      notifyApproversOfRequest(bill, 'bill', 'Next approval needed');
+    } catch (_) {}
     try { refreshApprovalsUI(); } catch (_) {}
     try { renderBooksPayables(); renderApprovalsInbox(); } catch (_) { booksView(); }
+    try { if (typeof approvalsView === 'function' && document.getElementById('approvals')?.classList.contains('active')) approvalsView(); } catch (_) {}
     return;
   }
   // Final level → post ledger (Odoo: last stage unlocks document)
@@ -21322,8 +22079,13 @@ function advanceExpenseBillLevel(billId, opts) {
     save();
     try { queueBooksCloudSync(); } catch (_) {}
     toast('Posted to books · AP open');
+    try {
+      notifyRequesterOfStatus(bill, 'bill', 'posted', 'Request approved & posted',
+        (bill.supplier || 'Your request') + (typeof money === 'function' ? (' · ' + money(bill.amount, bill.currency)) : ''));
+    } catch (_) {}
     try { refreshApprovalsUI(); } catch (_) {}
     try { renderBooksPayables(); renderApprovalsInbox(); } catch (_) { booksView(); }
+    try { if (typeof approvalsView === 'function' && document.getElementById('approvals')?.classList.contains('active')) approvalsView(); } catch (_) {}
   };
   // Always open post modal so accountant confirms Dr/Cr + ledger (never silent post / never Mark paid here)
   pickExpenseLedgerFromCoa({
@@ -21597,8 +22359,14 @@ function advanceExpenseCashLevel(cashId, opts) {
     save();
     try { queueBooksCloudSync(); pushBooksApprovalsImmediate(); } catch (_) {}
     toast('Level ' + (idx + 1) + ' approved → now waiting: ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)));
+    try {
+      notifyRequesterOfStatus(entry, 'cash', 'level_approved', 'Level approved',
+        (entry.note || 'Your expense') + ' · now waiting on ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)));
+      notifyApproversOfRequest(entry, 'cash', 'Next approval needed');
+    } catch (_) {}
     try { refreshApprovalsUI(); } catch (_) {}
     try { renderApprovalsInbox(); renderBooksPayables(); } catch (_) {}
+    try { if (typeof approvalsView === 'function' && document.getElementById('approvals')?.classList.contains('active')) approvalsView(); } catch (_) {}
     return;
   }
   // Final — post cash expense journal
@@ -21644,8 +22412,13 @@ function advanceExpenseCashLevel(cashId, opts) {
     save();
     try { queueBooksCloudSync(); } catch (_) {}
     toast('Cash expense posted to books');
+    try {
+      notifyRequesterOfStatus(entry, 'cash', 'posted', 'Request approved & posted',
+        (entry.note || 'Your expense') + (typeof money === 'function' ? (' · ' + money(entry.amount, entry.currency)) : ''));
+    } catch (_) {}
     try { refreshApprovalsUI(); } catch (_) {}
     try { renderApprovalsInbox(); renderBooksPayables(); booksView(); } catch (_) {}
+    try { if (typeof approvalsView === 'function' && document.getElementById('approvals')?.classList.contains('active')) approvalsView(); } catch (_) {}
   };
   pickExpenseLedgerFromCoa({
     defaultCode: entry.offsetAccountId && entry.offsetAccountId !== 'other_out' ? entry.offsetAccountId : '5700',
@@ -21691,8 +22464,13 @@ function rejectExpenseCash(cashId) {
     save();
     try { queueBooksCloudSync(); } catch (_) {}
     toast('Cash expense rejected');
+    try {
+      notifyRequesterOfStatus(entry, 'cash', 'rejected', 'Request rejected',
+        (entry.note || 'Your expense') + (note ? (' · ' + String(note).slice(0, 80)) : ''));
+    } catch (_) {}
     try { refreshApprovalsUI(); } catch (_) {}
     try { renderApprovalsInbox(); renderBooksPayables(); } catch (_) {}
+    try { if (typeof approvalsView === 'function' && document.getElementById('approvals')?.classList.contains('active')) approvalsView(); } catch (_) {}
   });
 }
 
@@ -21722,8 +22500,13 @@ function rejectExpenseBill(billId) {
     save();
     try { queueBooksCloudSync(); } catch (_) {}
     toast('Expense rejected');
+    try {
+      notifyRequesterOfStatus(bill, 'bill', 'rejected', 'Request rejected',
+        (bill.supplier || 'Your request') + (note ? (' · ' + String(note).slice(0, 80)) : ''));
+    } catch (_) {}
     try { refreshApprovalsUI(); } catch (_) {}
     try { renderBooksPayables(); } catch (_) { booksView(); }
+    try { if (typeof approvalsView === 'function' && document.getElementById('approvals')?.classList.contains('active')) approvalsView(); } catch (_) {}
   });
 }
 
@@ -21862,9 +22645,9 @@ function openBillModal() {
   if (title) title.textContent = isRequesterOnly ? 'Expense request' : 'Supplier bill';
   if (sub) {
     sub.textContent = isRequesterOnly
-      ? 'Who · amount · receipt. No journal skills needed. Track progress on Home → Approvals → My requests.'
+      ? 'Who · amount · receipt. No journal skills needed. Track status under Approvals → My requests (no Books access required).'
       : (needsQueue
-        ? 'You can post now, or leave the ledger for the next approver. Queue lives under Books → Money out.'
+        ? 'You can post now, or leave the ledger for the next approver. Queue lives under Approvals and Books → Money out.'
         : 'Accrue expense + accounts payable. Pay later to clear the liability.');
   }
   if (saveBtn) {
@@ -28350,6 +29133,19 @@ document.getElementById('booksPeriodChips')?.addEventListener('click', (e) => {
   setBooksPeriod(btn.getAttribute('data-books-period'));
 });
 
+document.getElementById('approvalsTabs')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-appr-tab]');
+  if (!btn) return;
+  setApprovalsTab(btn.getAttribute('data-appr-tab'));
+  renderApprovalsWorkspace();
+});
+document.getElementById('approvalsNewRequestBtn')?.addEventListener('click', () => {
+  try { openBillModal(); } catch (err) { toast(err.message || 'Could not open request'); }
+});
+document.getElementById('homeExpenseRequestBtn')?.addEventListener('click', () => {
+  try { openBillModal(); } catch (err) { toast(err.message || 'Could not open request'); }
+});
+
 document.getElementById('pulse')?.addEventListener('click', (e) => {
   const periodBtn = e.target.closest('[data-pulse-period]');
   if (periodBtn) {
@@ -28719,7 +29515,10 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
     const variance = path.match && path.match.status === 'variance';
     toast(variance
       ? 'Queued — PO amount variance ' + path.match.variancePct + '% (needs review)'
-      : 'Request submitted — track it on Home → Approvals → My requests');
+      : 'Request submitted — track it under Approvals → My requests');
+    try {
+      notifyApproversOfRequest(bill, 'bill', variance ? 'Review needed (PO variance)' : 'New expense request');
+    } catch (_) {}
     try { refreshApprovalsUI(); renderDashboardApprovals(); } catch (_) {}
   } else if (path.autoPosted) {
     toast('Fast lane · posted to AP (policy). Pay when due from Money out.');
@@ -28872,7 +29671,8 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
   save();
   closeCashModal();
   if (needsAppr) {
-    toast('Request submitted — track it on Home → Approvals → My requests');
+    toast('Request submitted — track it under Approvals → My requests');
+    try { notifyApproversOfRequest(cashEntry, 'cash', 'New cash expense request'); } catch (_) {}
     try { refreshApprovalsUI(); renderDashboardApprovals(); } catch (_) {}
   } else {
     const sideLabel = type === 'out' ? 'Expense' : 'Income';
