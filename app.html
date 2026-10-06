@@ -750,34 +750,126 @@ input:focus:not(:focus-visible) {
   padding-right: 16px;
 }
 
-#pulse #dashCards .card {
+#pulse .cards-pulse-main .card,
+#pulse .cards-pulse-pl .card {
   border-radius: 18px;
-  padding: 22px 20px;
+  padding: 20px 18px;
   border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), var(--panel));
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--text) 4%, transparent),
     0 10px 28px color-mix(in srgb, var(--text) 4%, transparent);
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  cursor: pointer;
 }
-#pulse #dashCards .card:hover {
+#pulse .cards-pulse-main .card:hover,
+#pulse .cards-pulse-pl .card:hover {
   transform: translateY(-2px);
   box-shadow:
     0 4px 8px color-mix(in srgb, var(--text) 5%, transparent),
     0 14px 32px color-mix(in srgb, var(--text) 6%, transparent);
 }
+#pulse .cards-pulse-main .card-accent {
+  border-color: color-mix(in srgb, #22c55e 30%, var(--line));
+  box-shadow: 0 10px 28px color-mix(in srgb, #22c55e 10%, transparent);
+}
 #pulse #cardOutstanding {
   border-color: color-mix(in srgb, #3b82f6 28%, var(--line));
-  box-shadow: 0 10px 28px color-mix(in srgb, #3b82f6 10%, transparent);
 }
 #pulse #cardOverdue {
   border-color: color-mix(in srgb, #f43f5e 22%, var(--line));
 }
-#pulse #cardCollected {
-  border-color: color-mix(in srgb, #22c55e 22%, var(--line));
+#pulse .pulse-period .button.small {
+  border-radius: 999px;
 }
-#pulse #cardRate {
-  border-color: color-mix(in srgb, #8b5cf6 22%, var(--line));
+.pulse-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin: 16px 0 0;
+}
+.pulse-chart-card h3 {
+  margin: 0 0 2px;
+  font-size: 15px;
+}
+.pulse-chart-body {
+  min-height: 160px;
+  width: 100%;
+}
+.pulse-chart-body svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.pulse-hbar {
+  display: grid;
+  grid-template-columns: minmax(72px, 28%) 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.pulse-hbar .track {
+  height: 12px;
+  border-radius: 999px;
+  background: var(--panel-2, var(--bg));
+  overflow: hidden;
+}
+.pulse-hbar .fill {
+  height: 100%;
+  border-radius: 999px;
+  min-width: 2px;
+}
+.pulse-hbar .fill.rev { background: #22c55e; }
+.pulse-hbar .fill.exp { background: #f43f5e; }
+.pulse-hbar .fill.cash { background: #3b82f6; }
+.pulse-hbar .fill.age0 { background: #94a3b8; }
+.pulse-hbar .fill.age1 { background: #f59e0b; }
+.pulse-hbar .fill.age2 { background: #f97316; }
+.pulse-hbar .fill.age3 { background: #ef4444; }
+.pulse-chart-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 28px 8px;
+  text-align: center;
+}
+.pulse-tooltip {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  max-width: 260px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #fff;
+  background: color-mix(in srgb, #0f172a 92%, #334155);
+  border: 1px solid color-mix(in srgb, #fff 12%, transparent);
+  box-shadow: 0 10px 28px color-mix(in srgb, #000 28%, transparent);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  white-space: pre-line;
+}
+.pulse-tooltip.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+.pulse-tooltip b {
+  color: #fff;
+  font-weight: 700;
+}
+.pulse-hbar[data-pulse-tip],
+.pulse-chart-body [data-pulse-tip] {
+  cursor: help;
+}
+.pulse-hbar[data-pulse-tip]:hover .track {
+  outline: 1px solid color-mix(in srgb, var(--accent, #6366f1) 40%, transparent);
+  outline-offset: 1px;
+}
+.pulse-chart-body svg [data-pulse-tip]:hover {
+  filter: brightness(1.08);
+}
 }
 #pulse .section-head h2 {
   font-size: 16px;
@@ -3739,64 +3831,133 @@ input:focus:not(:focus-visible) {
     <section class="view" id="pulse">
       <div class="dash-hero">
         <div class="dash-hero-text">
-          <div class="dash-greeting">Dashboard</div>
-          <h1 class="dash-title">Business pulse</h1>
-          <p class="dash-sub">Outstanding, collections, and what needs attention right now.</p>
+          <div class="dash-greeting" id="dashGreeting">Dashboard</div>
+          <h1 class="dash-title" id="dashTitle">Business pulse</h1>
+          <p class="dash-sub" id="dashSub">Live cash, receivables, payables, and profitability from your books.</p>
         </div>
         <div class="dash-hero-actions">
           <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
+          <button class="button" type="button" onclick="switchTo('books')">Books</button>
           <button class="button primary" type="button" onclick="switchTo('invoices')">Invoices</button>
         </div>
       </div>
-      <div class="cards" id="dashCards">
-        <div class="card card-accent" id="cardOutstanding">
-          <small>Outstanding</small>
-          <b id="outstanding">$0.00</b>
-          <span class="mini" id="outstandingCount">0 unpaid invoices</span>
+
+      <div class="pulse-period" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px">
+        <span class="section-sub" style="margin:0">Period</span>
+        <button type="button" class="button small primary" data-pulse-period="month">This month</button>
+        <button type="button" class="button small secondary" data-pulse-period="30">30 days</button>
+        <button type="button" class="button small secondary" data-pulse-period="90">90 days</button>
+        <button type="button" class="button small secondary" data-pulse-period="all">All time</button>
+        <span class="section-sub" id="pulsePeriodLabel" style="margin:0 0 0 auto"></span>
+      </div>
+
+      <!-- Core books metrics (live from journals + COA) -->
+      <div class="cards cards-pulse-main" id="pulseBooksCards">
+        <div class="card card-accent" data-pulse-go="books">
+          <small>Cash &amp; equivalents</small>
+          <b id="pulseCash">—</b>
+          <span class="mini" id="pulseCashMini">Banks + cash on hand</span>
         </div>
-        <div class="card" id="cardOverdue">
-          <small>Overdue</small>
-          <b class="late" id="overdue">$0.00</b>
-          <span class="mini" id="overdueCount">Nothing overdue</span>
+        <div class="card" data-pulse-go="ar">
+          <small>Receivables (AR)</small>
+          <b id="pulseAR">—</b>
+          <span class="mini" id="pulseARMini">Customers owe you</span>
         </div>
-        <div class="card" id="cardCollected">
-          <small>Collected this month</small>
-          <b class="good" id="collected">$0.00</b>
-          <span class="mini" id="collectedMini">In reporting currency</span>
+        <div class="card" data-pulse-go="ap">
+          <small>Payables (AP)</small>
+          <b id="pulseAP">—</b>
+          <span class="mini" id="pulseAPMini">You owe suppliers</span>
         </div>
-        <div class="card" id="cardRate" style="display:none">
-          <small>Collection rate</small>
-          <b id="rate">—</b>
-          <span class="mini">By invoice value</span>
+        <div class="card" data-pulse-go="books">
+          <small>Profit (period)</small>
+          <b id="pulseProfit">—</b>
+          <span class="mini" id="pulseProfitMini">Revenue − expenses</span>
         </div>
       </div>
+
+      <div class="cards cards-pulse-pl" id="pulsePlCards" style="margin-top:10px">
+        <div class="card" data-pulse-go="books">
+          <small>Revenue (period)</small>
+          <b id="pulseRevenue">—</b>
+          <span class="mini">Accrued sales &amp; income</span>
+        </div>
+        <div class="card" data-pulse-go="books">
+          <small>Expenses (period)</small>
+          <b id="pulseExpenses">—</b>
+          <span class="mini">P&amp;L expense ledgers</span>
+        </div>
+        <div class="card" id="cardOutstanding">
+          <small>Invoice outstanding</small>
+          <b id="outstanding">—</b>
+          <span class="mini" id="outstandingCount">Open invoices</span>
+        </div>
+        <div class="card" id="cardOverdue">
+          <small>Overdue invoices</small>
+          <b class="late" id="overdue">—</b>
+          <span class="mini" id="overdueCount">Past due</span>
+        </div>
+      </div>
+
+      <!-- Hidden legacy ids so older pulse code still resolves -->
+      <span id="collected" hidden></span>
+      <span id="collectedMini" hidden></span>
+      <span id="rate" hidden></span>
+      <div id="cardRate" style="display:none"></div>
+      <div id="dashCards" style="display:none"></div>
+
       <div id="nextAction" class="next-action" style="display:none"></div>
       <div id="dashboardApprovals" class="insight" style="display:none;margin:14px 0;border-color:#fcd34d;background:#fffbeb"></div>
       <div id="dashboardLowStock" class="insight" style="display:none;margin:14px 0"></div>
-      <div class="section-head">
-        <h2>Recent invoices</h2>
-        <button class="button text" data-view="invoices">View all →</button>
+
+      <div class="pulse-charts" id="pulseCharts">
+        <div class="insight pulse-chart-card">
+          <h3>Revenue vs expenses</h3>
+          <p class="section-sub" style="margin:0 0 10px">Period selected above</p>
+          <div id="pulseChartRevExp" class="pulse-chart-body"></div>
+        </div>
+        <div class="insight pulse-chart-card">
+          <h3>Profit trend</h3>
+          <p class="section-sub" style="margin:0 0 10px">Last 6 months</p>
+          <div id="pulseChartProfit" class="pulse-chart-body"></div>
+        </div>
+        <div class="insight pulse-chart-card">
+          <h3>Cash mix</h3>
+          <p class="section-sub" style="margin:0 0 10px">Banks &amp; cash on hand</p>
+          <div id="pulseChartCash" class="pulse-chart-body"></div>
+        </div>
+        <div class="insight pulse-chart-card">
+          <h3>AR aging</h3>
+          <p class="section-sub" style="margin:0 0 10px">Open invoice balances</p>
+          <div id="pulseChartAging" class="pulse-chart-body"></div>
+        </div>
       </div>
-      <div id="recent"></div>
-      <div class="section-head" id="agingSectionHead" style="margin-top:28px">
-        <h2>Aging</h2>
-        <small id="reportingLabel" style="color:var(--muted)"></small>
-      </div>
-      <div class="insights" id="dashInsights">
+
+      <div class="insights" id="dashInsights" style="margin-top:18px">
+        <div class="insight">
+          <h3>Cash position</h3>
+          <div id="pulseCashBreakdown" class="section-sub" style="margin:0"></div>
+        </div>
         <div class="insight">
           <h3>Open balances by age</h3>
           <div id="aging"></div>
+          <small id="reportingLabel" style="color:var(--muted)"></small>
+        </div>
+        <div class="insight" id="insightCard">
+          <h3>Insights</h3>
+          <div id="insightText" style="color:var(--muted);line-height:1.7"></div>
         </div>
         <div class="insight" id="collectionsCard">
           <h3>Collect payments</h3>
           <p class="section-sub" style="margin:0 0 10px">Remind clients on WhatsApp — built for how African SMEs actually get paid.</p>
           <div id="collectionsPanel"></div>
         </div>
-        <div class="insight" id="insightCard">
-          <h3>Summary</h3>
-          <div id="insightText" style="color:var(--muted);line-height:1.7"></div>
-        </div>
       </div>
+
+      <div class="section-head" style="margin-top:22px">
+        <h2>Recent invoices</h2>
+        <button class="button text" data-view="invoices">View all →</button>
+      </div>
+      <div id="recent"></div>
     </section>
 
     <section class="view" id="invoices">
@@ -9745,9 +9906,357 @@ function dashboard() {
   try { renderEcosystemHome(); } catch (e) { console.warn('eco home', e); }
 }
 
-/** Dashboard = metrics, aging, collections (former home body). */
+/** Dashboard = live books metrics + invoice aging / collections. */
+let pulsePeriod = 'month';
+
+function pulseEscape(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+
+function pulseTipAttr(title, detail) {
+  const t = String(title || '').trim();
+  const d = String(detail || '').trim();
+  const full = d ? (t + '\n' + d) : t;
+  return ' data-pulse-tip="' + pulseEscape(full) + '"';
+}
+
+function pulseHBars(rows, fillClass) {
+  const max = Math.max(1, ...rows.map(r => Math.abs(Number(r.value) || 0)));
+  if (!rows.length) return '<div class="pulse-chart-empty">No data yet</div>';
+  const total = rows.reduce((n, r) => n + Math.abs(Number(r.value) || 0), 0) || 1;
+  return rows.map(r => {
+    const v = Math.abs(Number(r.value) || 0);
+    const pct = Math.max(2, Math.round((v / max) * 100));
+    const share = Math.round((v / total) * 100);
+    const cls = r.fill || fillClass || 'cash';
+    const tip = pulseTipAttr(r.label, money(r.value) + (r.detail ? (' · ' + r.detail) : (' · ' + share + '% of total')));
+    return '<div class="pulse-hbar"' + tip + '>' +
+      '<span>' + pulseEscape(r.label) + '</span>' +
+      '<div class="track"><div class="fill ' + cls + '" style="width:' + pct + '%"></div></div>' +
+      '<b style="font-variant-numeric:tabular-nums;font-size:12px">' + money(r.value) + '</b></div>';
+  }).join('');
+}
+
+/** Monthly P&L series for last n months (reporting currency). */
+function pulseMonthlyPlSeries(n) {
+  const months = Math.max(3, Math.min(12, n || 6));
+  const series = [];
+  const now = new Date();
+  const coaAll = typeof getCoa === 'function' ? getCoa() : [];
+  const incomeIds = new Set(coaAll.filter(a => a.type === 'income' || a.fsLine === 'revenue' || a.fsLine === 'other_income').map(a => a.id));
+  const expenseIds = new Set(
+    (typeof isPlExpenseAccount === 'function' ? coaAll.filter(isPlExpenseAccount) : coaAll.filter(a => a.type === 'expense')).map(a => a.id)
+  );
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const from = y + '-' + String(m + 1).padStart(2, '0') + '-01';
+    const lastDay = new Date(y, m + 1, 0).getDate();
+    const to = y + '-' + String(m + 1).padStart(2, '0') + '-' + String(lastDay).padStart(2, '0');
+    let rev = 0, exp = 0;
+    (db.journals || []).forEach(j => {
+      const jd = (typeof booksDateOnly === 'function' ? booksDateOnly(j.date || j.entry_date) : String(j.date || '').slice(0, 10));
+      if (!jd || jd < from || jd > to) return;
+      (j.lines || []).forEach(l => {
+        const debit = Number(l.debit) || 0;
+        const credit = Number(l.credit) || 0;
+        if (incomeIds.has(l.accountId)) rev += credit - debit;
+        if (expenseIds.has(l.accountId)) exp += debit - credit;
+      });
+    });
+    const label = d.toLocaleString(undefined, { month: 'short' });
+    series.push({ label, revenue: rev, expenses: Math.max(0, exp), profit: rev - Math.max(0, exp), from, to });
+  }
+  return series;
+}
+
+function pulseSvgLineChart(series, key, color) {
+  const w = 320, h = 150, padL = 8, padR = 8, padT = 16, padB = 28;
+  const vals = series.map(s => Number(s[key]) || 0);
+  if (!series.length || vals.every(v => Math.abs(v) < 0.001)) {
+    return '<div class="pulse-chart-empty">No profit activity in the last months</div>';
+  }
+  const minV = Math.min(0, ...vals);
+  const maxV = Math.max(0, ...vals);
+  const span = Math.max(1, maxV - minV);
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+  const pts = vals.map((v, i) => {
+    const x = padL + (series.length === 1 ? plotW / 2 : (i / (series.length - 1)) * plotW);
+    const y = padT + plotH - ((v - minV) / span) * plotH;
+    const s = series[i];
+    return {
+      x, y, v,
+      label: s.label,
+      tip: s.label + '\nProfit ' + money(s.profit) +
+        '\nRevenue ' + money(s.revenue) +
+        '\nExpenses ' + money(s.expenses)
+    };
+  });
+  const line = pts.map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+  const zeroY = padT + plotH - ((0 - minV) / span) * plotH;
+  const area = line + ' L' + pts[pts.length - 1].x.toFixed(1) + ',' + zeroY.toFixed(1) +
+    ' L' + pts[0].x.toFixed(1) + ',' + zeroY.toFixed(1) + ' Z';
+  const dots = pts.map(p =>
+    '<g' + pulseTipAttr(p.tip) + '>' +
+    '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="14" fill="transparent"/>' +
+    '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="3.5" fill="' + color + '"/>' +
+    '</g>'
+  ).join('');
+  const labels = pts.map(p =>
+    '<text x="' + p.x.toFixed(1) + '" y="' + (h - 8) + '" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.55">' +
+    pulseEscape(p.label) + '</text>'
+  ).join('');
+  const last = pts[pts.length - 1];
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="Profit trend">' +
+    '<line x1="' + padL + '" y1="' + zeroY.toFixed(1) + '" x2="' + (w - padR) + '" y2="' + zeroY.toFixed(1) +
+    '" stroke="currentColor" stroke-opacity="0.12" stroke-dasharray="4 4"/>' +
+    '<path d="' + area + '" fill="' + color + '" fill-opacity="0.12"/>' +
+    '<path d="' + line + '" fill="none" stroke="' + color + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+    dots + labels +
+    '<text x="' + last.x.toFixed(1) + '" y="' + Math.max(12, last.y - 10).toFixed(1) +
+    '" text-anchor="middle" font-size="11" font-weight="700" fill="' + color + '">' +
+    pulseEscape(money(last.v)) + '</text></svg>';
+}
+
+function pulseSvgCompareBars(rev, exp) {
+  const w = 320, h = 150, pad = 20;
+  const max = Math.max(1, rev, exp);
+  const barW = 56;
+  const baseY = h - 28;
+  const maxH = h - 50;
+  const revH = (rev / max) * maxH;
+  const expH = (exp / max) * maxH;
+  const x1 = w * 0.33 - barW / 2;
+  const x2 = w * 0.67 - barW / 2;
+  const margin = Math.max(0, rev - exp);
+  const revTip = pulseTipAttr('Revenue', money(rev) + (rev + exp > 0 ? (' · ' + Math.round(rev / Math.max(1, rev + exp) * 100) + '% of bar total') : ''));
+  const expTip = pulseTipAttr('Expenses', money(exp) + (rev > 0.001 ? ('\nMargin ' + money(margin)) : ''));
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="Revenue versus expenses">' +
+    '<rect x="' + x1 + '" y="' + (baseY - revH) + '" width="' + barW + '" height="' + Math.max(2, revH) +
+    '" rx="8" fill="#22c55e"' + revTip + '/>' +
+    '<rect x="' + x2 + '" y="' + (baseY - expH) + '" width="' + barW + '" height="' + Math.max(2, expH) +
+    '" rx="8" fill="#f43f5e"' + expTip + '/>' +
+    '<text x="' + (x1 + barW / 2) + '" y="' + (baseY - revH - 8) + '" text-anchor="middle" font-size="11" font-weight="700" fill="#16a34a">' +
+    pulseEscape(money(rev)) + '</text>' +
+    '<text x="' + (x2 + barW / 2) + '" y="' + (baseY - expH - 8) + '" text-anchor="middle" font-size="11" font-weight="700" fill="#e11d48">' +
+    pulseEscape(money(exp)) + '</text>' +
+    '<text x="' + (x1 + barW / 2) + '" y="' + (h - 8) + '" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.65">Revenue</text>' +
+    '<text x="' + (x2 + barW / 2) + '" y="' + (h - 8) + '" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.65">Expenses</text>' +
+    '</svg>';
+}
+
+function ensurePulseTooltip() {
+  let tip = document.getElementById('pulseTooltip');
+  if (tip) return tip;
+  tip = document.createElement('div');
+  tip.id = 'pulseTooltip';
+  tip.className = 'pulse-tooltip';
+  tip.setAttribute('role', 'tooltip');
+  tip.hidden = true;
+  document.body.appendChild(tip);
+  return tip;
+}
+
+function pulseShowTooltip(text, clientX, clientY) {
+  const tip = ensurePulseTooltip();
+  tip.textContent = text || '';
+  tip.hidden = false;
+  tip.classList.add('show');
+  const pad = 14;
+  const tw = tip.offsetWidth || 160;
+  const th = tip.offsetHeight || 40;
+  let left = clientX + pad;
+  let top = clientY - th - 10;
+  if (left + tw > window.innerWidth - 8) left = clientX - tw - pad;
+  if (top < 8) top = clientY + pad;
+  tip.style.left = Math.max(8, left) + 'px';
+  tip.style.top = Math.max(8, top) + 'px';
+}
+
+function pulseHideTooltip() {
+  const tip = document.getElementById('pulseTooltip');
+  if (!tip) return;
+  tip.classList.remove('show');
+  tip.hidden = true;
+}
+
+function wirePulseChartTooltips(root) {
+  const host = root || document.getElementById('pulseCharts');
+  if (!host || host._pulseTipWired) return;
+  host._pulseTipWired = true;
+  const findTip = (el) => {
+    let n = el;
+    while (n && n !== host) {
+      if (n.getAttribute && n.getAttribute('data-pulse-tip')) return n;
+      n = n.parentNode;
+      // SVG parentElement can be null on text nodes in some browsers
+      if (n && n.nodeType !== 1) n = n.parentElement;
+    }
+    return null;
+  };
+  host.addEventListener('pointerover', (e) => {
+    const t = findTip(e.target);
+    if (!t) return;
+    pulseShowTooltip(t.getAttribute('data-pulse-tip'), e.clientX, e.clientY);
+  });
+  host.addEventListener('pointermove', (e) => {
+    const t = findTip(e.target);
+    if (!t) { pulseHideTooltip(); return; }
+    pulseShowTooltip(t.getAttribute('data-pulse-tip'), e.clientX, e.clientY);
+  });
+  host.addEventListener('pointerout', (e) => {
+    const to = e.relatedTarget;
+    if (to && host.contains(to) && findTip(to)) return;
+    pulseHideTooltip();
+  });
+  host.addEventListener('pointerleave', () => pulseHideTooltip());
+}
+
+function renderPulseCharts(ctx) {
+  const { revenue, expenses, cashLines, agingBuckets } = ctx || {};
+  const revEl = document.getElementById('pulseChartRevExp');
+  const profEl = document.getElementById('pulseChartProfit');
+  const cashEl = document.getElementById('pulseChartCash');
+  const ageEl = document.getElementById('pulseChartAging');
+
+  if (revEl) {
+    if ((revenue || 0) < 0.001 && (expenses || 0) < 0.001) {
+      revEl.innerHTML = '<div class="pulse-chart-empty">No revenue or expenses in this period</div>';
+    } else {
+      revEl.innerHTML = pulseSvgCompareBars(Math.max(0, revenue || 0), Math.max(0, expenses || 0));
+    }
+  }
+  if (profEl) {
+    try {
+      const series = pulseMonthlyPlSeries(6);
+      profEl.innerHTML = pulseSvgLineChart(series, 'profit', '#8b5cf6');
+    } catch (e) {
+      profEl.innerHTML = '<div class="pulse-chart-empty">Could not build trend</div>';
+    }
+  }
+  if (cashEl) {
+    const rows = (cashLines || []).map(r => ({
+      label: (r.name || r.id || '').slice(0, 18),
+      value: r.bal,
+      fill: 'cash'
+    }));
+    cashEl.innerHTML = rows.length
+      ? pulseHBars(rows, 'cash')
+      : '<div class="pulse-chart-empty">No cash balances yet</div>';
+  }
+  if (ageEl) {
+    const labels = ['Not due', '1–30 days', '31–60 days', '60+ days'];
+    const rows = (agingBuckets || []).map((b, i) => ({
+      label: labels[i] || b[0],
+      value: b[1],
+      fill: 'age' + i,
+      detail: 'Open invoice balances'
+    })).filter(r => r.value > 0.001);
+    ageEl.innerHTML = rows.length
+      ? pulseHBars(rows, 'age0')
+      : '<div class="pulse-chart-empty">No open receivables</div>';
+  }
+  try { wirePulseChartTooltips(document.getElementById('pulseCharts')); } catch (_) {}
+}
+
 function pulseView() {
-  const all = db.invoices;
+  // Align Books period selector so periodActivity / reports match Dashboard
+  try {
+    const sel = document.getElementById('booksPeriod');
+    if (sel && pulsePeriod) {
+      sel.value = pulsePeriod;
+      document.querySelectorAll('[data-books-period]').forEach(btn => {
+        const on = btn.getAttribute('data-books-period') === pulsePeriod;
+        btn.classList.toggle('primary', on);
+        btn.classList.toggle('secondary', !on);
+      });
+    }
+  } catch (_) {}
+  document.querySelectorAll('[data-pulse-period]').forEach(btn => {
+    const on = btn.getAttribute('data-pulse-period') === pulsePeriod;
+    btn.classList.toggle('primary', on);
+    btn.classList.toggle('secondary', !on);
+  });
+
+  // ——— Live books metrics ———
+  let cashEq = 0, arBal = 0, apBal = 0, revenue = 0, expenses = 0, profit = 0;
+  let cashLines = [];
+  try {
+    if (typeof ensureBooksDb === 'function') ensureBooksDb();
+    const act = typeof periodActivity === 'function' ? periodActivity() : {};
+    const coaAll = typeof getCoa === 'function' ? getCoa() : [];
+    const bal = typeof accountBalances === 'function' ? accountBalances(null) : {};
+    revenue = coaAll
+      .filter(a => a.type === 'income' || a.fsLine === 'revenue' || a.fsLine === 'other_income')
+      .reduce((n, a) => n + ((act[a.id]?.credit || 0) - (act[a.id]?.debit || 0)), 0);
+    const expenseAccounts = typeof isPlExpenseAccount === 'function'
+      ? coaAll.filter(isPlExpenseAccount)
+      : coaAll.filter(a => a.type === 'expense');
+    expenses = expenseAccounts.reduce((n, a) => {
+      if (typeof expensePeriodAmount === 'function') return n + expensePeriodAmount(a.id, act);
+      return n + ((act[a.id]?.debit || 0) - (act[a.id]?.credit || 0));
+    }, 0);
+    profit = revenue - expenses;
+    cashEq = typeof cashEquivalentsTotal === 'function' ? cashEquivalentsTotal(bal) : (bal['1000'] || 0);
+    arBal = Math.max(0, bal['1100'] || 0);
+    apBal = Math.max(0, -(bal['2000'] || 0));
+    cashLines = coaAll
+      .filter(a => typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a))
+      .map(a => ({ id: a.id, name: a.name, bal: bal[a.id] || 0 }))
+      .filter(r => Math.abs(r.bal) > 0.001)
+      .sort((a, b) => Math.abs(b.bal) - Math.abs(a.bal));
+  } catch (e) {
+    console.warn('pulse books metrics', e);
+  }
+
+  const setTxt = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
+  setTxt('pulseCash', money(cashEq));
+  setTxt('pulseAR', money(arBal));
+  setTxt('pulseAP', money(apBal));
+  setTxt('pulseProfit', money(profit));
+  setTxt('pulseRevenue', money(revenue));
+  setTxt('pulseExpenses', money(Math.max(0, expenses)));
+  const profitEl = document.getElementById('pulseProfit');
+  if (profitEl) profitEl.style.color = profit >= 0 ? '' : 'var(--red-text, #b42318)';
+  const cashEl = document.getElementById('pulseCash');
+  if (cashEl) cashEl.style.color = cashEq < 0 ? 'var(--red-text, #b42318)' : '';
+
+  try {
+    const range = typeof booksDateRange === 'function' ? booksDateRange() : {};
+    const pl = document.getElementById('pulsePeriodLabel');
+    if (pl) {
+      pl.textContent = (range.from || range.to)
+        ? ((range.from || '…') + ' → ' + (range.to || 'today'))
+        : 'All time';
+    }
+    const profitMini = document.getElementById('pulseProfitMini');
+    if (profitMini) {
+      profitMini.textContent = pulsePeriod === 'month' ? 'This month'
+        : pulsePeriod === '30' ? 'Last 30 days'
+        : pulsePeriod === '90' ? 'Last 90 days' : 'All time';
+    }
+    const cashBd = document.getElementById('pulseCashBreakdown');
+    if (cashBd) {
+      if (!cashLines.length) {
+        cashBd.innerHTML = 'No cash or bank balances yet. Record receipts, POS sales, or import a bank statement.';
+      } else {
+        cashBd.innerHTML = cashLines.map(r =>
+          '<div style="display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid var(--line)">' +
+          '<span>' + r.id + ' · ' + String(r.name).replace(/</g, '') + '</span>' +
+          '<b style="font-variant-numeric:tabular-nums">' + money(r.bal) + '</b></div>'
+        ).join('') +
+          '<div style="display:flex;justify-content:space-between;padding:8px 0 0;font-weight:700">' +
+          '<span>Total</span><span>' + money(cashEq) + '</span></div>';
+      }
+    }
+  } catch (_) {}
+
+  const all = db.invoices || [];
   const open = all.filter(i => { syncPaidFlag(i); return balanceDue(i) > 0.001 && i.status !== 'Draft'; });
   const over = open.filter(i => new Date(i.due + 'T12:00:00') < new Date());
   const paid = all.filter(i => { syncPaidFlag(i); return i.paid; });
@@ -9773,7 +10282,6 @@ function pulseView() {
   const ratePct = issued ? Math.round(paidValue / issued * 100) : null;
   $('#rate').textContent = ratePct != null ? ratePct + '%' : '—';
 
-  // Outstanding vs overdue messaging — avoid twin identical cards looking broken
   const outEl = document.getElementById('outstandingCount');
   const overEl = document.getElementById('overdueCount');
   const cardOverdue = document.getElementById('cardOverdue');
@@ -9794,16 +10302,12 @@ function pulseView() {
   const collMini = document.getElementById('collectedMini');
   if (collMini) collMini.textContent = 'Reported in ' + rep;
 
-  // Show collection rate only when there is meaningful volume
   const cardRate = document.getElementById('cardRate');
-  const dashCards = document.getElementById('dashCards');
-  const showRate = issued > 0 && all.length >= 3;
-  if (cardRate) cardRate.style.display = showRate ? '' : 'none';
-  if (dashCards) dashCards.classList.toggle('cards-three', !showRate);
+  if (cardRate) cardRate.style.display = 'none';
 
-  $('#reportingLabel').textContent = 'Amounts below in ' + rep;
+  $('#reportingLabel').textContent = 'Amounts in ' + rep;
 
-  // Hero greeting
+  // Hero greeting — prefer cash / profit story, fall back to invoices
   try {
     const hour = new Date().getHours();
     const hello = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -9814,15 +10318,19 @@ function pulseView() {
     if (greet) greet.textContent = hello + (biz ? ' · ' + biz : '');
     if (title) {
       if (over.length) title.textContent = over.length + ' overdue — worth a follow-up';
+      else if (cashEq < 0) title.textContent = 'Cash is negative — check the books';
+      else if (profit < 0 && (revenue > 0 || expenses > 0)) title.textContent = 'Loss this period — review expenses';
       else if (open.length) title.textContent = open.length + ' open invoice' + (open.length === 1 ? '' : 's') + ' in flight';
-      else if (all.length) title.textContent = 'You’re clear — nothing outstanding';
+      else if (all.length || cashEq || revenue) title.textContent = 'Business pulse looks steady';
       else title.textContent = 'Ready when you are';
     }
     if (sub) {
-      if (over.length) sub.textContent = money(late) + ' past due. A short reminder often gets paid faster.';
-      else if (open.length) sub.textContent = money(out) + ' outstanding · reported in ' + (db.profile.reporting || 'USD') + '.';
-      else if (all.length) sub.textContent = 'Collected ' + money(got) + ' this month. Create the next invoice when you’re ready.';
-      else sub.textContent = 'Add your business details, save a client, then send your first invoice in minutes.';
+      const bits = [];
+      bits.push('Cash ' + money(cashEq));
+      bits.push('AR ' + money(arBal));
+      bits.push('AP ' + money(apBal));
+      bits.push('Profit ' + money(profit));
+      sub.textContent = bits.join(' · ') + ' · ' + rep;
     }
   } catch (e) {}
 
@@ -9841,6 +10349,15 @@ function pulseView() {
     </div>`
   ).join('');
 
+  try {
+    renderPulseCharts({
+      revenue,
+      expenses: Math.max(0, expenses),
+      cashLines,
+      agingBuckets: buckets
+    });
+  } catch (e) { console.warn('pulse charts', e); }
+
   try { renderCollectionsPanel(); } catch (e) { console.warn('collections', e.message || e); }
   try { renderDashboardApprovals(); } catch (e) { console.warn('approvals strip', e); }
   try {
@@ -9852,42 +10369,52 @@ function pulseView() {
     }
   } catch (_) {}
 
-  if (!all.length) {
-    $('#insightText').innerHTML = `<b style="color:var(--text)">Welcome to invoicedey</b><br>
-      Set up your profile once, then invoice with confidence. Sign in to sync across devices.`;
-    $('#aging').innerHTML = '';
-    $('#recent').innerHTML = `<div class="empty">
-      <div class="empty-icon">✓</div>
-      <h3>Get ready to invoice</h3>
-      <p>Three quick steps. You can change any of this later in Business profile.</p>
-      <ol class="steps">
-        <li>Add your business name and tax details</li>
-        <li>Save a client (optional but faster next time)</li>
-        <li>Create and download your first invoice</li>
-      </ol>
-      <div class="empty-actions">
-        <button class="button primary" type="button" onclick="newInvoice()">Create invoice</button>
-        <button class="button" type="button" onclick="switchTo('profile')">Business profile</button>
-        <button class="button" type="button" onclick="switchTo('clients')">Add client</button>
-      </div>
-      <div class="trust-strip"><b>Free plan:</b> 3 invoices per month. Create an account to sync invoices across devices.</div>
-    </div>`;
-    return;
-  }
-
+  // Insights from real books + invoices (always run — even with zero invoices)
   const insightEl = document.getElementById('insightText');
   if (insightEl) {
-    if (over.length) {
-      insightEl.innerHTML = `<b style="color:var(--red-text)">${over.length} overdue · ${money(late)}</b><br>
-        ${allOverdue ? 'Every open balance is past due.' : (open.length - over.length) + ' still within terms.'}
-        Focus the Next action above, then work the rest by age.`;
-    } else if (open.length) {
-      insightEl.innerHTML = `<b>${open.length} open · ${money(out)}</b><br>
-        Nothing overdue. Collect on time and mark payments as they land.`;
-    } else {
-      insightEl.innerHTML = `<b style="color:var(--green-text)">All clear.</b><br>
-        No unpaid balances. Create the next invoice when you’re ready.`;
+    const lines = [];
+    lines.push('<div style="margin-bottom:8px"><b style="color:var(--text)">Books</b> · Cash ' + money(cashEq) +
+      ' · Profit ' + money(profit) + ' · Revenue ' + money(revenue) + ' · Expenses ' + money(Math.max(0, expenses)) + '</div>');
+    if (arBal > 0.001) {
+      lines.push('<div>Customers owe <b>' + money(arBal) + '</b>' +
+        (out > 0.001 ? ' (invoices outstanding ' + money(out) + ')' : '') + '.</div>');
     }
+    if (apBal > 0.001) {
+      lines.push('<div>You owe suppliers <b>' + money(apBal) + '</b> — clear from Money out when ready.</div>');
+    }
+    if (over.length) {
+      lines.push('<div style="color:var(--red-text)"><b>' + over.length + ' overdue · ' + money(late) +
+        '</b> — follow up first.</div>');
+    } else if (open.length) {
+      lines.push('<div>' + open.length + ' open invoice' + (open.length === 1 ? '' : 's') +
+        ' · nothing overdue.</div>');
+    }
+    if (profit < -0.01 && (revenue > 0 || expenses > 0)) {
+      lines.push('<div style="color:var(--red-text)">This period is at a loss — check expense ledgers in Books.</div>');
+    } else if (profit > 0.01) {
+      lines.push('<div style="color:var(--green-text)">Period is profitable.</div>');
+    }
+    if (!all.length && !cashEq && !revenue && !expenses) {
+      lines.push('<div style="margin-top:6px">Start with an invoice, POS sale, or bank import so these numbers light up.</div>');
+    }
+    insightEl.innerHTML = lines.join('');
+  }
+
+  if (!all.length) {
+    $('#aging').innerHTML = '<p class="section-sub" style="margin:0">No open invoices to age.</p>';
+    $('#recent').innerHTML = `<div class="empty">
+      <div class="empty-icon">✓</div>
+      <h3>Books metrics are live</h3>
+      <p>Cash, AR, AP, and profit update from journals. Create an invoice or open POS when you’re ready.</p>
+      <div class="empty-actions">
+        <button class="button primary" type="button" onclick="newInvoice()">Create invoice</button>
+        <button class="button" type="button" onclick="switchTo('books')">Open Books</button>
+        <button class="button" type="button" onclick="switchTo('clients')">Add client</button>
+      </div>
+    </div>`;
+    try { renderDashboardApprovals(); } catch (_) {}
+    try { renderCollectionsPanel(); } catch (_) {}
+    return;
   }
 
   // Next action card
@@ -27821,6 +28348,39 @@ document.getElementById('booksPeriodChips')?.addEventListener('click', (e) => {
   if (!btn) return;
   e.preventDefault();
   setBooksPeriod(btn.getAttribute('data-books-period'));
+});
+
+document.getElementById('pulse')?.addEventListener('click', (e) => {
+  const periodBtn = e.target.closest('[data-pulse-period]');
+  if (periodBtn) {
+    e.preventDefault();
+    pulsePeriod = periodBtn.getAttribute('data-pulse-period') || 'month';
+    try {
+      if (typeof setBooksPeriod === 'function') setBooksPeriod(pulsePeriod);
+      else {
+        const sel = document.getElementById('booksPeriod');
+        if (sel) sel.value = pulsePeriod;
+      }
+    } catch (_) {}
+    pulseView();
+    return;
+  }
+  const go = e.target.closest('[data-pulse-go]');
+  if (!go) return;
+  const dest = go.getAttribute('data-pulse-go');
+  try {
+    if (dest === 'ar') {
+      switchTo('books');
+      if (typeof setBooksPage === 'function') setBooksPage('ar');
+    } else if (dest === 'ap') {
+      switchTo('books');
+      if (typeof setBooksPage === 'function') setBooksPage('ap');
+    } else if (dest === 'books') {
+      switchTo('books');
+    }
+  } catch (err) {
+    try { switchTo('books'); } catch (_) {}
+  }
 });
 document.getElementById('booksDateFrom')?.addEventListener('change', () => {
   if (document.getElementById('booksPeriod')?.value === 'custom') {
