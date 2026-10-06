@@ -2948,6 +2948,55 @@ body:has(.modalback.show) .notif-panel {
   box-shadow: var(--shadow-lg);
   transition: background var(--ease), border-color var(--ease);
 }
+/* Expense / supplier bill — wider, scrollable body, sticky actions */
+.modal.bill-modal {
+  max-width: min(640px, 96vw);
+  width: 100%;
+  max-height: min(92vh, 900px);
+  display: flex;
+  flex-direction: column;
+  padding: 22px 24px 16px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.bill-modal-body {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1 1 auto;
+  padding-right: 4px;
+  margin: 0 0 8px;
+  min-height: 0;
+}
+.bill-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+  background: var(--panel);
+}
+.bill-modal textarea#billNote {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.45;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg, #fff);
+  color: inherit;
+  box-sizing: border-box;
+}
+@media (max-width: 640px) {
+  .modal.bill-modal {
+    max-width: 100%;
+    max-height: 94vh;
+    padding: 16px 14px 12px;
+    border-radius: 14px;
+  }
+}
 .modal h2 {
   margin: 0 0 6px;
   font-size: 18px;
@@ -6363,37 +6412,41 @@ body:has(.modalback.show) .notif-panel {
 </div>
 
 <div class="modalback" id="billModal">
-  <div class="modal" style="max-width:440px">
+  <div class="modal bill-modal">
     <h2 id="billModalTitle">Expense request</h2>
     <p class="section-sub" id="billModalSub">Describe the spend and attach the receipt. Your accountant picks the ledger and posts the journal — you do not need to know bookkeeping codes.</p>
-    <div class="field"><label>Supplier / payee</label><input id="billSupplier" placeholder="e.g. MTN, landlord, distributor"></div>
-    <div class="field" id="billCategoryField">
-      <label id="billCategoryLabel">Suggested category (optional)</label>
-      <select id="billCategory" class="searchable" data-searchable="1"></select>
-      <div class="section-sub" id="billCategoryHint" style="margin-top:4px">Leave blank if unsure — accountant sets this on approval.</div>
-    </div>
-    <div class="field"><label>Supporting documents (receipt / invoice)</label>
-      <input id="billDocs" type="file" multiple accept="image/*,.pdf,.png,.jpg,.jpeg">
-      <div id="billDocsList" class="client-meta" style="margin-top:6px"></div>
-    </div>
-    <div class="field"><label>Amount (incl. tax if any)</label><input id="billAmount" type="number" min="0" step="0.01"></div>
-    <div class="two">
-      <div class="field"><label>Tax amount (optional)</label><input id="billTax" type="number" min="0" step="0.01" placeholder="0"></div>
-      <div class="field"><label>Currency</label><input id="billCurrency" maxlength="3" placeholder="NGN"></div>
-    </div>
-    <div class="two">
-      <div class="field"><label>Bill date</label><input id="billDate" type="date"></div>
+    <div class="bill-modal-body">
+      <div class="field"><label>Supplier / payee</label><input id="billSupplier" placeholder="e.g. MTN, landlord, distributor"></div>
+      <div class="field" id="billCategoryField">
+        <label id="billCategoryLabel">Suggested category (optional)</label>
+        <select id="billCategory" class="searchable" data-searchable="1"></select>
+        <div class="section-sub" id="billCategoryHint" style="margin-top:4px">Leave blank if unsure — accountant sets this on approval.</div>
+      </div>
+      <div class="field"><label>Supporting documents (receipt / invoice)</label>
+        <input id="billDocs" type="file" multiple accept="image/*,.pdf,.png,.jpg,.jpeg">
+        <div id="billDocsList" class="client-meta" style="margin-top:6px"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label>Amount (incl. tax if any)</label><input id="billAmount" type="number" min="0" step="0.01"></div>
+        <div class="field"><label>Tax amount (optional)</label><input id="billTax" type="number" min="0" step="0.01" placeholder="0"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label>Currency</label><input id="billCurrency" maxlength="3" placeholder="NGN"></div>
+        <div class="field"><label>Bill date</label><input id="billDate" type="date"></div>
+      </div>
       <div class="field"><label>Due date</label><input id="billDue" type="date"></div>
+      <div class="field"><label>What is this for? (memo)</label>
+        <textarea id="billNote" rows="4" placeholder="e.g. June rent for Gbagada outlet · POS paper restock · fuel for Lagos delivery run" style="width:100%;min-height:96px;resize:vertical"></textarea>
+      </div>
+      <div class="field" id="billPoField">
+        <label>Link to purchase order (optional · 2-way match)</label>
+        <select id="billPurchaseId" class="searchable" data-searchable="1">
+          <option value="">— No PO —</option>
+        </select>
+        <div class="section-sub" id="billPoHint" style="margin-top:4px">Stock / supplier POs only. Amount is checked against the PO total within your tolerance.</div>
+      </div>
     </div>
-    <div class="field"><label>What is this for?</label><input id="billNote" placeholder="e.g. June rent, POS paper, fuel for delivery"></div>
-    <div class="field" id="billPoField">
-      <label>Link to purchase order (optional · 2-way match)</label>
-      <select id="billPurchaseId" class="searchable" data-searchable="1">
-        <option value="">— No PO —</option>
-      </select>
-      <div class="section-sub" id="billPoHint" style="margin-top:4px">Stock / supplier POs only. Amount is checked against the PO total within your tolerance.</div>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:12px">
+    <div class="bill-modal-actions">
       <button class="button primary" type="button" id="billSave">Submit to accountant</button>
       <button class="button" type="button" id="billCancel">Cancel</button>
     </div>
