@@ -20031,55 +20031,65 @@ function renderBooksCashflow() {
   ensureBooksDb();
   const range = booksDateRange();
   const act = periodActivity();
+  const day = (val) => (typeof booksDateOnly === 'function' ? booksDateOnly(val) : String(val || '').slice(0, 10));
 
-  // Net profit from P&L activity
+  // Net profit from P&L activity (period journals only)
   let netIncome = 0;
   getCoa().forEach(a => {
     if (a.type === 'income') netIncome += accountPeriodNet(a.id, act);
     if (a.type === 'expense') netIncome -= accountPeriodNet(a.id, act);
   });
 
-  // Working capital changes: balance before period vs end of period
+  /**
+   * Cumulative ledger balances as of a cut.
+   * cutExclusive: include journals with date < cutExclusive (YYYY-MM-DD).
+   * null cutExclusive = all journals through “end of time”.
+   */
   function balancesAsOf(cutExclusive) {
     const bal = {};
     getCoa().forEach(a => { bal[a.id] = 0; });
+    const cut = cutExclusive ? day(cutExclusive) : null;
     (db.journals || []).forEach(j => {
-      if (cutExclusive && String(j.date || '') >= cutExclusive) return;
+      const d = day(j.date || j.entry_date);
+      if (!d) return; // skip undated in balance roll-forward
+      if (cut && d >= cut) return;
       (j.lines || []).forEach(l => {
-        if (!bal.hasOwnProperty(l.accountId)) bal[l.accountId] = 0;
-        bal[l.accountId] += (Number(l.debit) || 0) - (Number(l.credit) || 0);
+        const id = l.accountId;
+        if (!id) return;
+        if (!Object.prototype.hasOwnProperty.call(bal, id)) bal[id] = 0;
+        bal[id] += (Number(l.debit) || 0) - (Number(l.credit) || 0);
       });
     });
     return bal;
   }
-  const startCut = range.from || null;
-  const endCut = range.to ? (function() {
-    // include end date: use day after
+
+  // Opening = balances just before range.from; Closing = balances through range.to (inclusive)
+  const startCut = range.from ? day(range.from) : null;
+  let endCut = null;
+  if (range.to) {
     try {
-      const d = new Date(range.to + 'T12:00:00');
+      const d = new Date(day(range.to) + 'T12:00:00');
       d.setDate(d.getDate() + 1);
-      return d.toISOString().slice(0, 10);
-    } catch (_) { return null; }
-  })() : null;
+      endCut = d.toISOString().slice(0, 10);
+    } catch (_) {
+      endCut = day(range.to);
+    }
+  }
   const balStart = balancesAsOf(startCut);
   const balEnd = balancesAsOf(endCut);
 
-  function signedChange(a, start, end) {
-    // asset increase = use of cash (negative for operating WC assets)
-    // liability increase = source of cash
-    const s = start[a.id] || 0;
-    const e = end[a.id] || 0;
-    const delta = e - s; // debit balance increase for assets
-    if (a.type === 'asset') return -delta;
-    if (a.type === 'liability' || a.type === 'equity') return delta; // debit decrease / credit increase → +delta when stored as debit-credit
-    // stored bal is debit - credit, so liability natural is negative; increase in liability means more negative end → delta negative → we want + for cash
-    return 0;
+  function isCashAcct(a) {
+    if (!a) return false;
+    if (a.fsLine === 'cash_and_equivalents' || a.cfSection === 'cash') return true;
+    if (typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a)) return true;
+    return false;
   }
-  // Fix liability: bal is debit-credit, liability increase → balance becomes more negative → delta < 0, cash source should be positive → use -delta for liability? 
-  // Example: AP credit 100: line credit 100 → bal -= 100. Start 0 end -100, delta=-100. Source of cash +100 → return -delta for liability.
+
   function wcCashEffect(a, start, end) {
+    if (isCashAcct(a)) return 0;
     const delta = (end[a.id] || 0) - (start[a.id] || 0);
-    if (a.type === 'asset' && a.cfSection === 'operating' && a.fsLine !== 'cash_and_equivalents') return -delta;
+    // asset ↑ = use of cash (−); liability/equity natural credit ↑ (more negative bal) = source (+)
+    if (a.type === 'asset' && a.cfSection === 'operating') return -delta;
     if ((a.type === 'liability' || a.type === 'equity') && a.cfSection === 'operating') return -delta;
     return 0;
   }
@@ -20089,32 +20099,34 @@ function renderBooksCashflow() {
   getCoa().forEach(a => {
     if (a.cfSection !== 'operating') return;
     if (a.type === 'income' || a.type === 'expense') return;
+    if (isCashAcct(a)) return;
+    // Skip retained earnings — period net income already counted
+    if (a.id === '3200' || /retained/i.test(a.name || '')) return;
     const eff = wcCashEffect(a, balStart, balEnd);
     if (Math.abs(eff) < 0.001) return;
     operatingAdj += eff;
     opLines.push({ name: a.id + ' · ' + a.name, amt: eff });
   });
 
-  // Investing: period net movement on investing accounts (asset purchases increase = use of cash)
   let investing = 0;
   const invLines = [];
   getCoa().forEach(a => {
     if (a.cfSection !== 'investing') return;
+    if (isCashAcct(a)) return;
     const delta = (balEnd[a.id] || 0) - (balStart[a.id] || 0);
-    const eff = a.type === 'asset' ? -delta : -delta;
+    const eff = -delta; // asset purchase ↑ = cash out
     if (Math.abs(eff) < 0.001) return;
     investing += eff;
     invLines.push({ name: a.id + ' · ' + a.name, amt: eff });
   });
 
-  // Financing
   let financing = 0;
   const finLines = [];
   getCoa().forEach(a => {
     if (a.cfSection !== 'financing') return;
+    if (isCashAcct(a)) return;
     const delta = (balEnd[a.id] || 0) - (balStart[a.id] || 0);
-    // equity/loan credit increase (more negative bal) → cash in → -delta
-    const eff = -delta;
+    const eff = -delta; // loan/equity credit ↑ → cash in
     if (Math.abs(eff) < 0.001) return;
     financing += eff;
     finLines.push({ name: a.id + ' · ' + a.name, amt: eff });
@@ -20123,41 +20135,81 @@ function renderBooksCashflow() {
   const operating = netIncome + operatingAdj;
   const netChange = operating + investing + financing;
 
-  // Cash & equivalents change (proof)
-  let cashChange = 0;
-  getCoa().filter(a => a.fsLine === 'cash_and_equivalents' || a.cfSection === 'cash').forEach(a => {
-    cashChange += (balEnd[a.id] || 0) - (balStart[a.id] || 0);
+  // Opening / closing cash & equivalents
+  const cashAccts = getCoa().filter(isCashAcct);
+  let openingCash = 0;
+  let closingCash = 0;
+  const cashDetail = [];
+  cashAccts.forEach(a => {
+    const o = balStart[a.id] || 0;
+    const c = balEnd[a.id] || 0;
+    openingCash += o;
+    closingCash += c;
+    if (Math.abs(o) > 0.001 || Math.abs(c) > 0.001) {
+      cashDetail.push({ name: a.id + ' · ' + a.name, open: o, close: c });
+    }
   });
+  const cashChange = closingCash - openingCash;
+
+  const periodLabel = (range.from || range.to)
+    ? ((range.from || '…') + ' → ' + (range.to || 'today'))
+    : 'all time';
 
   const row = (name, amt, bold) =>
-    '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);' +
-    (bold ? 'font-weight:700' : '') + '"><span>' + name + '</span><span>' + money(amt) + '</span></div>';
+    '<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);' +
+    (bold ? 'font-weight:700' : '') + '"><span>' + name + '</span><span style="font-variant-numeric:tabular-nums;white-space:nowrap">' +
+    money(amt) + '</span></div>';
 
-  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Indirect method · ' +
-    (range.from || range.to ? ((range.from || '…') + ' → ' + (range.to || 'today')) : 'all time') +
-    ' · reporting currency</div>';
+  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Indirect method · ' +
+    periodLabel + ' · reporting currency</div>';
+
+  // Cash position strip
+  html += '<div class="cards" style="margin:0 0 16px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">';
+  html += '<div class="card"><small>Opening cash</small><b>' + money(openingCash) + '</b><span class="mini">' +
+    (range.from ? ('as of ' + range.from) : 'start of books') + '</span></div>';
+  html += '<div class="card"><small>Net change</small><b style="color:' +
+    (netChange >= 0 ? 'var(--green)' : 'var(--red)') + '">' + money(netChange) + '</b><span class="mini">From activities</span></div>';
+  html += '<div class="card card-accent"><small>Closing cash</small><b>' + money(closingCash) + '</b><span class="mini">' +
+    (range.to ? ('through ' + range.to) : 'to date') + '</span></div>';
+  html += '</div>';
 
   html += '<div style="font-weight:700;margin:12px 0 4px">Operating activities</div>';
   html += row('Net profit / (loss)', netIncome, false);
-  opLines.forEach(l => { html += row('  ' + l.name, l.amt, false); });
+  opLines.forEach(l => { html += row('&nbsp;&nbsp;' + l.name, l.amt, false); });
   html += row('Cash from operating activities', operating, true);
 
   html += '<div style="font-weight:700;margin:16px 0 4px">Investing activities</div>';
   if (!invLines.length) html += row('No investing movements', 0, false);
-  invLines.forEach(l => { html += row('  ' + l.name, l.amt, false); });
+  invLines.forEach(l => { html += row('&nbsp;&nbsp;' + l.name, l.amt, false); });
   html += row('Cash from investing activities', investing, true);
 
   html += '<div style="font-weight:700;margin:16px 0 4px">Financing activities</div>';
   if (!finLines.length) html += row('No financing movements', 0, false);
-  finLines.forEach(l => { html += row('  ' + l.name, l.amt, false); });
+  finLines.forEach(l => { html += row('&nbsp;&nbsp;' + l.name, l.amt, false); });
   html += row('Cash from financing activities', financing, true);
 
+  html += '<div style="font-weight:700;margin:16px 0 4px">Cash position</div>';
+  html += row('Opening cash &amp; equivalents', openingCash, false);
   html += row('Net increase / (decrease) in cash', netChange, true);
-  html += row('Change in cash & equivalents (ledger)', cashChange, false);
+  html += row('Closing cash &amp; equivalents', closingCash, true);
+  html += row('Ledger change (closing − opening)', cashChange, false);
+
+  if (cashDetail.length > 1) {
+    html += '<div style="font-size:12px;color:var(--muted);margin:10px 0 4px">By account</div>';
+    cashDetail.forEach(d => {
+      html += '<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;font-size:12px;border-bottom:1px solid var(--line)">' +
+        '<span>' + d.name + '</span>' +
+        '<span style="font-variant-numeric:tabular-nums;color:var(--muted)">' +
+        money(d.open) + ' → ' + money(d.close) + '</span></div>';
+    });
+  }
+
   const bridge = Math.round((netChange - cashChange) * 100) / 100;
   if (Math.abs(bridge) > 1) {
-    html += '<p class="section-sub" style="color:var(--muted)">Bridge difference ' + money(bridge) +
-      ' — usually timing, non-cash equity, or accounts not tagged for cash flow. Refine COA cfSection if needed.</p>';
+    html += '<p class="section-sub" style="margin-top:12px;color:var(--muted)">Bridge difference ' + money(bridge) +
+      ' — often non-cash equity, mistagged COA <code>cfSection</code>, or journals outside the period tags. Check Settings → Chart of accounts.</p>';
+  } else {
+    html += '<p class="section-sub" style="margin-top:12px">Activities reconcile to ledger cash change.</p>';
   }
   el.innerHTML = html;
 }
@@ -31089,6 +31141,20 @@ async function chatLoadChannels() {
   const ok = await chatEnsureClient();
   if (!ok) throw new Error('Sign in required');
   await chatEnsureGeneral();
+  const userId = cloud.user && cloud.user.id;
+  // Slack-style: only channels the current user is a member of
+  let memberChannelIds = null;
+  if (userId) {
+    try {
+      const { data: mems } = await cloud.client
+        .from('chat_channel_members')
+        .select('channel_id')
+        .eq('user_id', userId);
+      memberChannelIds = new Set((mems || []).map(r => r.channel_id).filter(Boolean));
+    } catch (_) {
+      memberChannelIds = null;
+    }
+  }
   const { data, error } = await cloud.client
     .from('chat_channels')
     .select('id, name, slug, type, topic, is_archived, created_at')
@@ -31096,15 +31162,21 @@ async function chatLoadChannels() {
     .eq('is_archived', false)
     .order('name');
   if (error) throw error;
-  const all = data || [];
+  let all = data || [];
+  if (memberChannelIds) {
+    all = all.filter(c => memberChannelIds.has(c.id));
+  }
   chatState.channels = all.filter(c => c.type === 'channel' || !c.type);
   chatState.dms = all.filter(c => c.type === 'dm');
-  if (!chatState.channelId) {
+  if (!chatState.channelId || !all.some(c => c.id === chatState.channelId)) {
     const gen = chatState.channels.find(c => c.slug === 'general') || chatState.channels[0];
     if (gen) {
       chatState.channelId = gen.id;
       chatState.channelName = gen.name || gen.slug;
       chatState.channelType = 'channel';
+    } else {
+      chatState.channelId = null;
+      chatState.channelName = '';
     }
   }
   renderChatChannels();
