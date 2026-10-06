@@ -9549,6 +9549,7 @@ function switchTo(v) {
   try { applyRoleGates(); } catch (_) {}
   if (v === 'profile') profile();
   if (v === 'plan') planView();
+  try { refreshNotificationUi(); } catch (_) {}
 }
 
 function confirmAction(title, message, onConfirm, opts) {
