@@ -957,6 +957,20 @@ input:focus:not(:focus-visible) {
   box-shadow: 0 16px 48px color-mix(in srgb, var(--text) 14%, transparent);
   overflow: hidden;
 }
+/* display:flex above would otherwise win over the hidden attribute */
+.notif-panel[hidden],
+.notif-panel.is-closed {
+  display: none !important;
+}
+/* Keep bell below true modals so expense request is not covered */
+.modalback.show ~ .notif-bell,
+body:has(.modalback.show) .notif-bell,
+body:has(.modalback.show) .notif-panel {
+  z-index: 70;
+}
+body:has(.modalback.show) .notif-panel {
+  display: none !important;
+}
 .notif-panel-head {
   display: flex;
   justify-content: space-between;
@@ -965,6 +979,12 @@ input:focus:not(:focus-visible) {
   flex-wrap: wrap;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
+}
+.notif-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
 }
 .notif-panel-list {
   overflow: auto;
@@ -2911,7 +2931,7 @@ input:focus:not(:focus-visible) {
   display: none;
   place-items: center;
   padding: 18px;
-  z-index: 80;
+  z-index: 140;
   transition: background var(--ease);
 }
 [data-theme="dark"] .modalback {
@@ -13494,8 +13514,13 @@ function pushApprovalNotification(opts) {
   );
   if (recent) return recent;
   db.notifications.unshift(n);
-  if (db.notifications.length > 120) db.notifications = db.notifications.slice(0, 120);
-  try { save(); } catch (_) {}
+  if (db.notifications.length > 60) db.notifications = db.notifications.slice(0, 60);
+  try {
+    // Prefer a light save path; full save can fail when browser storage is full
+    if (typeof save === 'function') save();
+  } catch (err) {
+    try { console.warn('notif save', err); } catch (_) {}
+  }
   try { refreshNotificationUi(); } catch (_) {}
   try { maybeBrowserNotify(n); } catch (_) {}
   return n;
@@ -13577,6 +13602,31 @@ function requestBrowserNotifyPermission() {
   }).catch(() => toast('Could not request permission'));
 }
 
+function closeNotifPanel() {
+  const panel = document.getElementById('notifPanel');
+  if (!panel) return;
+  panel.hidden = true;
+  panel.classList.add('is-closed');
+  panel.setAttribute('aria-hidden', 'true');
+}
+
+function openNotifPanel() {
+  ensureNotifUiShell();
+  const panel = document.getElementById('notifPanel');
+  if (!panel) return;
+  // Don't open over an active modal
+  if (document.querySelector('.modalback.show')) return;
+  panel.hidden = false;
+  panel.classList.remove('is-closed');
+  panel.setAttribute('aria-hidden', 'false');
+  renderNotificationPanel();
+}
+
+function isNotifPanelOpen() {
+  const panel = document.getElementById('notifPanel');
+  return !!(panel && !panel.hidden && !panel.classList.contains('is-closed'));
+}
+
 function ensureNotifUiShell() {
   if (document.getElementById('notifBell')) return;
   const btn = document.createElement('button');
@@ -13584,36 +13634,69 @@ function ensureNotifUiShell() {
   btn.id = 'notifBell';
   btn.className = 'notif-bell';
   btn.setAttribute('aria-label', 'Notifications');
+  btn.setAttribute('aria-expanded', 'false');
   btn.innerHTML = '<span class="notif-bell-icon" aria-hidden="true">🔔</span><span class="nav-badge" id="notifBellBadge" hidden></span>';
   document.body.appendChild(btn);
 
   const panel = document.createElement('div');
   panel.id = 'notifPanel';
-  panel.className = 'notif-panel';
+  panel.className = 'notif-panel is-closed';
   panel.hidden = true;
+  panel.setAttribute('aria-hidden', 'true');
   panel.innerHTML =
     '<div class="notif-panel-head">' +
     '<b>Notifications</b>' +
-    '<div style="display:flex;gap:6px">' +
+    '<div class="notif-panel-actions">' +
     '<button type="button" class="button small" id="notifEnableDesktop">Desktop alerts</button>' +
     '<button type="button" class="button small" id="notifMarkAll">Mark all read</button>' +
-    '<button type="button" class="button small" id="notifPanelClose">Close</button>' +
+    '<button type="button" class="button small primary" id="notifPanelClose">Close</button>' +
     '</div></div>' +
     '<div id="notifPanelList" class="notif-panel-list"></div>';
   document.body.appendChild(panel);
 
   btn.addEventListener('click', (e) => {
+    e.preventDefault();
     e.stopPropagation();
-    const open = panel.hidden;
-    panel.hidden = !open;
-    if (open) renderNotificationPanel();
+    if (isNotifPanelOpen()) {
+      closeNotifPanel();
+      btn.setAttribute('aria-expanded', 'false');
+    } else {
+      openNotifPanel();
+      btn.setAttribute('aria-expanded', 'true');
+    }
   });
-  document.getElementById('notifPanelClose')?.addEventListener('click', () => { panel.hidden = true; });
-  document.getElementById('notifMarkAll')?.addEventListener('click', () => markAllNotificationsRead());
-  document.getElementById('notifEnableDesktop')?.addEventListener('click', () => requestBrowserNotifyPermission());
+
+  // Event delegation so Close always works even if DOM is re-touched
+  panel.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const closeBtn = e.target.closest('#notifPanelClose');
+    if (closeBtn) {
+      e.preventDefault();
+      closeNotifPanel();
+      btn.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    if (e.target.closest('#notifMarkAll')) {
+      e.preventDefault();
+      markAllNotificationsRead();
+      return;
+    }
+    if (e.target.closest('#notifEnableDesktop')) {
+      e.preventDefault();
+      requestBrowserNotifyPermission();
+    }
+  });
+
   document.addEventListener('click', (e) => {
-    if (!panel.hidden && !panel.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
-      panel.hidden = true;
+    if (!isNotifPanelOpen()) return;
+    if (panel.contains(e.target) || btn.contains(e.target)) return;
+    closeNotifPanel();
+    btn.setAttribute('aria-expanded', 'false');
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isNotifPanelOpen()) {
+      closeNotifPanel();
+      btn.setAttribute('aria-expanded', 'false');
     }
   });
 }
@@ -22628,6 +22711,7 @@ function openBillModal() {
     toast('Your role cannot submit expense requests');
     return;
   }
+  try { closeNotifPanel(); } catch (_) {}
   try { wireDocsPreview('billDocs', 'billDocsList'); } catch (_) {}
   const m = document.getElementById('billModal');
   if (!m) {
@@ -24111,6 +24195,7 @@ function booksView() {
 }
 
 function openCashModal() {
+  try { closeNotifPanel(); } catch (_) {}
   const m = document.getElementById('cashModal');
   if (!m) return;
   if (typeof canRequestExpense === 'function' && !canRequestExpense() && !can('books.write')) {
