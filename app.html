@@ -4198,19 +4198,19 @@ body:has(.modalback.show) .notif-panel {
     <nav class="nav" aria-label="Primary">
       <div class="nav-group" role="group" aria-label="Home">
         <button class="active" data-view="dashboard" title="Home"><span aria-hidden="true">⌂</span><span class="nav-label">Home</span></button>
-        <button data-view="pulse" title="Dashboard"><span aria-hidden="true">◫</span><span class="nav-label">Dashboard</span></button>
+        <button data-view="pulse" data-app="pulse" title="Dashboard"><span aria-hidden="true">◫</span><span class="nav-label">Dashboard</span></button>
       </div>
       <div class="nav-divider" aria-hidden="true"></div>
       <div class="nav-group" role="group" aria-label="Work">
-        <button data-view="books" title="Books" data-role-hide="books.view"><span aria-hidden="true">◎</span><span class="nav-label">Books</span></button>
-        <button data-view="inventory" title="Inventory"><span aria-hidden="true">■</span><span class="nav-label">Inventory</span><span class="nav-badge" id="inventoryNavBadge" hidden></span></button>
-        <a class="nav-link-pos" href="/pos.html" title="POS checkout"><span aria-hidden="true">▣</span><span class="nav-label">POS</span></a>
-        <button data-view="chat" title="Team chat"><span aria-hidden="true">💬</span><span class="nav-label">Chat</span><span class="nav-badge" id="chatNavBadge" hidden></span></button>
+        <button data-view="books" data-app="books" title="Books" data-role-hide="books.view"><span aria-hidden="true">◎</span><span class="nav-label">Books</span></button>
+        <button data-view="inventory" data-app="inventory" title="Inventory"><span aria-hidden="true">■</span><span class="nav-label">Inventory</span><span class="nav-badge" id="inventoryNavBadge" hidden></span></button>
+        <a class="nav-link-pos" href="/pos.html" data-app="pos" title="POS checkout"><span aria-hidden="true">▣</span><span class="nav-label">POS</span></a>
+        <button data-view="chat" data-app="chat" title="Team chat"><span aria-hidden="true">💬</span><span class="nav-label">Chat</span><span class="nav-badge" id="chatNavBadge" hidden></span></button>
       </div>
       <div class="nav-divider" aria-hidden="true"></div>
       <div class="nav-group" role="group" aria-label="Account">
-        <button data-view="plan" title="Plan &amp; team"><span aria-hidden="true">◆</span><span class="nav-label">Plan</span></button>
-        <button data-view="profile" title="Settings"><span aria-hidden="true">⚙</span><span class="nav-label">Settings</span></button>
+        <button data-view="plan" data-app="plan" title="Plan &amp; team"><span aria-hidden="true">◆</span><span class="nav-label">Plan</span></button>
+        <button data-view="profile" data-app="profile" title="Settings"><span aria-hidden="true">⚙</span><span class="nav-label">Settings</span></button>
       </div>
     </nav>
     <div class="side-footer">
@@ -5948,33 +5948,33 @@ body:has(.modalback.show) .notif-panel {
 
 <nav class="bottom-nav" aria-label="Mobile primary">
   <button class="active" data-view="dashboard" type="button"><span aria-hidden="true">⌂</span>Home</button>
-  <button data-view="pulse" type="button"><span aria-hidden="true">◫</span>Pulse</button>
-  <button data-view="approvals" type="button"><span aria-hidden="true">✓</span>Approvals</button>
-  <button data-view="chat" type="button"><span aria-hidden="true">💬</span>Chat</button>
+  <button data-view="pulse" data-app="pulse" type="button"><span aria-hidden="true">◫</span>Pulse</button>
+  <button data-view="approvals" data-app="approvals" type="button"><span aria-hidden="true">✓</span>Approvals</button>
+  <button data-view="chat" data-app="chat" type="button"><span aria-hidden="true">💬</span>Chat</button>
   <button type="button" id="btnMoreNav" aria-label="More apps"><span aria-hidden="true">⋯</span>More</button>
 </nav>
 
 <div class="more-sheet-back" id="moreSheetBack" aria-hidden="true">
   <div class="more-sheet" role="dialog" aria-label="More apps">
     <div class="more-sheet-handle"></div>
-    <div class="more-sheet-title">Sales</div>
-    <div class="more-sheet-grid">
-      <button type="button" data-more-view="invoices"><span>▤</span>Invoices</button>
-      <button type="button" data-more-view="clients"><span>☺</span>Clients</button>
-      <button type="button" data-more-view="receipts"><span>◈</span>Receipts</button>
-      <button type="button" data-more-view="recurring"><span>↻</span>Recurring</button>
+    <div class="more-sheet-title" data-more-section="sales">Sales</div>
+    <div class="more-sheet-grid" data-more-section="sales">
+      <button type="button" data-more-view="invoices" data-app="invoices"><span>▤</span>Invoices</button>
+      <button type="button" data-more-view="clients" data-app="clients"><span>☺</span>Clients</button>
+      <button type="button" data-more-view="receipts" data-app="receipts"><span>◈</span>Receipts</button>
+      <button type="button" data-more-view="recurring" data-app="recurring"><span>↻</span>Recurring</button>
     </div>
-    <div class="more-sheet-title">Stock &amp; shops</div>
-    <div class="more-sheet-grid">
-      <button type="button" data-more-view="inventory"><span>■</span>Inventory <span class="nav-badge" id="inventoryMoreBadge" hidden></span></button>
-      <a href="/pos.html"><span>▣</span>POS</a>
+    <div class="more-sheet-title" data-more-section="stock">Stock &amp; shops</div>
+    <div class="more-sheet-grid" data-more-section="stock">
+      <button type="button" data-more-view="inventory" data-app="inventory"><span>■</span>Inventory <span class="nav-badge" id="inventoryMoreBadge" hidden></span></button>
+      <a href="/pos.html" data-app="pos"><span>▣</span>POS</a>
     </div>
-    <div class="more-sheet-title">Finance &amp; team</div>
-    <div class="more-sheet-grid">
-      <button type="button" data-more-view="books" data-role-hide="books.view"><span>◎</span>Books</button>
-      <button type="button" data-more-view="approvals"><span>✓</span>Approvals</button>
-      <button type="button" data-more-view="plan"><span>◆</span>Plan</button>
-      <button type="button" data-more-view="profile"><span>⚙</span>Settings</button>
+    <div class="more-sheet-title" data-more-section="finance">Finance &amp; team</div>
+    <div class="more-sheet-grid" data-more-section="finance">
+      <button type="button" data-more-view="books" data-app="books" data-role-hide="books.view"><span>◎</span>Books</button>
+      <button type="button" data-more-view="approvals" data-app="approvals"><span>✓</span>Approvals</button>
+      <button type="button" data-more-view="plan" data-app="plan"><span>◆</span>Plan</button>
+      <button type="button" data-more-view="profile" data-app="profile"><span>⚙</span>Settings</button>
     </div>
   </div>
 </div>
@@ -8684,7 +8684,7 @@ function applyRoleGates() {
     el.hidden = !can(need);
   });
 
-  // --- Sidebar + bottom/more nav ---
+  // --- Sidebar + bottom/more nav (role) ---
   const navRules = [
     { view: 'plan', perm: 'billing.manage' },
     { view: 'books', perm: 'books.view' }
@@ -8693,8 +8693,15 @@ function applyRoleGates() {
     document.querySelectorAll(
       '.nav button[data-view="' + view + '"], .bottom-nav button[data-view="' + view + '"], .more-sheet-grid button[data-more-view="' + view + '"]'
     ).forEach(btn => {
-      btn.style.display = can(perm) ? '' : 'none';
-      btn.hidden = !can(perm);
+      // Role hide; install gate applied separately (and may already have hidden)
+      if (!can(perm)) {
+        btn.style.display = 'none';
+        btn.hidden = true;
+        btn.dataset.roleNavHidden = '1';
+      } else {
+        btn.dataset.roleNavHidden = '0';
+        // leave display to applyAppInstallGates unless install also hides
+      }
     });
   });
 
@@ -8713,6 +8720,105 @@ function applyRoleGates() {
     chip.dataset.role = role || '';
     chip.hidden = !cloud.user;
   }
+
+  // Install map must run after role rules so both layers stick
+  try { applyAppInstallGates(); } catch (_) {}
+}
+
+/**
+ * Hide sidebar / bottom nav / More sheet entries for apps not installed.
+ * Core apps always show (subject to role gates above).
+ */
+function applyAppInstallGates() {
+  if (typeof isAppInstalled !== 'function') return;
+
+  document.querySelectorAll('[data-app]').forEach(el => {
+    const appId = el.getAttribute('data-app');
+    if (!appId) return;
+    const installed = isAppInstalled(appId);
+    const roleBlocked = el.dataset.roleNavHidden === '1' || el.getAttribute('data-role-hide') && typeof can === 'function' && !can(el.getAttribute('data-role-hide'));
+    const show = installed && !roleBlocked;
+    el.hidden = !show;
+    el.style.display = show ? '' : 'none';
+    if (!show) el.setAttribute('aria-hidden', 'true');
+    else el.removeAttribute('aria-hidden');
+  });
+
+  // Hide More-sheet section titles when their grid has no visible items
+  document.querySelectorAll('.more-sheet-title[data-more-section]').forEach(title => {
+    const key = title.getAttribute('data-more-section');
+    const grid = document.querySelector('.more-sheet-grid[data-more-section="' + key + '"]');
+    if (!grid) return;
+    const anyVisible = Array.from(grid.querySelectorAll('[data-app], [data-more-view], a')).some(el => {
+      if (el.hidden) return false;
+      if (el.style.display === 'none') return false;
+      return true;
+    });
+    title.hidden = !anyVisible;
+    title.style.display = anyVisible ? '' : 'none';
+    grid.hidden = !anyVisible;
+    grid.style.display = anyVisible ? '' : 'none';
+  });
+
+  // Hide empty sidebar groups + adjacent dividers
+  document.querySelectorAll('.nav .nav-group').forEach(group => {
+    const any = Array.from(group.querySelectorAll('[data-app], [data-view]')).some(el => {
+      if (el.getAttribute('data-view') === 'dashboard') return true;
+      return !el.hidden && el.style.display !== 'none';
+    });
+    group.hidden = !any;
+    group.style.display = any ? '' : 'none';
+  });
+  document.querySelectorAll('.nav .nav-divider').forEach(div => {
+    const prev = div.previousElementSibling;
+    const next = div.nextElementSibling;
+    const prevOn = prev && !prev.hidden && prev.style.display !== 'none';
+    const nextOn = next && !next.hidden && next.style.display !== 'none';
+    const show = prevOn && nextOn;
+    div.hidden = !show;
+    div.style.display = show ? '' : 'none';
+  });
+
+  // If current view belongs to an uninstalled app, bounce to Home
+  try {
+    const active = document.querySelector('.view.active');
+    const viewId = active && active.id;
+    if (viewId && viewId !== 'dashboard') {
+      const appId = VIEW_TO_APP[viewId] || viewId;
+      if (appId && typeof isAppInstalled === 'function' && !isAppInstalled(appId)) {
+        if (typeof switchTo === 'function') switchTo('dashboard');
+      }
+    }
+  } catch (_) {}
+}
+
+/** Map SPA view ids → registry app ids (for install gates on navigation). */
+const VIEW_TO_APP = {
+  pulse: 'pulse',
+  invoices: 'invoices',
+  clients: 'clients',
+  books: 'books',
+  inventory: 'inventory',
+  approvals: 'approvals',
+  chat: 'chat',
+  recurring: 'recurring',
+  receipts: 'receipts',
+  plan: 'plan',
+  profile: 'profile',
+  pos: 'pos'
+};
+
+function requireAppInstalled(viewOrAppId, opts) {
+  opts = opts || {};
+  const appId = VIEW_TO_APP[viewOrAppId] || viewOrAppId;
+  if (!appId || typeof isAppInstalled !== 'function') return true;
+  if (isAppInstalled(appId)) return true;
+  const app = typeof appRegistryEntry === 'function' ? appRegistryEntry(appId) : null;
+  const name = (app && app.name) || appId;
+  if (!opts.silent) {
+    try { toast(name + ' is not installed. Open Manage apps on Home to add it.'); } catch (_) {}
+  }
+  return false;
 }
 
 /** Block navigation to views the role cannot open. */
@@ -9782,6 +9888,10 @@ function restoreNavOnBoot() {
 }
 
 function switchTo(v) {
+  // Block navigation into apps the org has not installed
+  if (v && v !== 'dashboard' && typeof requireAppInstalled === 'function') {
+    if (!requireAppInstalled(v)) return;
+  }
   try { closeMoreSheet(); } catch (_) {}
   // Legacy inventory routes → spine
   if (LEGACY_TO_INV_TAB[v]) {
@@ -10223,6 +10333,8 @@ const APP_REGISTRY = [
     category: 'system',
     core: true,
     defaultInstalled: true,
+    /** System chrome — not a home-grid app; open via rail / account menu */
+    homeTile: false,
     industries: ['all']
   },
   {
@@ -10235,6 +10347,7 @@ const APP_REGISTRY = [
     category: 'system',
     core: true,
     defaultInstalled: true,
+    homeTile: false,
     industries: ['all']
   },
   // —— Optional platform apps (default on for existing orgs) ——
@@ -10476,9 +10589,18 @@ function appBadge(app) {
 }
 
 /** Runtime tile list for home launcher (registry + install + role). */
+function isHomeTileApp(app) {
+  if (!app) return false;
+  if (app.comingSoon) return false;
+  if (app.homeTile === false) return false;
+  if (app.category === 'system') return false;
+  return true;
+}
+
+/** Apps shown on the Home launcher grid (excludes Settings / Plan system chrome). */
 function ecoAppCatalog() {
   const biz = (db && db.profile && db.profile.name) || 'your business';
-  return APP_REGISTRY.filter(a => !a.comingSoon).map(a => {
+  return APP_REGISTRY.filter(a => isHomeTileApp(a)).map(a => {
     const tile = {
       id: a.id,
       name: a.name,
@@ -10579,7 +10701,7 @@ function renderEcosystemHome() {
     }
     if (bar) {
       const canManage = canManageApps();
-      const installedCount = APP_REGISTRY.filter(a => !a.comingSoon && isAppInstalled(a.id)).length;
+      const installedCount = APP_REGISTRY.filter(a => isHomeTileApp(a) && isAppInstalled(a.id)).length;
       bar.innerHTML =
         '<p class="eco-home-label" style="margin:0">Your apps · ' + installedCount + ' installed</p>' +
         (canManage
@@ -10622,7 +10744,7 @@ function openManageAppsModal() {
       '<div class="modal manage-apps-modal" role="dialog" aria-labelledby="manageAppsTitle">' +
       '<div class="manage-apps-head">' +
       '<div><h2 id="manageAppsTitle" style="margin:0">Manage apps</h2>' +
-      '<p class="section-sub" style="margin:6px 0 0">Turn apps on for this organisation. Core OS apps stay on.</p></div>' +
+      '<p class="section-sub" style="margin:6px 0 0">Install work apps for this organisation. Settings and Plan live in the account menu and sidebar — not on Home.</p></div>' +
       '<button type="button" class="button" id="manageAppsClose">Close</button></div>' +
       '<div id="manageAppsBody" class="manage-apps-body"></div></div>';
     document.body.appendChild(back);
@@ -10646,7 +10768,7 @@ function renderManageAppsBody() {
     { key: 'commerce', label: 'Commerce' },
     { key: 'control', label: 'Control' },
     { key: 'team', label: 'Team' },
-    { key: 'system', label: 'System' },
+    { key: 'system', label: 'Account (sidebar & menu)' },
     { key: 'industry', label: 'Industry (roadmap)' }
   ];
   let html = '';
@@ -10658,9 +10780,12 @@ function renderManageAppsBody() {
       const on = isAppInstalled(a.id);
       const soon = !!a.comingSoon;
       const core = !!a.core;
+      const systemChrome = a.category === 'system' || a.homeTile === false;
       let action = '';
       if (soon) {
         action = '<span class="manage-apps-pill">Coming soon</span>';
+      } else if (systemChrome) {
+        action = '<span class="manage-apps-pill manage-apps-pill-on">Account menu</span>';
       } else if (core) {
         action = '<span class="manage-apps-pill manage-apps-pill-on">Always on</span>';
       } else if (on) {
@@ -10685,6 +10810,8 @@ function renderManageAppsBody() {
         toast('App installed');
         renderManageAppsBody();
         renderEcosystemHome();
+        try { applyAppInstallGates(); } catch (_) {}
+        try { applyRoleGates(); } catch (_) {}
       } catch (e) { toast(e.message || 'Could not install'); }
     });
   });
@@ -10695,6 +10822,8 @@ function renderManageAppsBody() {
         toast('App removed from home');
         renderManageAppsBody();
         renderEcosystemHome();
+        try { applyAppInstallGates(); } catch (_) {}
+        try { applyRoleGates(); } catch (_) {}
       } catch (e) { toast(e.message || 'Could not remove'); }
     });
   });
