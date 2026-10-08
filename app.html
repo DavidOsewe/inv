@@ -565,6 +565,18 @@ input:focus:not(:focus-visible) {
   margin: 0 auto 8px;
   max-width: 920px;
 }
+.eco-home-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 16px;
+  flex-wrap: wrap;
+}
+.eco-home-bar .eco-home-label {
+  margin: 0;
+  text-align: left;
+}
 .eco-home-label {
   font-size: 11px;
   font-weight: 800;
@@ -573,6 +585,95 @@ input:focus:not(:focus-visible) {
   color: var(--muted);
   margin: 0 0 16px;
   text-align: center;
+}
+.manage-apps-modal {
+  max-width: 560px;
+  width: min(560px, 94vw);
+  max-height: min(88vh, 720px);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 20px 16px;
+}
+.manage-apps-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.manage-apps-body {
+  overflow: auto;
+  flex: 1 1 auto;
+  padding-right: 4px;
+}
+.manage-apps-group {
+  margin-bottom: 16px;
+}
+.manage-apps-group-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.manage-apps-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  background: var(--panel);
+}
+.manage-apps-row.is-on {
+  border-color: color-mix(in srgb, var(--blue) 35%, var(--line));
+  background: color-mix(in srgb, var(--blue-soft, #eff6ff) 55%, var(--panel));
+}
+.manage-apps-row.is-soon {
+  opacity: 0.72;
+}
+.manage-apps-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  background: var(--panel-2);
+  flex: 0 0 36px;
+}
+.manage-apps-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.manage-apps-copy b {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.manage-apps-copy span {
+  font-size: 12px;
+  color: var(--muted);
+}
+.manage-apps-action {
+  flex: 0 0 auto;
+}
+.manage-apps-pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.manage-apps-pill-on {
+  background: var(--blue-soft, #eff6ff);
+  color: var(--blue);
 }
 .eco-grid {
   display: grid;
@@ -8073,7 +8174,9 @@ const defaultDB = {
   activeLocationId: null,
   transferPrintOptions: null,
   stockTransfers: [],
-  transferNextNumber: 1
+  transferNextNumber: 1,
+  /** Org app install map: { [appId]: true }. null = use registry defaults (all defaultInstalled). */
+  installedApps: null
 };
 const LEGACY_DB_KEY = 'invoicedey-v2';
 const ANON_DB_KEY = 'invoicedey-anonymous-v1';
@@ -8105,6 +8208,10 @@ function normalizeDbProfile() {
   if (!Array.isArray(db.stockTransfers)) db.stockTransfers = [];
   if (!db.transferNextNumber || db.transferNextNumber < 1) db.transferNextNumber = 1;
   if (!db.booksSettings) db.booksSettings = { invoiceFeed: true };
+  // App registry install state (Business OS)
+  if (db.installedApps != null && (typeof db.installedApps !== 'object' || Array.isArray(db.installedApps))) {
+    db.installedApps = null;
+  }
   // Migrate older profiles — never overwrite an explicit reporting currency
   if (db.profile) {
     db.profile.taxId = db.profile.taxId ?? '';
@@ -10063,146 +10170,343 @@ function renderCollectionsPanel() {
 }
 
 
-/** Product tiles for the ecosystem home launcher. */
+/**
+ * Business OS — app registry (platform contract).
+ * Kernel apps are always on. Optional apps use db.installedApps.
+ * Industry apps can be registered as comingSoon until built.
+ */
+const APP_REGISTRY = [
+  // —— Kernel (always installed) ——
+  {
+    id: 'pulse',
+    name: 'Dashboard',
+    desc: 'Money pulse',
+    icon: '📊',
+    tone: 'violet',
+    view: 'pulse',
+    category: 'kernel',
+    core: true,
+    defaultInstalled: true,
+    industries: ['all']
+  },
+  {
+    id: 'invoices',
+    name: 'Invoices',
+    desc: 'Bill & collect',
+    icon: '▤',
+    tone: 'blue',
+    view: 'invoices',
+    category: 'finance',
+    core: true,
+    defaultInstalled: true,
+    industries: ['all']
+  },
+  {
+    id: 'clients',
+    name: 'Clients',
+    desc: 'Directory',
+    icon: '♙',
+    tone: 'sky',
+    view: 'clients',
+    category: 'finance',
+    core: true,
+    defaultInstalled: true,
+    industries: ['all']
+  },
+  {
+    id: 'profile',
+    name: 'Settings',
+    desc: 'Business profile',
+    icon: '⚙',
+    tone: 'slate',
+    view: 'profile',
+    category: 'system',
+    core: true,
+    defaultInstalled: true,
+    industries: ['all']
+  },
+  {
+    id: 'plan',
+    name: 'Plan',
+    desc: 'Billing & team',
+    icon: '◆',
+    tone: 'rose',
+    view: 'plan',
+    category: 'system',
+    core: true,
+    defaultInstalled: true,
+    industries: ['all']
+  },
+  // —— Optional platform apps (default on for existing orgs) ——
+  {
+    id: 'books',
+    name: 'Books',
+    desc: 'Ledger & bank',
+    icon: '◎',
+    tone: 'indigo',
+    view: 'books',
+    category: 'finance',
+    core: false,
+    defaultInstalled: true,
+    need: 'books.view',
+    industries: ['all']
+  },
+  {
+    id: 'pos',
+    name: 'POS',
+    desc: 'Checkout',
+    icon: '▣',
+    tone: 'green',
+    href: '/pos.html',
+    category: 'commerce',
+    core: false,
+    defaultInstalled: true,
+    need: 'pos.sell',
+    industries: ['retail', 'hospitality', 'salon']
+  },
+  {
+    id: 'inventory',
+    name: 'Inventory',
+    desc: 'Stock & shops',
+    icon: '■',
+    tone: 'teal',
+    view: 'inventory',
+    category: 'commerce',
+    core: false,
+    defaultInstalled: true,
+    industries: ['retail', 'distribution', 'hospitality']
+  },
+  {
+    id: 'approvals',
+    name: 'Approvals',
+    desc: 'Requests',
+    icon: '✓',
+    tone: 'amber',
+    view: 'approvals',
+    category: 'control',
+    core: false,
+    defaultInstalled: true,
+    industries: ['all']
+  },
+  {
+    id: 'chat',
+    name: 'Team chat',
+    desc: 'Channels & DMs',
+    icon: '💬',
+    tone: 'pink',
+    view: 'chat',
+    category: 'team',
+    core: false,
+    defaultInstalled: true,
+    industries: ['all']
+  },
+  {
+    id: 'recurring',
+    name: 'Recurring',
+    desc: 'Auto invoices',
+    icon: '↻',
+    tone: 'cyan',
+    view: 'recurring',
+    category: 'finance',
+    core: false,
+    defaultInstalled: true,
+    industries: ['all']
+  },
+  {
+    id: 'receipts',
+    name: 'Receipts',
+    desc: 'Payment proofs',
+    icon: '◈',
+    tone: 'orange',
+    view: 'receipts',
+    category: 'finance',
+    core: false,
+    defaultInstalled: true,
+    industries: ['all']
+  },
+  // —— Industry apps (registry stubs — not built yet) ——
+  {
+    id: 'ecommerce',
+    name: 'Commerce',
+    desc: 'Online orders',
+    icon: '🛍️',
+    tone: 'blue',
+    category: 'industry',
+    core: false,
+    defaultInstalled: false,
+    comingSoon: true,
+    industries: ['ecommerce', 'retail']
+  },
+  {
+    id: 'hospitality',
+    name: 'Hospitality',
+    desc: 'Rooms & covers',
+    icon: '🏨',
+    tone: 'amber',
+    category: 'industry',
+    core: false,
+    defaultInstalled: false,
+    comingSoon: true,
+    industries: ['hospitality']
+  },
+  {
+    id: 'logistics',
+    name: 'Logistics',
+    desc: 'Deliveries',
+    icon: '🚚',
+    tone: 'teal',
+    category: 'industry',
+    core: false,
+    defaultInstalled: false,
+    comingSoon: true,
+    industries: ['logistics', 'distribution']
+  },
+  {
+    id: 'supply_chain',
+    name: 'Supply chain',
+    desc: 'Suppliers & lanes',
+    icon: '🔗',
+    tone: 'indigo',
+    category: 'industry',
+    core: false,
+    defaultInstalled: false,
+    comingSoon: true,
+    industries: ['distribution', 'manufacturing']
+  }
+];
+
+function appRegistryEntry(id) {
+  return APP_REGISTRY.find(a => a.id === id) || null;
+}
+
+function ensureInstalledAppsMap() {
+  if (!db) return {};
+  if (db.installedApps && typeof db.installedApps === 'object' && !Array.isArray(db.installedApps)) {
+    return db.installedApps;
+  }
+  const map = {};
+  APP_REGISTRY.forEach(a => {
+    if (a.core || a.defaultInstalled) map[a.id] = true;
+  });
+  db.installedApps = map;
+  return map;
+}
+
+function isAppInstalled(id) {
+  const app = appRegistryEntry(id);
+  if (!app) return false;
+  if (app.core) return true;
+  if (app.comingSoon) return false;
+  // Legacy orgs: null map means all defaultInstalled apps are on
+  if (db.installedApps == null) return !!(app.defaultInstalled || app.core);
+  const map = db.installedApps;
+  if (Object.prototype.hasOwnProperty.call(map, id)) return !!map[id];
+  return !!(app.defaultInstalled || app.core);
+}
+
+function canManageApps() {
+  try {
+    return can('team.manage') || can('profile.edit') || currentOrgRole() === 'owner' || currentOrgRole() === 'manager';
+  } catch (_) {
+    return true;
+  }
+}
+
+function installApp(id) {
+  const app = appRegistryEntry(id);
+  if (!app) throw new Error('Unknown app');
+  if (app.comingSoon) throw new Error(app.name + ' is coming soon');
+  if (app.core) return true;
+  if (!canManageApps()) throw new Error('Only owners or managers can install apps');
+  const map = ensureInstalledAppsMap();
+  map[id] = true;
+  db.installedApps = map;
+  try { save(); } catch (_) {}
+  return true;
+}
+
+function uninstallApp(id) {
+  const app = appRegistryEntry(id);
+  if (!app) throw new Error('Unknown app');
+  if (app.core) throw new Error(app.name + ' is part of the core OS and cannot be removed');
+  if (!canManageApps()) throw new Error('Only owners or managers can remove apps');
+  const map = ensureInstalledAppsMap();
+  map[id] = false;
+  db.installedApps = map;
+  try { save(); } catch (_) {}
+  return true;
+}
+
+function appRoleVisible(app) {
+  if (!app) return false;
+  if (app.comingSoon) return true;
+  try {
+    if (app.id === 'books') return can('books.view');
+    if (app.id === 'pos') return can('pos.sell');
+    if (app.id === 'inventory') {
+      return can('inventory.manage') || can('transfers.create') || can('purchases.create') || can('pos.sell');
+    }
+    if (app.id === 'approvals') {
+      return can('expenses.request') || can('expenses.approve') || can('expenses.review') ||
+        can('transfers.approve') || can('purchases.approve') || can('transfers.create') || can('purchases.create');
+    }
+    if (app.id === 'chat') return !!(cloud && cloud.user);
+  } catch (_) {}
+  return true;
+}
+
+function appBadge(app) {
+  if (!app) return '';
+  try {
+    if (app.id === 'approvals') {
+      if (typeof pendingApprovalsCount === 'function') {
+        const n = pendingApprovalsCount();
+        if (n > 0) return String(n > 99 ? '99+' : n);
+      }
+      const mine = typeof listMyExpenseRequests === 'function' ? listMyExpenseRequests() : [];
+      const pendingMine = mine.filter(r => r.status === 'pending_approval' || r.status === 'pending_review').length;
+      return pendingMine > 0 ? String(pendingMine) : '';
+    }
+    if (app.id === 'chat') {
+      const el = document.getElementById('chatNavBadge');
+      if (el && !el.hidden && el.textContent) return el.textContent;
+    }
+  } catch (_) {}
+  return '';
+}
+
+/** Runtime tile list for home launcher (registry + install + role). */
 function ecoAppCatalog() {
   const biz = (db && db.profile && db.profile.name) || 'your business';
-  return [
-    {
-      id: 'pulse',
-      name: 'Dashboard',
-      desc: 'Money pulse',
-      icon: '📊',
-      tone: 'violet',
-      view: 'pulse',
-      when: () => true
-    },
-    {
-      id: 'invoices',
-      name: 'Invoices',
-      desc: 'Bill & collect',
-      icon: '▤',
-      tone: 'blue',
-      view: 'invoices',
-      when: () => true
-    },
-    {
-      id: 'clients',
-      name: 'Clients',
-      desc: 'Directory',
-      icon: '♙',
-      tone: 'sky',
-      view: 'clients',
-      when: () => true
-    },
-    {
-      id: 'books',
-      name: 'Books',
-      desc: 'Ledger & bank',
-      icon: '◎',
-      tone: 'indigo',
-      view: 'books',
-      need: 'books.view',
-      when: () => can('books.view')
-    },
-    {
-      id: 'pos',
-      name: 'POS',
-      desc: 'Checkout',
-      icon: '▣',
-      tone: 'green',
-      href: '/pos.html',
-      need: 'pos.sell',
-      when: () => can('pos.sell')
-    },
-    {
-      id: 'inventory',
-      name: 'Inventory',
-      desc: 'Stock & shops',
-      icon: '■',
-      tone: 'teal',
-      view: 'inventory',
-      need: null,
-      when: () => can('inventory.manage') || can('transfers.create') || can('purchases.create') || can('pos.sell')
-    },
-    {
-      id: 'approvals',
-      name: 'Approvals',
-      desc: 'Requests',
-      icon: '✓',
-      tone: 'amber',
-      view: 'approvals',
-      need: null,
-      badge: () => {
-        try {
-          if (typeof pendingApprovalsCount === 'function') {
-            const n = pendingApprovalsCount();
-            if (n > 0) return String(n > 99 ? '99+' : n);
-          }
-          const mine = typeof listMyExpenseRequests === 'function' ? listMyExpenseRequests() : [];
-          const pendingMine = mine.filter(r => r.status === 'pending_approval' || r.status === 'pending_review').length;
-          return pendingMine > 0 ? String(pendingMine) : '';
-        } catch (_) { return ''; }
-      },
-      when: () => can('expenses.request') || can('expenses.approve') || can('expenses.review') ||
-        can('transfers.approve') || can('purchases.approve') || can('transfers.create') || can('purchases.create')
-    },
-    {
-      id: 'chat',
-      name: 'Team chat',
-      desc: 'Channels & DMs',
-      icon: '💬',
-      tone: 'pink',
-      view: 'chat',
-      when: () => !!(cloud && cloud.user),
-      badge: () => {
-        try {
-          const el = document.getElementById('chatNavBadge');
-          if (el && !el.hidden && el.textContent) return el.textContent;
-        } catch (_) {}
-        return '';
-      }
-    },
-    {
-      id: 'recurring',
-      name: 'Recurring',
-      desc: 'Auto invoices',
-      icon: '↻',
-      tone: 'cyan',
-      view: 'recurring',
-      when: () => true
-    },
-    {
-      id: 'receipts',
-      name: 'Receipts',
-      desc: 'Payment proofs',
-      icon: '◈',
-      tone: 'orange',
-      view: 'receipts',
-      when: () => true
-    },
-    {
-      id: 'plan',
-      name: 'Plan',
-      desc: 'Billing & team',
-      icon: '◆',
-      tone: 'rose',
-      view: 'plan',
-      when: () => true
-    },
-    {
-      id: 'profile',
-      name: 'Settings',
-      desc: biz.length > 18 ? 'Business profile' : biz,
-      icon: '⚙',
-      tone: 'slate',
-      view: 'profile',
-      when: () => true
-    }
-  ];
+  return APP_REGISTRY.filter(a => !a.comingSoon).map(a => {
+    const tile = {
+      id: a.id,
+      name: a.name,
+      desc: a.id === 'profile' && biz && biz.length <= 18 ? biz : a.desc,
+      icon: a.icon,
+      tone: a.tone,
+      view: a.view,
+      href: a.href,
+      need: a.need || null,
+      core: !!a.core,
+      category: a.category,
+      when: () => isAppInstalled(a.id) && appRoleVisible(a),
+      badge: () => appBadge(a)
+    };
+    return tile;
+  });
 }
 
 function openEcoApp(tile) {
   if (!tile) return;
+  if (tile.comingSoon) {
+    toast((tile.name || 'This app') + ' is on the roadmap — not available yet.');
+    return;
+  }
+  if (tile.id && !isAppInstalled(tile.id) && !tile.core) {
+    toast('Install ' + (tile.name || 'this app') + ' from Manage apps first.');
+    return;
+  }
   if (tile.need && !can(tile.need)) {
     toast(typeof roleGateMessage === 'function' ? roleGateMessage(tile.need) : 'No access');
     return;
@@ -10233,11 +10537,12 @@ function renderEcosystemHome() {
   const tiles = ecoAppCatalog().filter(t => {
     try { return typeof t.when === 'function' ? t.when() : true; } catch (_) { return true; }
   });
-  // Locked tiles (visible but gated) for discoverability — only for signed-in members
+  // Locked tiles (installed but role-gated) for discoverability
   const locked = [];
   if (role === 'member') {
     ecoAppCatalog().forEach(t => {
       if (tiles.find(x => x.id === t.id)) return;
+      if (!isAppInstalled(t.id)) return;
       if (t.id === 'books') locked.push({ ...t, locked: true });
     });
   }
@@ -10258,10 +10563,33 @@ function renderEcosystemHome() {
   grid.querySelectorAll('.eco-tile:not([disabled])').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-eco-id');
-      const tile = ecoAppCatalog().find(x => x.id === id);
+      const tile = ecoAppCatalog().find(x => x.id === id) || appRegistryEntry(id);
       openEcoApp(tile);
     });
   });
+  // Manage apps control
+  try {
+    let bar = document.getElementById('ecoHomeBar');
+    const home = document.getElementById('ecoHome');
+    if (home && !bar) {
+      bar = document.createElement('div');
+      bar.id = 'ecoHomeBar';
+      bar.className = 'eco-home-bar';
+      home.insertBefore(bar, home.firstChild);
+    }
+    if (bar) {
+      const canManage = canManageApps();
+      const installedCount = APP_REGISTRY.filter(a => !a.comingSoon && isAppInstalled(a.id)).length;
+      bar.innerHTML =
+        '<p class="eco-home-label" style="margin:0">Your apps · ' + installedCount + ' installed</p>' +
+        (canManage
+          ? '<button type="button" class="button small" id="btnManageApps">Manage apps</button>'
+          : '');
+      const oldLabel = home && home.querySelector(':scope > .eco-home-label');
+      if (oldLabel && oldLabel.parentElement === home) oldLabel.remove();
+      document.getElementById('btnManageApps')?.addEventListener('click', () => openManageAppsModal());
+    }
+  } catch (_) {}
   try {
     const greet = document.getElementById('dashGreeting');
     const title = document.getElementById('dashTitle');
@@ -10275,9 +10603,101 @@ function renderEcosystemHome() {
     if (title) title.textContent = 'Your business OS';
     if (sub) {
       const roleLabel = role === 'owner' ? 'Owner' : role === 'manager' ? 'Manager' : 'Team member';
-      sub.textContent = roleLabel + ' access · open an app. Dashboard is the money pulse.';
+      sub.textContent = roleLabel + ' access · install the apps your industry needs.';
     }
   } catch (_) {}
+}
+
+function openManageAppsModal() {
+  if (!canManageApps()) {
+    toast('Only owners or managers can manage apps');
+    return;
+  }
+  let back = document.getElementById('manageAppsModal');
+  if (!back) {
+    back = document.createElement('div');
+    back.className = 'modalback';
+    back.id = 'manageAppsModal';
+    back.innerHTML =
+      '<div class="modal manage-apps-modal" role="dialog" aria-labelledby="manageAppsTitle">' +
+      '<div class="manage-apps-head">' +
+      '<div><h2 id="manageAppsTitle" style="margin:0">Manage apps</h2>' +
+      '<p class="section-sub" style="margin:6px 0 0">Turn apps on for this organisation. Core OS apps stay on.</p></div>' +
+      '<button type="button" class="button" id="manageAppsClose">Close</button></div>' +
+      '<div id="manageAppsBody" class="manage-apps-body"></div></div>';
+    document.body.appendChild(back);
+    back.addEventListener('click', e => { if (e.target === back) closeManageAppsModal(); });
+    document.getElementById('manageAppsClose')?.addEventListener('click', closeManageAppsModal);
+  }
+  renderManageAppsBody();
+  back.classList.add('show');
+}
+
+function closeManageAppsModal() {
+  document.getElementById('manageAppsModal')?.classList.remove('show');
+}
+
+function renderManageAppsBody() {
+  const body = document.getElementById('manageAppsBody');
+  if (!body) return;
+  const groups = [
+    { key: 'kernel', label: 'Core OS' },
+    { key: 'finance', label: 'Finance' },
+    { key: 'commerce', label: 'Commerce' },
+    { key: 'control', label: 'Control' },
+    { key: 'team', label: 'Team' },
+    { key: 'system', label: 'System' },
+    { key: 'industry', label: 'Industry (roadmap)' }
+  ];
+  let html = '';
+  groups.forEach(g => {
+    const apps = APP_REGISTRY.filter(a => a.category === g.key);
+    if (!apps.length) return;
+    html += '<div class="manage-apps-group"><div class="manage-apps-group-label">' + g.label + '</div>';
+    apps.forEach(a => {
+      const on = isAppInstalled(a.id);
+      const soon = !!a.comingSoon;
+      const core = !!a.core;
+      let action = '';
+      if (soon) {
+        action = '<span class="manage-apps-pill">Coming soon</span>';
+      } else if (core) {
+        action = '<span class="manage-apps-pill manage-apps-pill-on">Always on</span>';
+      } else if (on) {
+        action = '<button type="button" class="button small" data-app-off="' + a.id + '">Remove</button>';
+      } else {
+        action = '<button type="button" class="button small primary" data-app-on="' + a.id + '">Install</button>';
+      }
+      html +=
+        '<div class="manage-apps-row' + (soon ? ' is-soon' : '') + (on && !soon ? ' is-on' : '') + '">' +
+        '<span class="manage-apps-icon" aria-hidden="true">' + (a.icon || '·') + '</span>' +
+        '<div class="manage-apps-copy"><b>' + String(a.name).replace(/</g, '') + '</b>' +
+        '<span>' + String(a.desc || '').replace(/</g, '') + '</span></div>' +
+        '<div class="manage-apps-action">' + action + '</div></div>';
+    });
+    html += '</div>';
+  });
+  body.innerHTML = html;
+  body.querySelectorAll('[data-app-on]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      try {
+        installApp(btn.getAttribute('data-app-on'));
+        toast('App installed');
+        renderManageAppsBody();
+        renderEcosystemHome();
+      } catch (e) { toast(e.message || 'Could not install'); }
+    });
+  });
+  body.querySelectorAll('[data-app-off]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      try {
+        uninstallApp(btn.getAttribute('data-app-off'));
+        toast('App removed from home');
+        renderManageAppsBody();
+        renderEcosystemHome();
+      } catch (e) { toast(e.message || 'Could not remove'); }
+    });
+  });
 }
 
 /** Home = apps launcher only. */
