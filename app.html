@@ -1855,12 +1855,28 @@ body:has(.modalback.show) .notif-panel {
   color: var(--blue);
   font-size: 11px;
 }
+.side.compact {
+  overflow: visible;
+}
+.side.compact .account-area {
+  overflow: visible;
+}
 .side.compact .account-menu {
   left: calc(100% + 10px);
   right: auto;
   bottom: 0;
-  width: min(240px, 70vw);
-  z-index: 90;
+  width: min(260px, 72vw);
+  z-index: 200;
+  pointer-events: auto;
+}
+.side.compact .account-menu button {
+  min-height: 44px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.side.compact .account-menu .danger-link {
+  color: var(--red-text, #b91c1c);
+  font-weight: 700;
 }
 
 @media (max-width: 640px) {
@@ -30844,8 +30860,29 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
   const card = document.getElementById('accountCard');
   const menu = document.getElementById('accountMenu');
   const lineLogout = document.getElementById('appLogoutBtn');
-  const client = await getSupabase();
-  if (!client || !card || !menu) return;
+  // Always wire logout / menu shell even if auth client is slow or fails
+  if (lineLogout && !lineLogout.dataset.boundLogout) {
+    lineLogout.dataset.boundLogout = '1';
+    lineLogout.addEventListener('click', async e => {
+      e.preventDefault();
+      e.stopPropagation();
+      try { menu && menu.classList.remove('show'); } catch (_) {}
+      try { await doLogout({}); } catch (err) {
+        console.warn('early logout', err);
+        try { window.location.href = 'signup.html'; } catch (_) {}
+      }
+    });
+  }
+  let client = null;
+  try { client = await getSupabase(); } catch (e) { console.warn('getSupabase', e); }
+  if (!card || !menu) return;
+  if (!client) {
+    // Still allow opening sign-in from the chip
+    card.onclick = () => {
+      try { goToSignup(); } catch (_) { window.location.href = 'signup.html'; }
+    };
+    return;
+  }
 
   function initialsFor(name, email) {
     const s = String(name || email || 'ID').trim();
@@ -30891,6 +30928,18 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     if (!e.target.closest('.account-area')) closeMenu();
   });
   menu.addEventListener('click', async e => {
+    // Log out — handle here so it always works (do not require data-account-action)
+    if (e.target.closest('#appLogoutBtn')) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu();
+      try { await doLogout({ client }); } catch (err) {
+        console.warn('logout', err);
+        try { toast('Logged out (local).'); } catch (_) {}
+        try { window.location.href = 'signup.html'; } catch (_) {}
+      }
+      return;
+    }
     if (e.target.closest('#accountSignInBtn')) {
       e.stopPropagation();
       closeMenu();
@@ -30909,6 +30958,7 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     }
     const action = e.target.closest('[data-account-action]')?.dataset.accountAction;
     if (!action) return;
+    e.stopPropagation();
     closeMenu();
     switchTo(action);
   });
@@ -30993,24 +31043,115 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
   await render(session);
   client.auth.onAuthStateChange((_e, s) => { render(s); });
 
-  lineLogout.onclick = async e => {
-    e.stopPropagation();
-    closeMenu();
-    clearTimeout(cloud.timer); cloud.timer = null;
-    cloud.client = null; cloud.user = null; cloud.organizationId = null;
-    cloud.hydrated = false; cloud.syncing = false; activeUserId = null;
-    loadDefaultDb();
-    localStorage.removeItem(ANON_DB_KEY);
-    localStorage.removeItem('invoicedey-v2');
-    localStorage.removeItem('invoicedey-my-referral-code');
-    cloud.referralCode = null;
-    updateGrowthMeter();
-    await client.auth.signOut();
-    paintAccount(null);
-    dashboard();
-    toast('Logged out.');
-  };
+  if (lineLogout) {
+    lineLogout.onclick = async e => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu();
+      try { await doLogout({ client }); } catch (err) {
+        console.warn('logout click', err);
+        try { window.location.href = 'signup.html'; } catch (_) {}
+      }
+    };
+  }
 })();
+
+/**
+ * Full sign-out: stop sync, wipe local org caches, clear Supabase session,
+ * paint signed-out UI, then hard-redirect so a cleared session cannot stick.
+ */
+async function doLogout(opts) {
+  opts = opts || {};
+  let client = opts.client || null;
+  const prevUserId = (cloud && cloud.user && cloud.user.id) || activeUserId || null;
+
+  try {
+    if (cloud && cloud.timer) { clearTimeout(cloud.timer); cloud.timer = null; }
+  } catch (_) {}
+
+  // Stop treating this browser as signed in immediately
+  try {
+    cloud.client = null;
+    cloud.user = null;
+    cloud.organizationId = null;
+    cloud.hydrated = false;
+    cloud.syncing = false;
+    cloud.referralCode = null;
+  } catch (_) {}
+  activeUserId = null;
+
+  // Wipe local app data for this device session
+  try {
+    const keysToRemove = [
+      ANON_DB_KEY,
+      LEGACY_DB_KEY,
+      'invoicedey-v2',
+      'invoicedey-anonymous-v1',
+      'invoicedey-my-referral-code',
+      'invoicedey-pending-invite',
+      'invoicedey-session'
+    ];
+    if (prevUserId) {
+      keysToRemove.push('invoicedey-v2-user-' + prevUserId);
+      keysToRemove.push('invoicedey-tier-' + prevUserId);
+      keysToRemove.push('invoicedey-signup-completed-' + prevUserId);
+    }
+    // Sweep any remaining invoicedey / supabase auth keys
+    try {
+      const sweep = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        if (/^invoicedey/i.test(k) || /^sb-/i.test(k) || /supabase/i.test(k)) sweep.push(k);
+      }
+      sweep.forEach(k => keysToRemove.push(k));
+    } catch (_) {}
+    keysToRemove.forEach(k => {
+      try { localStorage.removeItem(k); } catch (_) {}
+    });
+  } catch (_) {}
+
+  try {
+    sessionStorage.removeItem('invoicedey-session');
+    sessionStorage.removeItem(NAV_STATE_KEY);
+  } catch (_) {}
+
+  try { loadDefaultDb(); } catch (_) {}
+  try { if (typeof updateGrowthMeter === 'function') updateGrowthMeter(); } catch (_) {}
+
+  // Supabase sign-out (local + global when possible)
+  try {
+    if (!client && typeof getSupabase === 'function') client = await getSupabase();
+  } catch (_) {}
+  if (client && client.auth) {
+    try {
+      await client.auth.signOut({ scope: 'local' });
+    } catch (e1) {
+      try { await client.auth.signOut(); } catch (e2) { console.warn('signOut', e2); }
+    }
+  }
+
+  // UI feedback before redirect
+  try {
+    const av = document.getElementById('accountAvatar');
+    if (av) av.textContent = '→';
+    const an = document.getElementById('accountName');
+    if (an) an.textContent = 'Account';
+    const ae = document.getElementById('accountEmail');
+    if (ae) ae.textContent = 'Sign in to sync';
+  } catch (_) {}
+
+  try { toast('Logged out.'); } catch (_) {}
+
+  // Hard navigate so no stale in-memory cloud/db remains
+  try {
+    const url = new URL('signup.html', window.location.href);
+    url.searchParams.set('source', 'logout');
+    window.location.assign(url.toString());
+  } catch (_) {
+    window.location.href = 'signup.html';
+  }
+}
 
 function getPrintCSS() {
   return `
