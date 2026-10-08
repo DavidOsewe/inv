@@ -4233,6 +4233,7 @@ body:has(.modalback.show) .notif-panel {
           <button type="button" id="accountSignInBtn" class="primary" style="display:none">Sign in with email</button>
           <button type="button" data-account-action="profile">Profile &amp; settings</button>
           <button type="button" data-account-action="plan">Plan &amp; billing</button>
+          <button type="button" id="accountManageAppsBtn">Manage apps</button>
           <button type="button" id="copyAccountReferral">Copy referral link</button>
           <button type="button" class="danger-link" id="appLogoutBtn">Log out</button>
         </div>
@@ -31454,6 +31455,14 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     $('#accountMenuEmail').textContent = signedIn ? email : 'Not signed in — use magic link';
     if (lineLogout) lineLogout.style.display = signedIn ? 'block' : 'none';
     if (signInBtn) signInBtn.style.display = signedIn ? 'none' : 'block';
+    const manageBtn = document.getElementById('accountManageAppsBtn');
+    if (manageBtn) {
+      let canManage = false;
+      try {
+        canManage = signedIn && (typeof canManageApps === 'function' ? canManageApps() : true);
+      } catch (_) { canManage = signedIn; }
+      manageBtn.style.display = canManage ? 'block' : 'none';
+    }
   }
 
   function closeMenu() {
