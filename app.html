@@ -25345,6 +25345,54 @@ function jeUpdateHint() {
 }
 
 /* ---- Opening balances (Zoho-style setup) ---- */
+
+/** P&L FS lines — never belong in opening balances. */
+const OPENING_PL_FS_LINES = new Set([
+  'revenue', 'other_income', 'cogs', 'operating_expense', 'finance_cost', 'tax_expense'
+]);
+const OPENING_ASSET_FS = new Set([
+  'cash_and_equivalents', 'receivables', 'inventory', 'other_current_assets', 'non_current_assets'
+]);
+const OPENING_LIAB_FS = new Set([
+  'payables', 'tax_payable', 'other_current_liabilities', 'loans'
+]);
+
+/**
+ * Classify an account for opening balances: 'asset' | 'liability' | 'equity' | null (exclude).
+ * Prefers statement + fsLine over a renamed system type (e.g. 3000 still "equity" but named Revenue).
+ */
+function openingBalanceClass(a) {
+  if (!a || !a.id) return null;
+  if (String(a.id) === '3200') return null; // retained earnings = plug only
+  const t = String(a.type || '').toLowerCase();
+  const st = String(a.statement || '').toLowerCase();
+  const fs = String(a.fsLine || '').toLowerCase();
+  const name = String(a.name || '');
+
+  // Hard exclude P&L
+  if (t === 'income' || t === 'expense') return null;
+  if (st === 'pl') return null;
+  if (OPENING_PL_FS_LINES.has(fs)) return null;
+
+  // Renamed system accounts that still carry equity/liability type but are clearly P&L by name
+  if ((t === 'equity' || t === 'liability') &&
+      /revenue|income|sales|turnover|depreciation|expense|wages|salary|salaries|petrol|logistics|rent\b|bank charges|vpn|telephone|feeding/i.test(name)) {
+    return null;
+  }
+
+  // FS line is the strongest BS signal (fixes Brass Bank typed liability + cash_and_equivalents)
+  if (OPENING_ASSET_FS.has(fs)) return 'asset';
+  if (OPENING_LIAB_FS.has(fs)) return 'liability';
+  if (fs === 'equity') return 'equity';
+
+  if (t === 'asset' || t === 'liability' || t === 'equity') return t;
+  return null;
+}
+
+function isOpeningBalanceAccount(a) {
+  return !!openingBalanceClass(a);
+}
+
 function closeOpeningModal() {
   hideModal('openingModal');
 }
@@ -25363,22 +25411,28 @@ function rebuildOpeningBalanceLines(prefill) {
   const wrap = document.getElementById('obLines');
   if (!wrap) return;
   prefill = prefill || {};
-  // Full COA balance-sheet accounts (system + CSV uploaded)
+  // True balance-sheet accounts only (never P&L / revenue / expense)
   // Retained earnings (3200) is the balancing plug — not entered manually
   const focus = getCoa()
-    .filter(a => (a.type === 'asset' || a.type === 'liability' || a.type === 'equity') && a.id !== '3200')
+    .filter(isOpeningBalanceAccount)
+    .map(a => ({ ...a, _obClass: openingBalanceClass(a) }))
     .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
   if (!focus.length) {
-    wrap.innerHTML = '<p class="section-sub">No balance-sheet accounts. Import a COA CSV under Settings / Chart of accounts first.</p>';
+    wrap.innerHTML = '<p class="section-sub">No balance-sheet accounts. Fix account <b>Type</b> / <b>Statement</b> (bs) under Chart of accounts, then reopen. P&amp;L accounts (revenue, expenses) are not entered here — their history sits in Retained earnings.</p>';
+    updateOpeningHint();
     return;
   }
   wrap.innerHTML = focus.map(a => {
     const pre = prefill[a.id];
     const val = pre != null && pre !== '' ? pre : '';
+    const side = a._obClass || a.type;
+    const sideLabel = side === 'asset' ? 'asset' : side === 'liability' ? 'liability' : 'equity';
     return '<div class="two" style="gap:8px;margin-bottom:6px;align-items:end" data-ob-id="' + a.id + '">' +
       '<div class="field" style="flex:2;margin:0"><label>' + a.id + ' · ' + String(a.name || '').replace(/</g, '') +
-      ' <span class="mini">' + a.type + (a.system ? '' : ' · custom') + '</span></label>' +
-      '<input type="number" step="0.01" class="ob-amt" placeholder="0" data-ob-type="' + a.type + '" value="' + val + '">' +
+      ' <span class="mini">' + sideLabel + (a.system ? '' : ' · custom') +
+      (side !== a.type ? ' · typed ' + a.type : '') + '</span></label>' +
+      '<input type="number" step="0.01" class="ob-amt" placeholder="0 (use − for contra)" data-ob-type="' + side +
+      '" value="' + val + '" title="Positive = normal balance. Negative = contra (e.g. accumulated depreciation).">' +
       '</div></div>';
   }).join('');
   wrap.querySelectorAll('.ob-amt').forEach(inp => {
@@ -25393,13 +25447,13 @@ function updateOpeningHint() {
   let assets = 0, liab = 0, equity = 0;
   document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
     const amt = Number(row.querySelector('.ob-amt')?.value || 0);
+    if (!(Math.abs(amt) > 0.0001)) return;
     const type = row.querySelector('.ob-amt')?.dataset.obType;
-    if (!(amt > 0)) return;
+    // Signed net contribution to equation (A = L + E)
     if (type === 'asset') assets += amt;
     else if (type === 'liability') liab += amt;
     else equity += amt;
   });
-  // Accounting equation: Assets = Liabilities + Equity (+ Retained earnings plug)
   const plug = Math.round((assets - liab - equity) * 100) / 100;
   const plugAbs = Math.abs(plug) > 0.02;
   let msg = 'Assets ' + money(assets) + ' · Liabilities ' + money(liab) + ' · Equity entered ' + money(equity);
@@ -25408,8 +25462,14 @@ function updateOpeningHint() {
   } else {
     msg += ' · Balanced (A = L + E)';
   }
+  // Flag unlikely plugs (e.g. P&L accidentally still on BS)
+  const scale = Math.max(Math.abs(assets), Math.abs(liab + equity), 1);
+  if (plugAbs && Math.abs(plug) > scale * 0.5 && scale > 1000) {
+    msg += ' · Check COA types: large plug often means revenue/expense accounts are still typed as equity/liability';
+  }
   hint.textContent = msg;
-  hint.style.color = (assets + liab + equity) === 0 ? 'var(--muted)' : (plugAbs ? 'var(--muted)' : 'var(--green-text)');
+  const danger = plugAbs && Math.abs(plug) > scale * 0.5 && scale > 1000;
+  hint.style.color = (assets + liab + equity) === 0 ? 'var(--muted)' : (danger ? 'var(--red-text)' : (plugAbs ? 'var(--muted)' : 'var(--green-text)'));
 }
 
 
@@ -25417,16 +25477,14 @@ function downloadOpeningBalanceSampleCsv() {
   ensureBooksDb();
   const rows = [['Account Code', 'Account Name', 'Type', 'Balance']];
   getCoa()
-    .filter(a => a.type === 'asset' || a.type === 'liability' || a.type === 'equity')
+    .filter(isOpeningBalanceAccount)
     .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }))
     .forEach(a => {
-      // Sample illustrative balances only for core accounts
+      const side = openingBalanceClass(a) || a.type;
       let sample = '';
       if (a.id === '1000') sample = '500000';
       if (a.id === '1100') sample = '120000';
-      if (a.id === '2000') sample = '80000';
-      if (a.id === '3000') sample = '540000';
-      rows.push([a.id, a.name, a.type, sample]);
+      rows.push([a.id, a.name, side, sample]);
     });
   const csv = rows.map(r => r.map(c => {
     const s = String(c == null ? '' : c);
@@ -25451,9 +25509,8 @@ function exportOpeningBalancesCsv() {
     rows.push([a.id, a.name, a.type, amt]);
   });
   if (rows.length < 2) {
-    // export empty template from COA
-    getCoa().filter(a => a.type === 'asset' || a.type === 'liability' || a.type === 'equity')
-      .forEach(a => rows.push([a.id, a.name, a.type, '']));
+    getCoa().filter(isOpeningBalanceAccount)
+      .forEach(a => rows.push([a.id, a.name, openingBalanceClass(a) || a.type, '']));
   }
   const csv = rows.map(r => r.map(c => {
     const s = String(c == null ? '' : c);
@@ -25492,14 +25549,19 @@ function importOpeningBalancesCsv(file) {
         if (!id || !(Math.abs(amt) > 0)) return;
         // Ensure account exists on COA if we only have name/code from file
         if (!getCoa().some(a => a.id === id) && codeRaw) {
-          // skip unknown — user should import COA first
           return;
         }
-        prefill[id] = Math.abs(amt);
+        const acct = getCoa().find(x => x.id === id);
+        if (acct && !isOpeningBalanceAccount(acct)) {
+          // Skip P&L / mis-typed revenue & expense — they do not open on the BS
+          return;
+        }
+        // Keep sign: negative = contra-asset / debit balance on liability/equity
+        prefill[id] = Math.round(amt * 100) / 100;
         n++;
       });
       if (!n) {
-        toast('No matching balances — import COA first, then use codes from your chart');
+        toast('No matching BS balances — check COA types (revenue/expense are not opening balances)');
         return;
       }
       rebuildOpeningBalanceLines(prefill);
@@ -25529,21 +25591,25 @@ function postOpeningBalances() {
   const runPost = () => {
     const date = document.getElementById('obDate')?.value || today;
     const lines = [];
-    let assets = 0, credits = 0;
+    let assetNet = 0, creditNet = 0;
     document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
       const id = row.getAttribute('data-ob-id');
       const amt = Number(row.querySelector('.ob-amt')?.value || 0);
-      if (!(amt > 0)) return;
+      if (!(Math.abs(amt) > 0.0001)) return;
       const type = row.querySelector('.ob-amt')?.dataset.obType;
+      // Positive asset = debit; negative asset (contra) = credit
+      // Positive liability/equity = credit; negative = debit
       if (type === 'asset') {
-        lines.push({ accountId: id, debit: amt, credit: 0 });
-        assets += amt;
+        if (amt >= 0) lines.push({ accountId: id, debit: amt, credit: 0 });
+        else lines.push({ accountId: id, debit: 0, credit: -amt });
+        assetNet += amt;
       } else {
-        lines.push({ accountId: id, debit: 0, credit: amt });
-        credits += amt;
+        if (amt >= 0) lines.push({ accountId: id, debit: 0, credit: amt });
+        else lines.push({ accountId: id, debit: -amt, credit: 0 });
+        creditNet += amt;
       }
     });
-    const plug = Math.round((assets - credits) * 100) / 100;
+    const plug = Math.round((assetNet - creditNet) * 100) / 100;
     // Assets − (Liabilities + Equity entered) → Retained earnings (3200)
     if (Math.abs(plug) > 0.02) {
       if (plug > 0) lines.push({ accountId: '3200', debit: 0, credit: plug });
@@ -27772,9 +27838,8 @@ function validateOpeningBalancesForm() {
   document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
     const id = row.getAttribute('data-ob-id');
     const amt = Number(row.querySelector('.ob-amt')?.value || 0);
-    if (!(amt > 0)) return;
+    if (!(Math.abs(amt) > 0.0001)) return;
     lineCount++;
-    if (amt < 0) errors.push(id + ': balance cannot be negative');
     try {
       if (!getCoa().some(a => a.id === id)) unknown.push(id);
     } catch (_) { unknown.push(id); }
@@ -27794,6 +27859,10 @@ function validateOpeningBalancesForm() {
         errors.push('Retained earnings account 3200 missing from COA');
       }
     } catch (_) {}
+  }
+  const scale = Math.max(Math.abs(assets), Math.abs(creditSide), 1);
+  if (Math.abs(plug) > scale * 0.5 && scale > 1000) {
+    warnings.push('Large retained-earnings plug — confirm revenue/expense accounts are typed as income/expense (statement = pl), not equity. Only BS accounts belong here.');
   }
 
   return { ok: errors.length === 0, errors, warnings, assets, creditSide, plug, lineCount };
@@ -31502,6 +31571,18 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
       e.stopPropagation();
       closeMenu();
       try { goToSignup(); } catch (_) { window.location.href = 'signup.html'; }
+      return;
+    }
+    if (e.target.closest('#accountManageAppsBtn')) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu();
+      try {
+        if (typeof openManageAppsModal === 'function') openManageAppsModal();
+        else toast('Manage apps is not available yet');
+      } catch (err) {
+        toast(err.message || 'Could not open Manage apps');
+      }
       return;
     }
     const copyReferral = e.target.closest('#copyAccountReferral');
