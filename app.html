@@ -6491,7 +6491,7 @@ body:has(.modalback.show) .notif-panel {
 <div class="modalback" id="openingModal">
   <div class="modal" style="max-width:640px">
     <h2>Opening balances</h2>
-    <p class="section-sub">Enter asset, liability, and equity balances as at the start date. Any gap so that Assets = Liabilities + Equity posts automatically to Retained earnings (3200).</p>
+    <p class="section-sub">Balance sheet only (assets, liabilities, equity) as at the start date. Revenue and expense accounts are excluded — their history is absorbed in Retained earnings (3200). Use a negative amount for contra-assets (e.g. accumulated depreciation). Any gap so that Assets = Liabilities + Equity posts to 3200.</p>
     <div class="field"><label>As at date</label><input id="obDate" type="date"></div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0">
       <button type="button" class="button small" id="obSampleCsv">Sample CSV</button>
@@ -27853,16 +27853,15 @@ function validateOpeningBalancesForm() {
 
   const plug = Math.round((assets - creditSide) * 100) / 100;
   if (Math.abs(plug) > 0.02) {
-    warnings.push('Difference ' + plug.toFixed(2) + ' posts to Retained earnings (3200) so Assets = Liabilities + Equity');
+    warnings.push(
+      'Difference ' + plug.toFixed(2) + ' posts to Retained earnings (3200) so Assets = Liabilities + Equity. ' +
+      'That is expected when Capital/Reserves only hold formal capital and cumulative profit sits in RE.'
+    );
     try {
       if (!getCoaAll().some(a => a.id === '3200') && !getCoa().some(a => a.id === '3200')) {
         errors.push('Retained earnings account 3200 missing from COA');
       }
     } catch (_) {}
-  }
-  const scale = Math.max(Math.abs(assets), Math.abs(creditSide), 1);
-  if (Math.abs(plug) > scale * 0.5 && scale > 1000) {
-    warnings.push('Large retained-earnings plug — confirm revenue/expense accounts are typed as income/expense (statement = pl), not equity. Only BS accounts belong here.');
   }
 
   return { ok: errors.length === 0, errors, warnings, assets, creditSide, plug, lineCount };
