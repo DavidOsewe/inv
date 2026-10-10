@@ -4863,6 +4863,29 @@ body:has(.modalback.show) .notif-panel {
       <div id="clientList"></div>
     </section>
 
+    <section class="view" id="suppliers">
+      <div class="dash-hero suppliers-hero">
+        <div class="dash-hero-text">
+          <div class="dash-greeting">Suppliers</div>
+          <h1 class="dash-title">Who you pay</h1>
+          <p class="dash-sub">Save suppliers once — request expenses, track AP, and pay from Books.</p>
+        </div>
+        <div class="dash-hero-actions">
+          <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
+          <button class="button" type="button" onclick="switchTo('books'); try{setBooksPage('ap','payables')}catch(_){}">Money out</button>
+          <button class="button primary" id="addSupplierDir" type="button">+ Add supplier</button>
+        </div>
+      </div>
+      <div class="inv-summary" id="supplierSummary" aria-live="polite"></div>
+      <div class="client-toolbar inv-toolbar">
+        <div class="search-bar inv-search" style="margin:0">
+          <input type="search" id="supplierSearch" placeholder="Search by name, phone, or email…">
+        </div>
+        <div class="client-count" id="supplierDirCount" style="font-size:13px;color:var(--muted);font-weight:600">0 suppliers</div>
+      </div>
+      <div id="supplierDirList"></div>
+    </section>
+
     <section class="view" id="receipts">
       <div class="dash-hero receipts-hero">
         <div class="dash-hero-text">
@@ -5981,6 +6004,7 @@ body:has(.modalback.show) .notif-panel {
     <div class="more-sheet-grid" data-more-section="sales">
       <button type="button" data-more-view="invoices" data-app="invoices"><span>▤</span>Invoices</button>
       <button type="button" data-more-view="clients" data-app="clients"><span>☺</span>Clients</button>
+      <button type="button" data-more-view="suppliers" data-app="suppliers"><span>⬡</span>Suppliers</button>
       <button type="button" data-more-view="receipts" data-app="receipts"><span>◈</span>Receipts</button>
       <button type="button" data-more-view="recurring" data-app="recurring"><span>↻</span>Recurring</button>
     </div>
@@ -8842,6 +8866,7 @@ const VIEW_TO_APP = {
   /** Invoice create/edit is part of Invoices app — not a separate installable module */
   editor: 'invoices',
   clients: 'clients',
+  suppliers: 'suppliers',
   books: 'books',
   inventory: 'inventory',
   approvals: 'approvals',
@@ -9996,6 +10021,7 @@ function switchTo(v) {
     transfers: ['Inventory', 'Move stock between locations.'],
     pos: ['POS Checkout', 'Sell from any Windows or Android device.'],
     clients: ['Clients', 'Your reusable client directory.'],
+    suppliers: ['Suppliers', 'Who you pay — AP balances, bills, and payments.'],
     profile: ['Business profile', 'Set your business details and reporting preference.'],
     plan: ['Plan & billing', 'Manage your plan, usage and feature access.'],
     chat: ['Team chat', 'Live channels and DMs for your organisation.'],
@@ -10006,7 +10032,7 @@ function switchTo(v) {
   $('#subheading').textContent = h[1];
   try {
     document.querySelector('.main')?.classList.toggle('main-eco-focus',
-      v === 'dashboard' || v === 'pulse' || v === 'invoices' || v === 'clients' ||
+      v === 'dashboard' || v === 'pulse' || v === 'invoices' || v === 'clients' || v === 'suppliers' ||
       v === 'books' || v === 'inventory' || v === 'receipts' || v === 'recurring' || v === 'chat' || v === 'approvals');
   } catch (_) {}
   const bottomNav = document.querySelector('.bottom-nav');
@@ -10033,6 +10059,7 @@ function switchTo(v) {
   if (v === 'receipts') receiptsView();
   if (v === 'recurring') recurringView();
   if (v === 'clients') clients();
+  if (v === 'suppliers') suppliersDir();
   try { applyRoleGates(); } catch (_) {}
   if (v === 'profile') profile();
   if (v === 'plan') planView();
@@ -10376,6 +10403,18 @@ const APP_REGISTRY = [
     icon: '♙',
     tone: 'sky',
     view: 'clients',
+    category: 'finance',
+    core: true,
+    defaultInstalled: true,
+    industries: ['all']
+  },
+  {
+    id: 'suppliers',
+    name: 'Suppliers',
+    desc: 'Who you pay',
+    icon: '⬡',
+    tone: 'amber',
+    view: 'suppliers',
     category: 'finance',
     core: true,
     defaultInstalled: true,
@@ -12180,7 +12219,16 @@ async function saveSupplierFromModal() {
   persistDb();
   closeSupplierModal();
   toast('Supplier saved');
-  purchasesView();
+  try {
+    if (document.getElementById('suppliers')?.classList.contains('active') && typeof suppliersDir === 'function') {
+      suppliersDir();
+    } else if (typeof purchasesView === 'function') {
+      purchasesView();
+    }
+  } catch (_) {
+    try { purchasesView(); } catch (__) {}
+  }
+  try { if (typeof renderSuppliersList === 'function') renderSuppliersList(); } catch (_) {}
 }
 
 async function pushSupplierToCloud(s) {
@@ -19926,6 +19974,194 @@ function renderClientSummary() {
     '<div class="inv-summary-pill" data-tone="amber"><small>Not invoiced yet</small><b>' + neverInvoiced + '</b></div>';
 }
 
+/** Suppliers directory — mirror of Clients for the AP side. */
+function renderSupplierSummary() {
+  ensurePosDb();
+  const el = document.getElementById('supplierSummary');
+  if (!el) return;
+  const all = db.suppliers || [];
+  let owing = 0, settled = 0, neverBilled = 0;
+  let owingAmt = 0;
+  all.forEach(s => {
+    let glAp = 0;
+    try { glAp = typeof partyApBalance === 'function' ? partyApBalance(s.id) : 0; } catch (_) {}
+    const invBal = typeof supplierBalance === 'function' ? supplierBalance(s.id) : 0;
+    const bal = Math.abs(glAp) > 0.001 ? glAp : invBal;
+    const bills = (db.bills || []).filter(b =>
+      String(b.supplier_id || b.supplierId || '') === s.id ||
+      String(b.supplier || '').trim().toLowerCase() === String(s.name || '').trim().toLowerCase()
+    );
+    if (!bills.length && bal < 0.001) { neverBilled++; return; }
+    if (bal > 0.001) { owing++; owingAmt += bal; }
+    else settled++;
+  });
+  el.innerHTML =
+    '<div class="inv-summary-pill" data-tone="amber"><small>Suppliers</small><b>' + all.length + '</b></div>' +
+    '<div class="inv-summary-pill" data-tone="rose"><small>You owe</small><b>' + owing +
+      (owing ? '<span class="mini" style="display:block;margin-top:4px;font-size:12px;font-weight:600;color:var(--muted)">' + money(owingAmt) + '</span>' : '') +
+      '</b></div>' +
+    '<div class="inv-summary-pill" data-tone="green"><small>Settled</small><b>' + settled + '</b></div>' +
+    '<div class="inv-summary-pill" data-tone="blue"><small>No bills yet</small><b>' + neverBilled + '</b></div>';
+}
+
+function suppliersDir() {
+  ensurePosDb();
+  const query = (document.getElementById('supplierSearch')?.value || '').trim().toLowerCase();
+  const all = (db.suppliers || []).slice();
+  const list = all.filter(s =>
+    !query || [s.name, s.email, s.phone, s.note].some(v => String(v || '').toLowerCase().includes(query))
+  );
+  const countEl = document.getElementById('supplierDirCount');
+  if (countEl) {
+    countEl.textContent = list.length === all.length
+      ? all.length + ' supplier' + (all.length === 1 ? '' : 's')
+      : list.length + ' of ' + all.length;
+  }
+  try { renderSupplierSummary(); } catch (_) {}
+
+  const listEl = document.getElementById('supplierDirList');
+  if (!listEl) return;
+
+  if (!all.length) {
+    listEl.innerHTML = '<div class="empty">' +
+      '<div class="empty-icon">⬡</div>' +
+      '<h3>No suppliers yet</h3>' +
+      '<p>Save a supplier once — name, phone, email — then raise expense requests and track what you still owe.</p>' +
+      '<div class="empty-actions">' +
+      '<button class="button primary" type="button" id="emptyAddSupplierDir">+ Add supplier</button>' +
+      '</div></div>';
+    document.getElementById('emptyAddSupplierDir')?.addEventListener('click', () => openSupplierModal(null));
+    return;
+  }
+  if (!list.length) {
+    listEl.innerHTML = '<div class="empty"><div class="empty-icon">⌕</div><h3>No matching suppliers</h3><p>Try a different name or phone.</p></div>';
+    return;
+  }
+
+  const rows = list.map(s => {
+    let glAp = 0;
+    try { glAp = typeof partyApBalance === 'function' ? partyApBalance(s.id) : 0; } catch (_) {}
+    const invBal = typeof supplierBalance === 'function' ? supplierBalance(s.id) : 0;
+    const bal = Math.abs(glAp) > 0.001 ? glAp : invBal;
+    const openBills = (db.bills || []).filter(b =>
+      b.status !== 'paid' && b.status !== 'rejected' && (
+        String(b.supplier_id || b.supplierId || '') === s.id ||
+        String(b.supplier || '').trim().toLowerCase() === String(s.name || '').trim().toLowerCase()
+      )
+    ).length;
+    const initials = String(s.name || '?').trim().split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase();
+    const owe = bal > 0.001
+      ? '<div class="client-meta" style="color:var(--red-text)">AP ' + money(bal) + '</div>'
+      : openBills ? '<div class="client-meta">In process</div>' : '<div class="client-meta">Settled</div>';
+    const nameEsc = String(s.name || '').replace(/"/g, '');
+    const tableRow = '<tr>' +
+      '<td><div style="display:flex;align-items:center;gap:10px">' +
+      '<span class="account-avatar" style="width:32px;height:32px;flex-basis:32px;font-size:11px;border-radius:10px">' + (initials || '?') + '</span>' +
+      '<div><b>' + String(s.name || '').replace(/</g, '') + '</b>' +
+      (s.note ? '<div class="client-meta">' + String(s.note).slice(0, 40).replace(/</g, '') + '</div>' : '') +
+      '</div></div></td>' +
+      '<td>' + (s.phone || '—') + '</td>' +
+      '<td>' + (s.email || '—') + '</td>' +
+      '<td class="right"><b>' + openBills + '</b>' + owe + '</td>' +
+      '<td><div class="client-actions">' +
+      '<button class="button" type="button" data-dir-ap="' + s.id + '" data-dir-ap-name="' + nameEsc + '" style="padding:7px 10px;font-size:12px">Statement</button>' +
+      '<button class="button" type="button" data-dir-bill="' + s.id + '" data-dir-bill-name="' + nameEsc + '" style="padding:7px 10px;font-size:12px">Bill</button>' +
+      '<button class="button" type="button" data-dir-edit-sup="' + s.id + '" style="padding:7px 10px;font-size:12px">Edit</button>' +
+      (bal > 0.001
+        ? '<button class="button primary" type="button" data-dir-pay-sup="' + s.id + '" style="padding:7px 10px;font-size:12px">Pay</button>'
+        : '') +
+      '</div></td></tr>';
+    const card = '<div class="mobile-card" role="listitem">' +
+      '<div class="mobile-card-top"><div style="display:flex;gap:10px;align-items:center;min-width:0">' +
+      '<span class="account-avatar" style="width:36px;height:36px;flex:0 0 36px;font-size:12px;border-radius:10px">' + (initials || '?') + '</span>' +
+      '<div style="min-width:0"><div class="mobile-card-title">' + String(s.name || '').replace(/</g, '') + '</div>' +
+      '<div class="mobile-card-sub">' + (s.phone || s.email || 'No contact') + '</div></div></div></div>' +
+      '<div class="mobile-card-meta"><span><b>' + openBills + '</b> open bill' + (openBills === 1 ? '' : 's') + '</span>' +
+      (bal > 0.001 ? '<span style="color:var(--red-text)">AP ' + money(bal) + '</span>' : '<span>Settled</span>') +
+      '</div>' +
+      '<div class="mobile-card-actions">' +
+      '<button class="button small" type="button" data-dir-ap="' + s.id + '" data-dir-ap-name="' + nameEsc + '">Statement</button>' +
+      '<button class="button small" type="button" data-dir-bill="' + s.id + '" data-dir-bill-name="' + nameEsc + '">Bill</button>' +
+      '<button class="button small" type="button" data-dir-edit-sup="' + s.id + '">Edit</button>' +
+      (bal > 0.001 ? '<button class="button small primary" type="button" data-dir-pay-sup="' + s.id + '">Pay</button>' : '') +
+      '</div></div>';
+    return { tableRow, card };
+  });
+
+  listEl.innerHTML =
+    '<table class="table desktop-table">' +
+    '<thead><tr><th>Supplier</th><th>Phone</th><th>Email</th><th class="right">Bills / AP</th><th class="right">Actions</th></tr></thead>' +
+    '<tbody>' + rows.map(r => r.tableRow).join('') + '</tbody></table>' +
+    '<div class="mobile-list">' + rows.map(r => r.card).join('') + '</div>';
+
+  listEl.querySelectorAll('[data-dir-ap]').forEach(btn => {
+    btn.addEventListener('click', () => openPartyLedgerModal({
+      partyType: 'supplier',
+      partyId: btn.getAttribute('data-dir-ap'),
+      partyName: btn.getAttribute('data-dir-ap-name') || ''
+    }));
+  });
+  listEl.querySelectorAll('[data-dir-edit-sup]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const s = (db.suppliers || []).find(x => x.id === btn.getAttribute('data-dir-edit-sup'));
+      if (s) openSupplierModal(s);
+    });
+  });
+  listEl.querySelectorAll('[data-dir-pay-sup]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Prefer clearing an open bill for this supplier from Money out
+      const sid = btn.getAttribute('data-dir-pay-sup');
+      const openBill = (db.bills || []).find(b =>
+        (b.status === 'open' || b.status === 'approved') &&
+        (String(b.supplier_id || b.supplierId || '') === sid ||
+          String(b.supplier || '').trim().toLowerCase() === String((db.suppliers || []).find(x => x.id === sid)?.name || '').trim().toLowerCase())
+      );
+      if (openBill && typeof paySupplierBill === 'function') {
+        try {
+          switchTo('books');
+          setTimeout(() => {
+            try { setBooksPage('ap', 'payables'); } catch (_) {}
+            try { renderBooksPayables(); } catch (_) {}
+          }, 50);
+          toast('Open the bill under To pay and tap Pay');
+        } catch (_) {
+          toast('Open Books → Money out → To pay');
+        }
+        return;
+      }
+      // Inventory PO balance pay flow
+      if (typeof openSupplierPayModal === 'function') {
+        const s = (db.suppliers || []).find(x => x.id === sid);
+        if (s) openSupplierPayModal(s);
+      } else {
+        switchTo('books');
+        try { setBooksPage('ap', 'payables'); } catch (_) {}
+      }
+    });
+  });
+  listEl.querySelectorAll('[data-dir-bill]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sid = btn.getAttribute('data-dir-bill');
+      const s = (db.suppliers || []).find(x => x.id === sid);
+      try {
+        openBillModal();
+        // Pre-fill supplier name when modal fields exist
+        setTimeout(() => {
+          const nameEl = document.getElementById('billSupplier') || document.getElementById('mBillSupplier') || document.querySelector('#billModal input[placeholder*="upplier" i]');
+          if (nameEl && s) {
+            nameEl.value = s.name || '';
+            nameEl.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          // Store preferred supplier for bill post
+          try { window._pendingBillSupplierId = sid; window._pendingBillSupplierName = s?.name || ''; } catch (_) {}
+        }, 30);
+      } catch (e) {
+        toast(e.message || 'Could not open expense request');
+      }
+    });
+  });
+}
+
 function clients() {
   const query = (document.getElementById('clientSearch')?.value || '').trim().toLowerCase();
   const all = db.clients.slice();
@@ -23905,7 +24141,8 @@ function paySupplierBill(billId, opts) {
   try { track('bill_paid', { bill_id: bill.id }); } catch (_) {}
 }
 
-function openBillModal() {
+function openBillModal(opts) {
+  opts = opts || {};
   ensureBooksDb();
   if (typeof canRequestExpense === 'function' && !canRequestExpense()) {
     toast('Your role cannot submit expense requests');
@@ -23954,31 +24191,40 @@ function openBillModal() {
     const coa = typeof getCoa === 'function' ? getCoa() : [];
     const expenses = coa.filter(a => a.type === 'expense' || a.statement === 'pl' && /expense|cogs|cost/i.test(a.type || a.name || ''));
     const rest = coa.filter(a => !expenses.includes(a));
-    const opts = [];
-    opts.push('<option value="">— Pick later / not sure —</option>');
+    const optsHtml = [];
+    optsHtml.push('<option value="">— Pick later / not sure —</option>');
     if (expenses.length) {
-      opts.push('<option disabled value="">— Expense accounts —</option>');
-      expenses.forEach(a => opts.push(`<option value="${a.id}">${a.id} · ${a.name}</option>`));
+      optsHtml.push('<option disabled value="">— Expense accounts —</option>');
+      expenses.forEach(a => optsHtml.push(`<option value="${a.id}">${a.id} · ${a.name}</option>`));
     }
     if (rest.length) {
-      opts.push('<option disabled value="">— Other ledgers —</option>');
-      rest.forEach(a => opts.push(`<option value="${a.id}">${a.id} · ${a.name}</option>`));
+      optsHtml.push('<option disabled value="">— Other ledgers —</option>');
+      rest.forEach(a => optsHtml.push(`<option value="${a.id}">${a.id} · ${a.name}</option>`));
     }
-    cat.innerHTML = opts.join('') || '<option value="">—</option>';
+    cat.innerHTML = optsHtml.join('') || '<option value="">—</option>';
     cat.value = '';
   }
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
-  set('billSupplier', '');
+  const preName = opts.supplierName || opts.supplier?.name || window._pendingBillSupplierName || '';
+  const preId = opts.supplierId || opts.supplier?.id || window._pendingBillSupplierId || '';
+  set('billSupplier', preName || '');
   set('billAmount', '');
   set('billTax', '');
   set('billCurrency', (db.profile && db.profile.reporting) || 'NGN');
   set('billDate', typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
   set('billDue', typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
   set('billNote', '');
+  try {
+    window._pendingBillSupplierId = preId || '';
+    window._pendingBillSupplierName = preName || '';
+  } catch (_) {}
   try { fillBillPurchaseOptions(); } catch (_) {}
   if (typeof showModal === 'function') showModal('billModal');
   else { m.classList.add('show'); m.style.display = 'grid'; }
   try { initSearchableSelects(m); } catch (_) {}
+  if (preName) {
+    try { document.getElementById('billAmount')?.focus(); } catch (_) {}
+  }
 }
 function closeBillModal() {
   if (typeof hideModal === 'function') hideModal('billModal');
@@ -31230,9 +31476,21 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
     return;
   }
   const actor = typeof expenseActorMeta === 'function' ? expenseActorMeta() : {};
+  // Link directory supplier when launched from Suppliers app or name matches
+  let supplierId = '';
+  try {
+    supplierId = String(window._pendingBillSupplierId || '').trim();
+    if (!supplierId && supplier) {
+      const hit = (db.suppliers || []).find(s =>
+        String(s.name || '').trim().toLowerCase() === supplier.toLowerCase()
+      );
+      if (hit) supplierId = hit.id;
+    }
+  } catch (_) {}
   const bill = {
     id: crypto.randomUUID(),
     supplier,
+    supplier_id: supplierId || null,
     category: (document.getElementById('billCategory')?.value || '').trim() || '',
     amount,
     tax: Number(document.getElementById('billTax')?.value || 0),
@@ -31665,6 +31923,7 @@ async function openClientModal(client) {
 }
 
 $('#addClient').onclick = () => openClientModal(null);
+document.getElementById('addSupplierDir')?.addEventListener('click', () => openSupplierModal(null));
 
 // Inventory spine tabs
 document.getElementById('inventoryTabs')?.addEventListener('click', (e) => {
@@ -32162,6 +32421,7 @@ document.addEventListener('input', e => {
   }
   if (e.target.id === 'invoiceSearch') invoices();
   if (e.target.id === 'clientSearch') clients();
+  if (e.target.id === 'supplierSearch') suppliersDir();
   if (e.target.id === 'receiptSearch') receiptsView();
   const invFilterBtn = e.target.closest && e.target.closest('#invFilters [data-inv-filter]');
   if (invFilterBtn) {
