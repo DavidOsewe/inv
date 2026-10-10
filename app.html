@@ -5067,13 +5067,20 @@ body:has(.modalback.show) .notif-panel {
         </div>
       </div>
       <div id="booksPanelPayables" hidden>
-        <h3 class="books-panel-title">Who you owe</h3>
-        <p class="books-panel-lead">Supplier bills flow here as accounts payable. Accrue expense now; mark paid when cash leaves the bank — AP (2000) clears.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;margin-bottom:4px">
+          <div>
+            <h3 class="books-panel-title" style="margin:0">Money out · Payables</h3>
+            <p class="books-panel-lead" style="margin:6px 0 0">
+              Queue → approve &amp; post → pay from bank. Same path as receivables, for suppliers.
+            </p>
+          </div>
+          <button type="button" class="button primary" id="booksAddBillBtnTop">+ Expense request</button>
+        </div>
         <div id="booksPayablesList"></div>
       </div>
       <div id="booksPanelReceivables" hidden>
-        <h3 class="books-panel-title">Who owes you</h3>
-        <p class="books-panel-lead">Open invoices, oldest first. Tap an invoice to collect.</p>
+        <h3 class="books-panel-title">Money in · Receivables</h3>
+        <p class="books-panel-lead">Open invoices, oldest first. Tap an invoice to collect · Statement on customer for full AR history.</p>
         <div id="booksReceivablesList"></div>
       </div>
       <div id="booksPanelPeriodLock" hidden>
@@ -22203,10 +22210,13 @@ const BOOKS_PAGES = {
   },
   ap: {
     tabs: [
-      { id: 'payables', label: 'Supplier bills' }
+      { id: 'payables', label: 'To pay' },
+      { id: 'apqueue', label: 'In queue' },
+      { id: 'apsuppliers', label: 'By supplier' },
+      { id: 'appaid', label: 'Paid' }
     ],
     defaultTab: 'payables',
-    actionLabel: 'Add bill',
+    actionLabel: 'Expense request',
     action: 'bill'
   },
   banking: {
@@ -22339,6 +22349,9 @@ function setBooksTab(tab) {
     ledger: 'booksPanelLedger',
     journal: 'booksPanelJournal',
     payables: 'booksPanelPayables',
+    apqueue: 'booksPanelPayables',
+    apsuppliers: 'booksPanelPayables',
+    appaid: 'booksPanelPayables',
     receivables: 'booksPanelReceivables',
     coa: 'booksPanelCoa',
     periodlock: 'booksPanelPeriodLock',
@@ -22353,8 +22366,17 @@ function setBooksTab(tab) {
   };
   Object.entries(panels).forEach(([k, id]) => {
     const el = document.getElementById(id);
-    if (el) el.hidden = k !== booksTab;
+    if (!el) return;
+    // Panel may be shared by several tabs (e.g. all Money-out views)
+    const shownFor = Object.entries(panels).filter(([, pid]) => pid === id).map(([tk]) => tk);
+    el.hidden = !shownFor.includes(booksTab);
   });
+  if (['payables', 'apqueue', 'apsuppliers', 'appaid'].includes(booksTab)) {
+    try {
+      _apView = booksTab;
+      if (typeof renderBooksPayables === 'function') renderBooksPayables();
+    } catch (_) {}
+  }
 }
 
 function accountPeriodNet(accountId, act) {
@@ -23966,230 +23988,323 @@ function closeBillModal() {
   }
 }
 
+/** Active Money-out sub-view: payables | apqueue | apsuppliers | appaid */
+let _apView = 'payables';
+
+function billAgeInfo(b, todayIso) {
+  const due = b.due || b.date || todayIso;
+  let days = 0;
+  try {
+    days = Math.floor((new Date(todayIso + 'T12:00:00') - new Date(due + 'T12:00:00')) / 86400000);
+  } catch (_) {}
+  let bucket = 'Current';
+  if (days > 90) bucket = '90+';
+  else if (days > 60) bucket = '61–90';
+  else if (days > 30) bucket = '31–60';
+  else if (days > 0) bucket = '1–30';
+  return { due, days: Math.max(0, days), bucket, overdue: days > 0 };
+}
+
+function payFromBankOptionsHtml() {
+  try {
+    const list = typeof listPayFromAccounts === 'function'
+      ? listPayFromAccounts()
+      : (getCoa() || []).filter(a => typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a));
+    const opts = list.map(a =>
+      '<option value="' + a.id + '">' + a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>'
+    ).join('');
+    if (opts) return opts;
+  } catch (_) {}
+  return '<option value="1000">1000 · Cash</option>';
+}
+
 function renderBooksPayables() {
   const el = document.getElementById('booksPayablesList');
   if (!el) return;
   ensureBooksDb();
-  const bills = db.bills || [];
-  // Show queue + open + rejected in list; "open AP" metrics only ledger-open bills
-  const open = bills.filter(b => b.status !== 'paid');
-  const paid = bills.filter(b => b.status === 'paid').slice(-15).reverse();
-  const ledgerOpen = bills.filter(b => {
-    const st = b.status || 'open';
-    return st === 'open' || st === 'approved';
-  });
-  const rep = (db.profile && db.profile.reporting) || 'NGN';
-  const openTotal = ledgerOpen.reduce((n, b) => n + (typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0), 0);
-  // GL AP balance for cross-check
-  let glAp = 0;
+  document.getElementById('booksAddBillBtnTop')?.addEventListener('click', openBillModal);
+
+  // Align with books sub-tab when present
   try {
-    const bal = typeof accountBalances === 'function' ? accountBalances() : (typeof accountBalance === 'function' ? null : null);
-    if (typeof accountBalance === 'function') glAp = accountBalance('2000');
-    else if (bal && bal['2000'] != null) glAp = bal['2000'];
+    const conf = typeof BOOKS_PAGES !== 'undefined' && BOOKS_PAGES.ap;
+    const tab = (typeof booksTab === 'string' && conf && conf.tabs.some(t => t.id === booksTab))
+      ? booksTab
+      : (_apView || 'payables');
+    if (['payables', 'apqueue', 'apsuppliers', 'appaid'].includes(tab)) _apView = tab;
   } catch (_) {}
 
-  if (!bills.length) {
-    el.innerHTML = '<div class="empty" style="padding:20px">' +
-      '<h3>No supplier bills yet</h3>' +
-      '<p>Accrue a supplier invoice here. Expense hits P&amp;L now; Accounts payable (2000) holds the liability until you pay.</p>' +
-      '<button class="button primary" type="button" id="booksEmptyBill">Add supplier bill</button></div>';
-    document.getElementById('booksEmptyBill')?.addEventListener('click', openBillModal);
-    return;
-  }
+  const bills = db.bills || [];
+  const rep = (db.profile && db.profile.reporting) || 'NGN';
+  const fmt = (n, cur) => (typeof money === 'function' ? money(n, cur || rep) : String(n));
+  const todayIso = (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
+  const bankOpts = payFromBankOptionsHtml();
 
-  // Bank / cash options for pay-from (full cash & equivalents)
-  let bankOpts = '';
-  try {
-    const list = typeof listPayFromAccounts === 'function' ? listPayFromAccounts() : (getCoa() || []).filter(isCashEquivalentAccount);
-    bankOpts = list.map(a =>
-      '<option value="' + a.id + '">' + a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>'
-    ).join('');
-  } catch (_) {
-    bankOpts = '<option value="1000">1000 · Cash</option>';
-  }
-  if (!bankOpts) bankOpts = '<option value="1000">1000 · Cash</option>';
+  const isQueue = (b) => b.status === 'pending_review' || b.status === 'pending_approval';
+  const isOpen = (b) => b.status === 'open' || b.status === 'approved';
+  const isPaid = (b) => b.status === 'paid';
+  const isRejected = (b) => b.status === 'rejected';
 
-  let html = '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;align-items:center">' +
-    '<div style="padding:12px 16px;border:1px solid var(--line);border-radius:12px;min-width:140px">' +
-    '<div style="font-size:11px;color:var(--muted);text-transform:uppercase">Open AP</div>' +
-    '<div style="font-size:18px;font-weight:700">' + (typeof money === 'function' ? money(openTotal, rep) : openTotal) + '</div>' +
-    '<div style="font-size:11px;color:var(--muted)">' + ledgerOpen.length + ' on ledger · ' +
-      (open.filter(b => b.status === 'pending_review' || b.status === 'pending_approval').length +
-        (db.cashEntries || []).filter(c => c.type === 'out' && (c.status === 'pending_review' || c.status === 'pending_approval')).length) +
-      ' in queue</div></div>';
-  if (Math.abs(glAp) > 0.02) {
-    html += '<div style="padding:12px 16px;border:1px solid var(--line);border-radius:12px;min-width:140px">' +
-      '<div style="font-size:11px;color:var(--muted);text-transform:uppercase">Ledger 2000 AP</div>' +
-      '<div style="font-size:18px;font-weight:700">' + (typeof money === 'function' ? money(Math.abs(glAp), rep) : Math.abs(glAp)) + '</div></div>';
-  }
-  html += '<button type="button" class="button primary" id="booksAddBillBtn">+ Expense request</button></div>';
-
-  // Accountant queue — bills + cash expenses waiting for matrix approval
-  const queueBills = bills.filter(b => b.status === 'pending_review' || b.status === 'pending_approval');
+  const queueBills = bills.filter(isQueue);
+  const openBills = bills.filter(isOpen);
+  const paidBills = bills.filter(isPaid).slice().sort((a, b) => String(b.paidAt || b.date || '').localeCompare(String(a.paidAt || a.date || ''))).slice(0, 30);
   const queueCash = (db.cashEntries || []).filter(c =>
     c.type === 'out' && (c.status === 'pending_review' || c.status === 'pending_approval')
   );
   const queueTotal = queueBills.length + queueCash.length;
-  if (queueTotal) {
-    html += '<div style="margin-bottom:14px;padding:12px 14px;border:1px solid #fcd34d;border-radius:12px;background:#fffbeb">';
-    html += '<div style="font-size:12px;font-weight:800;color:#92400e;margin-bottom:6px">Accountant queue · ' + queueTotal + ' waiting</div>';
-    html += '<p class="section-sub" style="margin:0 0 10px">Approve the current matrix level here or from Home → Approvals inbox. Final level posts the journal.</p>';
-    queueBills.forEach(b => {
-      if (!b.approval_chain || !b.approval_chain.length) {
-        try { attachExpenseApprovalChain(b, b.amount); } catch (_) {}
-      }
-      const idx = Math.max(0, Number(b.approval_level_index) || 0);
-      const cur = (b.approval_chain || [])[idx];
-      const isLast = (b.approval_chain || []).length ? idx >= b.approval_chain.length - 1 : true;
-      const canAct = typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(b);
-      html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;border-top:1px solid rgba(146,64,14,.2)">' +
-        '<div style="flex:1;min-width:140px"><b>' + String(b.supplier || 'Bill').replace(/</g, '') + '</b>' +
-        '<div class="section-sub">Bill · ' + (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) +
-        ' · ' + String((cur && cur.label) || 'Approval').replace(/</g, '') + '</div></div>';
-      if (canAct) {
-        html += '<button type="button" class="button small primary" data-approve-bill="' + b.id + '">' +
-          (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>';
-        html += '<button type="button" class="button small danger" data-reject-bill="' + b.id + '">Reject</button>';
-      } else {
-        html += '<span class="section-sub">Waiting on approver</span>';
-      }
-      html += '</div>';
-    });
-    queueCash.forEach(c => {
-      if (!c.approval_chain || !c.approval_chain.length) {
-        try { attachExpenseApprovalChain(c, c.amount); } catch (_) {}
-      }
-      const idx = Math.max(0, Number(c.approval_level_index) || 0);
-      const cur = (c.approval_chain || [])[idx];
-      const isLast = (c.approval_chain || []).length ? idx >= c.approval_chain.length - 1 : true;
-      const canAct = typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(c);
-      html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;border-top:1px solid rgba(146,64,14,.2)">' +
-        '<div style="flex:1;min-width:140px"><b>' + String(c.note || 'Cash expense').replace(/</g, '') + '</b>' +
-        '<div class="section-sub">Cash · ' + (typeof money === 'function' ? money(c.amount, c.currency) : c.amount) +
-        ' · ' + String((cur && cur.label) || 'Approval').replace(/</g, '') + '</div></div>';
-      if (canAct) {
-        html += '<button type="button" class="button small primary" data-approve-cash="' + c.id + '">' +
-          (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>';
-        html += '<button type="button" class="button small danger" data-reject-cash="' + c.id + '">Reject</button>';
-      } else {
-        html += '<span class="section-sub">Waiting on approver</span>';
-      }
-      html += '</div>';
+
+  const openTotal = openBills.reduce((n, b) => n + (typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0), 0);
+  let glAp = 0;
+  try {
+    const apId = (typeof getApControlId === 'function') ? getApControlId() : '2000';
+    if (typeof accountBalance === 'function') glAp = Math.abs(accountBalance(apId) || 0);
+  } catch (_) {}
+
+  // Aging on open (ledger) bills only — mirrors AR
+  const aging = { 'Current': 0, '1–30': 0, '31–60': 0, '61–90': 0, '90+': 0 };
+  openBills.forEach(b => {
+    const ai = billAgeInfo(b, todayIso);
+    const amt = typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0;
+    aging[ai.bucket] = (aging[ai.bucket] || 0) + amt;
+  });
+
+  if (!bills.length && !queueCash.length) {
+    el.innerHTML = '<div class="empty" style="padding:24px;text-align:center">' +
+      '<h3>No supplier bills yet</h3>' +
+      '<p class="section-sub">Request an expense → approver posts to AP → pay when due. Same flow as collecting invoices.</p>' +
+      '<button class="button primary" type="button" id="booksEmptyBill">+ Expense request</button></div>';
+    document.getElementById('booksEmptyBill')?.addEventListener('click', openBillModal);
+    return;
+  }
+
+  let html = '';
+
+  // Summary strip (always visible)
+  html += '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;align-items:stretch">';
+  html += '<div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;min-width:130px;background:var(--panel)">' +
+    '<div class="mini" style="color:var(--muted);text-transform:uppercase">To pay</div>' +
+    '<div style="font-size:18px;font-weight:800;font-variant-numeric:tabular-nums">' + fmt(openTotal) + '</div>' +
+    '<div class="mini" style="color:var(--muted)">' + openBills.length + ' open on ledger</div></div>';
+  html += '<div style="padding:12px 14px;border:1px solid ' + (queueTotal ? '#fcd34d' : 'var(--line)') +
+    ';border-radius:12px;min-width:130px;background:' + (queueTotal ? '#fffbeb' : 'var(--panel)') + '">' +
+    '<div class="mini" style="color:' + (queueTotal ? '#92400e' : 'var(--muted)') + ';text-transform:uppercase">In queue</div>' +
+    '<div style="font-size:18px;font-weight:800">' + queueTotal + '</div>' +
+    '<div class="mini" style="color:var(--muted)">Awaiting approval</div></div>';
+  if (glAp > 0.02) {
+    html += '<div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;min-width:130px;background:var(--panel)">' +
+      '<div class="mini" style="color:var(--muted);text-transform:uppercase">GL AP</div>' +
+      '<div style="font-size:18px;font-weight:800;font-variant-numeric:tabular-nums">' + fmt(glAp) + '</div>' +
+      '<div class="mini" style="color:var(--muted)">Control account</div></div>';
+  }
+  html += '</div>';
+
+  // Aging chips (like Money in)
+  if (openBills.length) {
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">';
+    Object.entries(aging).forEach(([k, v]) => {
+      if (v > 0.001) html += '<span class="badge">' + k + ': ' + fmt(v) + '</span>';
     });
     html += '</div>';
   }
 
-  if (open.length) {
-    
-  // Supplier concentration
-  const bySup = {};
-  open.forEach(b => {
-    const name = String(b.supplier || 'Unknown supplier');
-    if (!bySup[name]) bySup[name] = { name, count: 0, total: 0, oldest: null };
-    bySup[name].count++;
-    bySup[name].total += (typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0);
-    const d = b.due || b.date || '';
-    if (!bySup[name].oldest || (d && d < bySup[name].oldest)) bySup[name].oldest = d;
-  });
-  const supRows = Object.values(bySup).sort((a, b) => b.total - a.total);
-  if (supRows.length) {
-    html += '<div style="margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">';
-    html += '<div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">By supplier</div>';
-    html += supRows.slice(0, 8).map(r =>
-      '<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px">' +
-      '<div><b>' + String(r.name).replace(/</g,'') + '</b>' +
-      '<div class="client-meta">' + r.count + ' open · oldest ' + (r.oldest || '—') + '</div></div>' +
-      '<b style="font-variant-numeric:tabular-nums">' + (typeof money === 'function' ? money(r.total, rep) : r.total) + '</b></div>'
-    ).join('');
-    html += '</div>';
-  }
-  // Aging buckets
-  const todayIso = (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
-  const aging = { current: 0, d30: 0, d60: 0, d90: 0 };
-  open.forEach(b => {
-    const due = b.due || b.date || todayIso;
-    const days = Math.floor((new Date(todayIso + 'T12:00:00') - new Date(due + 'T12:00:00')) / 86400000);
-    const amt = (typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0);
-    if (days <= 0) aging.current += amt;
-    else if (days <= 30) aging.d30 += amt;
-    else if (days <= 60) aging.d60 += amt;
-    else aging.d90 += amt;
-  });
-  html += '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:14px">';
-  [
-    ['Not due', aging.current],
-    ['1–30d', aging.d30],
-    ['31–60d', aging.d60],
-    ['60d+', aging.d90]
-  ].forEach(([lab, val]) => {
-    html += '<div style="padding:10px;border:1px solid var(--line);border-radius:10px;text-align:center">' +
-      '<div style="font-size:10px;color:var(--muted);text-transform:uppercase">' + lab + '</div>' +
-      '<div style="font-weight:800;font-size:13px;font-variant-numeric:tabular-nums">' + (typeof money === 'function' ? money(val, rep) : val) + '</div></div>';
+  // Local filter chips (in case books tabs not used)
+  const filters = [
+    { id: 'payables', label: 'To pay', n: openBills.length },
+    { id: 'apqueue', label: 'In queue', n: queueTotal },
+    { id: 'apsuppliers', label: 'By supplier', n: 0 },
+    { id: 'appaid', label: 'Paid', n: paidBills.length }
+  ];
+  html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px" role="tablist" aria-label="Payables filters">';
+  filters.forEach(f => {
+    const on = _apView === f.id;
+    html += '<button type="button" class="button small' + (on ? ' primary' : '') + '" data-ap-view="' + f.id + '">' +
+      f.label + (f.n ? ' (' + f.n + ')' : '') + '</button>';
   });
   html += '</div>';
 
-  html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Open payables</div>';
-    html += open.map(b => {
-      const due = b.due || b.date || '';
-      let overdue = false;
-      try { overdue = due && new Date(due + 'T12:00:00') < new Date(); } catch (_) {}
-      const cat = (typeof booksCategoryLabel === 'function') ? booksCategoryLabel('out', b.category) : (b.category || '');
-      const st = b.status || 'open';
-      if ((st === 'pending_approval' || st === 'pending_review') && (!b.approval_chain || !b.approval_chain.length)) {
-        try { attachExpenseApprovalChain(b, b.amount); } catch (_) {}
-      }
-      const chain = b.approval_chain || [];
-      const lvlIdx = Math.max(0, Number(b.approval_level_index) || 0);
-      const curLvl = chain[lvlIdx];
-      const isLastLvl = chain.length ? lvlIdx >= chain.length - 1 : true;
-      const statusLabel = st === 'pending_review' || st === 'pending_approval'
-        ? (curLvl ? (curLvl.label || ('Level ' + curLvl.level)) : 'Needs approval')
-        : st === 'rejected' ? 'Rejected'
-        : st === 'open' ? 'Open' : st;
-      const statusStyle = st === 'pending_review' || st === 'pending_approval' ? 'background:#fef3c7;color:#92400e'
-        : st === 'rejected' ? 'background:#fee2e2;color:#991b1b'
-        : 'background:var(--panel-2);color:var(--muted)';
-      const canActLvl = typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(b);
-      let actions = '';
-      if ((st === 'pending_review' || st === 'pending_approval') && canActLvl) {
-        actions += '<button type="button" class="button small primary" data-approve-bill="' + b.id + '">' +
-          (isLastLvl ? 'Approve &amp; post' : 'Approve level') + '</button>';
-        actions += '<button type="button" class="button small danger" data-reject-bill="' + b.id + '">Reject</button>';
-      } else if (st === 'open' || st === 'approved') {
-        actions += '<select class="searchable" data-searchable="1" data-pay-from="' + b.id +
-          '" style="font-size:12px;min-width:160px;max-width:220px" title="Pay from account">' + bankOpts + '</select>';
-        actions += '<button type="button" class="button small primary" data-pay-bill="' + b.id + '">Pay (clear AP)</button>';
-      }
-      actions += '<button type="button" class="button small danger" data-del-bill="' + b.id + '">Delete</button>';
-      return '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)">' +
-        '<div style="flex:1;min-width:160px">' +
-        '<div style="font-weight:700;font-size:13px">' + String(b.supplier || 'Supplier').replace(/</g, '') +
-        ' <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;' + statusStyle + '">' + statusLabel + '</span></div>' +
-        '<div style="font-size:12px;color:var(--muted)">' + cat + ' · bill ' + (b.date || '—') +
-        ' · due ' + (due || '—') + (overdue && st === 'open' ? ' · <span style="color:var(--red-text)">overdue</span>' : '') +
-        (b.note ? (' · ' + String(b.note).slice(0, 40).replace(/</g, '')) : '') +
-        (b.requested_by_email ? (' · by ' + String(b.requested_by_email).replace(/</g, '')) : '') +
-        (b.auto_posted ? ' · <span style="color:#166534">fast lane</span>' : '') +
-        (b.purchase_id ? (' · PO' + (b.match_status === 'variance' ? ' <span style="color:#92400e">variance ' + (b.match_variance_pct || '') + '%</span>' : (b.match_status === 'match' ? ' match' : ''))) : '') +
-        '</div>' +
-        '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">' + actions + '</div></div>' +
-        '<b>' + (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) + '</b>' +
-        '</div>';
-    }).join('');
-  } else {
-    html += '<p class="section-sub">No open payables — all bills cleared.</p>';
+  // ——— Queue view ———
+  if (_apView === 'apqueue') {
+    if (!queueTotal) {
+      html += '<p class="section-sub">Nothing waiting. New expense requests land here until the final approver posts the journal.</p>';
+    } else {
+      html += '<p class="section-sub" style="margin:0 0 10px">Approve the current level. Final level posts expense + AP. You can also act from Home → Approvals.</p>';
+      const row = (title, sub, canAct, approveAttr, rejectAttr, isLast) => {
+        let actions = '';
+        if (canAct) {
+          actions = '<button type="button" class="button small primary" ' + approveAttr + '>' +
+            (isLast ? 'Approve &amp; post' : 'Approve level') + '</button>' +
+            '<button type="button" class="button small danger" ' + rejectAttr + '>Reject</button>';
+        } else {
+          actions = '<span class="mini" style="color:var(--muted)">Waiting on approver</span>';
+        }
+        return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line)">' +
+          '<div style="min-width:160px;flex:1"><b>' + title + '</b><div class="mini" style="color:var(--muted);margin-top:2px">' + sub + '</div></div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">' + actions + '</div></div>';
+      };
+      queueBills.forEach(b => {
+        if (!b.approval_chain || !b.approval_chain.length) {
+          try { attachExpenseApprovalChain(b, b.amount); } catch (_) {}
+        }
+        const idx = Math.max(0, Number(b.approval_level_index) || 0);
+        const cur = (b.approval_chain || [])[idx];
+        const isLast = (b.approval_chain || []).length ? idx >= b.approval_chain.length - 1 : true;
+        const canAct = typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(b);
+        html += row(
+          String(b.supplier || 'Bill').replace(/</g, ''),
+          'Bill · ' + fmt(b.amount, b.currency) + ' · ' + String((cur && cur.label) || 'Approval').replace(/</g, '') +
+            (b.requested_by_email ? ' · by ' + String(b.requested_by_email).replace(/</g, '') : ''),
+          canAct, 'data-approve-bill="' + b.id + '"', 'data-reject-bill="' + b.id + '"', isLast
+        );
+      });
+      queueCash.forEach(c => {
+        if (!c.approval_chain || !c.approval_chain.length) {
+          try { attachExpenseApprovalChain(c, c.amount); } catch (_) {}
+        }
+        const idx = Math.max(0, Number(c.approval_level_index) || 0);
+        const cur = (c.approval_chain || [])[idx];
+        const isLast = (c.approval_chain || []).length ? idx >= c.approval_chain.length - 1 : true;
+        const canAct = typeof canActOnExpenseLevel === 'function' && canActOnExpenseLevel(c);
+        html += row(
+          String(c.note || 'Cash expense').replace(/</g, ''),
+          'Cash · ' + fmt(c.amount, c.currency) + ' · ' + String((cur && cur.label) || 'Approval').replace(/</g, ''),
+          canAct, 'data-approve-cash="' + c.id + '"', 'data-reject-cash="' + c.id + '"', isLast
+        );
+      });
+    }
   }
 
-  if (paid.length) {
-    html += '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin:16px 0 6px">Recently paid</div>';
-    html += paid.map(b =>
-      '<div style="display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">' +
-      '<span>' + String(b.supplier || 'Supplier').replace(/</g, '') + ((b.documents||[]).length ? ' · ' + b.documents.length + ' file(s)' : '') + ' · paid ' + (b.paidAt || '—') + '</span>' +
-      '<span style="color:var(--muted)">' + (typeof money === 'function' ? money(b.amount, b.currency) : b.amount) + '</span></div>'
-    ).join('');
+  // ——— By supplier ———
+  else if (_apView === 'apsuppliers') {
+    const apRows = (typeof apSubledgerBalances === 'function') ? apSubledgerBalances() : [];
+    if (!apRows.length && !openBills.length) {
+      html += '<p class="section-sub">No supplier balances yet. Posted bills build the AP subledger.</p>';
+    } else if (apRows.length) {
+      html += '<p class="section-sub" style="margin:0 0 10px">Balances from the AP control account. Tap a supplier for statement + open bills.</p>';
+      html += '<div style="display:flex;flex-direction:column;gap:4px">';
+      apRows.forEach(r => {
+        const name = String(r.partyName || 'Unassigned').replace(/</g, '').replace(/"/g, '&quot;');
+        const pid = String(r.partyId || '').replace(/"/g, '');
+        html += '<button type="button" data-ap-party-id="' + pid + '" data-ap-party-name="' + name + '" ' +
+          'style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:10px 8px;border:none;border-bottom:1px solid var(--line);background:transparent;cursor:pointer;text-align:left;width:100%;border-radius:8px">' +
+          '<span style="font-weight:600">' + name +
+          '<span class="mini" style="display:block;font-weight:500;color:var(--muted);margin-top:2px">Statement</span></span>' +
+          '<b style="font-variant-numeric:tabular-nums">' + fmt(r.balance) + '</b></button>';
+      });
+      html += '</div>';
+    } else {
+      // Fallback: group open bills by name
+      const bySup = {};
+      openBills.forEach(b => {
+        const name = String(b.supplier || 'Unknown');
+        if (!bySup[name]) bySup[name] = { name, count: 0, total: 0 };
+        bySup[name].count++;
+        bySup[name].total += typeof toRep === 'function' ? toRep(b.amount, b.currency) : Number(b.amount) || 0;
+      });
+      Object.values(bySup).sort((a, b) => b.total - a.total).forEach(r => {
+        html += '<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)">' +
+          '<div><b>' + String(r.name).replace(/</g, '') + '</b><div class="mini" style="color:var(--muted)">' + r.count + ' open</div></div>' +
+          '<b>' + fmt(r.total) + '</b></div>';
+      });
+    }
   }
+
+  // ——— Paid ———
+  else if (_apView === 'appaid') {
+    if (!paidBills.length) {
+      html += '<p class="section-sub">No paid bills in recent history.</p>';
+    } else {
+      html += '<table class="table desktop-table"><thead><tr>' +
+        '<th>Supplier</th><th>Paid</th><th class="right">Amount</th></tr></thead><tbody>';
+      paidBills.forEach(b => {
+        html += '<tr><td><b>' + String(b.supplier || 'Supplier').replace(/</g, '') + '</b>' +
+          ((b.documents || []).length ? '<div class="mini" style="color:var(--muted)">' + b.documents.length + ' file(s)</div>' : '') +
+          '</td><td>' + (b.paidAt || b.date || '—') + '</td><td class="right">' + fmt(b.amount, b.currency) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+      html += '<div class="mobile-list">' + paidBills.map(b =>
+        '<div class="mobile-card"><div class="mobile-card-title">' + String(b.supplier || 'Supplier').replace(/</g, '') +
+        '</div><div class="mobile-card-sub">Paid ' + (b.paidAt || '—') + ' · ' + fmt(b.amount, b.currency) + '</div></div>'
+      ).join('') + '</div>';
+    }
+  }
+
+  // ——— To pay (default) ———
+  else {
+    if (queueTotal) {
+      html += '<div style="margin-bottom:12px;padding:10px 12px;border:1px solid #fcd34d;border-radius:10px;background:#fffbeb;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between">' +
+        '<span style="font-size:13px;color:#92400e"><b>' + queueTotal + '</b> in approval queue</span>' +
+        '<button type="button" class="button small" data-ap-view="apqueue">Review queue</button></div>';
+    }
+    if (!openBills.length) {
+      html += '<p class="section-sub">Nothing to pay on the ledger. Approve queued requests first, or add a new expense.</p>';
+    } else {
+      const rows = openBills.map(b => {
+        const ai = billAgeInfo(b, todayIso);
+        const cat = (typeof booksCategoryLabel === 'function') ? booksCategoryLabel('out', b.category) : (b.category || '');
+        return { b, ai, cat };
+      }).sort((a, b) => b.ai.days - a.ai.days);
+
+      html += '<table class="table desktop-table"><thead><tr>' +
+        '<th>Supplier</th><th>Due</th><th>Age</th><th class="right">Amount</th><th>Pay from</th><th></th></tr></thead><tbody>';
+      rows.forEach(({ b, ai, cat }) => {
+        html += '<tr>' +
+          '<td><b>' + String(b.supplier || 'Supplier').replace(/</g, '') + '</b>' +
+          '<div class="mini" style="color:var(--muted)">' + String(cat || '').replace(/</g, '') +
+          (b.note ? ' · ' + String(b.note).slice(0, 36).replace(/</g, '') : '') + '</div></td>' +
+          '<td>' + (ai.due || '—') + (ai.overdue ? ' <span style="color:var(--red-text);font-size:11px">overdue</span>' : '') + '</td>' +
+          '<td>' + ai.bucket + '</td>' +
+          '<td class="right"><b>' + fmt(b.amount, b.currency) + '</b></td>' +
+          '<td><select class="searchable" data-searchable="1" data-pay-from="' + b.id +
+          '" style="font-size:12px;min-width:140px;max-width:200px">' + bankOpts + '</select></td>' +
+          '<td><div class="client-actions" style="flex-wrap:wrap">' +
+          '<button type="button" class="button small primary" data-pay-bill="' + b.id + '">Pay</button>' +
+          '<button type="button" class="button small danger" data-del-bill="' + b.id + '">Delete</button>' +
+          '</div></td></tr>';
+      });
+      html += '</tbody></table>';
+
+      // Mobile cards
+      html += '<div class="mobile-list">' + rows.map(({ b, ai, cat }) =>
+        '<div class="mobile-card">' +
+        '<div class="mobile-card-title">' + String(b.supplier || 'Supplier').replace(/</g, '') + '</div>' +
+        '<div class="mobile-card-sub">' + ai.bucket + ' · due ' + (ai.due || '—') +
+        (ai.overdue ? ' · overdue' : '') + ' · ' + String(cat || '').replace(/</g, '') + '</div>' +
+        '<div class="mobile-card-meta"><b>' + fmt(b.amount, b.currency) + '</b></div>' +
+        '<div class="field" style="margin:8px 0 6px"><label class="mini">Pay from</label>' +
+        '<select class="searchable" data-searchable="1" data-pay-from="' + b.id + '">' + bankOpts + '</select></div>' +
+        '<div class="mobile-card-actions">' +
+        '<button type="button" class="button small primary" data-pay-bill="' + b.id + '">Pay</button>' +
+        '<button type="button" class="button small danger" data-del-bill="' + b.id + '">Delete</button>' +
+        '</div></div>'
+      ).join('') + '</div>';
+    }
+  }
+
   el.innerHTML = html;
-  document.getElementById('booksAddBillBtn')?.addEventListener('click', openBillModal);
+
+  el.querySelectorAll('[data-ap-view]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _apView = btn.getAttribute('data-ap-view') || 'payables';
+      try {
+        if (typeof setBooksPage === 'function' && typeof booksPage !== 'undefined' && booksPage === 'ap') {
+          setBooksPage('ap', _apView);
+          return;
+        }
+      } catch (_) {}
+      renderBooksPayables();
+    });
+  });
+  el.querySelectorAll('[data-ap-party-id], [data-ap-party-name]').forEach(btn => {
+    if (!btn.hasAttribute('data-ap-party-id') && !btn.hasAttribute('data-ap-party-name')) return;
+    btn.addEventListener('click', () => {
+      if (typeof openPartyLedgerModal === 'function') {
+        openPartyLedgerModal({
+          partyType: 'supplier',
+          partyId: btn.getAttribute('data-ap-party-id') || '',
+          partyName: btn.getAttribute('data-ap-party-name') || ''
+        });
+      }
+    });
+  });
   try {
     if (typeof initSearchableSelects === 'function') initSearchableSelects(el);
   } catch (_) {}
