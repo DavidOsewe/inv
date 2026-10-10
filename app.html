@@ -5026,12 +5026,12 @@ body:has(.modalback.show) .notif-panel {
         <div class="two" style="gap:12px;margin-top:8px;align-items:stretch">
           <div class="insight" style="flex:1;margin:0">
             <h3 class="books-panel-title">Receivables by customer</h3>
-            <p class="section-sub" style="margin:0 0 8px">Subledger under AR control (1100). New invoices/payments tag the client automatically.</p>
+            <p class="section-sub" style="margin:0 0 8px">Subledger under AR control. Invoices/payments tag the client. Tap a row for statement.</p>
             <div id="booksArSubledger"></div>
           </div>
           <div class="insight" style="flex:1;margin:0">
             <h3 class="books-panel-title">Payables by supplier</h3>
-            <p class="section-sub" style="margin:0 0 8px">Subledger under AP control (2000). Bills and payments tag the supplier.</p>
+            <p class="section-sub" style="margin:0 0 8px">Subledger under AP control. Bills/payments tag the supplier. Tap a row for statement.</p>
             <div id="booksApSubledger"></div>
           </div>
         </div>
@@ -5134,6 +5134,17 @@ body:has(.modalback.show) .notif-panel {
             </ul>
           </div>
           <p id="booksLockNextOpen" class="section-sub" style="margin:12px 0 0"></p>
+          <div style="margin-top:18px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
+            <div style="font-weight:700;margin-bottom:6px">AR / AP sub-accounts (Phase 5)</div>
+            <p class="section-sub" style="margin:0 0 10px">
+              When on, each customer/supplier gets a dedicated COA line under the control account
+              (e.g. <code>AR-abc123</code>). Off by default — party tags on the control account are enough for most SMEs.
+            </p>
+            <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer">
+              <input type="checkbox" id="booksPartySubAccounts">
+              Create per-party AR/AP sub-accounts on post
+            </label>
+          </div>
         </div>
       </div>
       <div id="booksPanelCoa" hidden>
@@ -6783,8 +6794,10 @@ body:has(.modalback.show) .notif-panel {
     </div>
     <div id="partyLedgerBody" style="margin-top:16px"></div>
     <div class="buttons" style="justify-content:flex-end;margin-top:16px;gap:10px;flex-wrap:wrap">
-      <button class="button" type="button" id="partyLedgerClose">Close</button>
+      <button class="button" type="button" id="partyLedgerCsv">CSV</button>
+      <button class="button" type="button" id="partyLedgerPdf">PDF</button>
       <button class="button" type="button" id="partyLedgerGoto" hidden>Open profile</button>
+      <button class="button" type="button" id="partyLedgerClose">Close</button>
     </div>
   </div>
 </div>
@@ -21413,6 +21426,20 @@ function updateDateLockHint(inputId, hintId) {
   }
 }
 
+function syncPartySubAccountsUI() {
+  const el = document.getElementById('booksPartySubAccounts');
+  if (!el) return;
+  el.checked = !!(db.booksSettings && db.booksSettings.partySubAccounts);
+  el.onchange = () => {
+    if (!db.booksSettings) db.booksSettings = {};
+    db.booksSettings.partySubAccounts = !!el.checked;
+    try { save(); } catch (_) {}
+    toast(el.checked
+      ? 'Party sub-accounts on — next invoice/bill posts create AR-/AP- codes'
+      : 'Party sub-accounts off — control account + party tags only');
+  };
+}
+
 function syncBooksPeriodLockUI() {
   ensureBooksDb();
   const lock = booksPeriodLockedThrough();
@@ -21994,17 +22021,20 @@ function partyApBalance(partyId) {
 
 /** Control total from GL vs sum of tagged subledger (for reconciliation strip). */
 function arApControlCheck() {
+  let arId = AR_CONTROL_ID, apId = AP_CONTROL_ID;
+  try { arId = getArControlId(); } catch (_) {}
+  try { apId = getApControlId(); } catch (_) {}
   let glAr = 0, glAp = 0;
   try {
     if (typeof accountBalance === 'function') {
-      glAr = accountBalance(AR_CONTROL_ID) || 0;
-      glAp = accountBalance(AP_CONTROL_ID) || 0;
+      glAr = accountBalance(arId) || 0;
+      glAp = accountBalance(apId) || 0;
     }
   } catch (_) {}
-  // Liability natural credit → display positive AP as -gl if signed asset-style
   const arSub = arSubledgerBalances().reduce((n, r) => n + r.balance, 0);
   const apSub = apSubledgerBalances().reduce((n, r) => n + r.balance, 0);
   return {
+    arId, apId,
     glAr: Math.round(glAr * 100) / 100,
     glAp: Math.round(Math.abs(glAp) * 100) / 100,
     subAr: Math.round(arSub * 100) / 100,
@@ -22012,6 +22042,179 @@ function arApControlCheck() {
     arDiff: Math.round((glAr - arSub) * 100) / 100,
     apDiff: Math.round((Math.abs(glAp) - apSub) * 100) / 100
   };
+}
+
+/** Journal lines on AR/AP control with no party tag (Phase 3 gap list). */
+function untaggedArApLines() {
+  ensureBooksDb();
+  let arId = AR_CONTROL_ID, apId = AP_CONTROL_ID;
+  try { arId = getArControlId(); } catch (_) {}
+  try { apId = getApControlId(); } catch (_) {}
+  const out = [];
+  (db.journals || []).forEach(j => {
+    if (!j || j.reversed) return;
+    (j.lines || []).forEach((line, li) => {
+      const id = String(line.accountId || '');
+      if (id !== String(arId) && id !== String(apId)) return;
+      if (line.partyId || line.partyName) return;
+      const deb = Number(line.debit) || 0;
+      const cre = Number(line.credit) || 0;
+      if (deb < 0.001 && cre < 0.001) return;
+      out.push({
+        journalId: j.id,
+        lineIndex: li,
+        date: j.date,
+        memo: j.memo || j.source || '',
+        source: j.source,
+        accountId: id,
+        side: id === String(arId) ? 'ar' : 'ap',
+        debit: deb,
+        credit: cre,
+        amount: Math.max(deb, cre)
+      });
+    });
+  });
+  return out.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+
+/**
+ * Phase 3: assign party on an untagged AR/AP line, then refresh.
+ * party: { partyType, partyId, partyName }
+ */
+function tagArApJournalLine(journalId, lineIndex, party) {
+  ensureBooksDb();
+  const j = (db.journals || []).find(x => x.id === journalId);
+  if (!j || !j.lines || !j.lines[lineIndex]) {
+    toast('Journal line not found');
+    return false;
+  }
+  const line = j.lines[lineIndex];
+  if (party.partyType) line.partyType = party.partyType;
+  if (party.partyId) line.partyId = party.partyId;
+  if (party.partyName) line.partyName = party.partyName;
+  try { save(); } catch (_) {}
+  toast('Tagged · ' + (party.partyName || party.partyId || 'party'));
+  return true;
+}
+
+/** Phase 4 — CSV statement for one customer or supplier. */
+function exportPartyStatementCsv(partyType, partyId, partyName) {
+  const act = partySubledgerActivity(partyType, partyId, partyName);
+  const rep = (db.profile && db.profile.reporting) || 'NGN';
+  const bal = partyType === 'supplier'
+    ? (partyId ? partyApBalance(partyId) : 0)
+    : (partyId ? partyArBalance(partyId) : 0);
+  const biz = (db.profile && (db.profile.businessName || db.profile.name)) || 'invoicedey';
+  const esc = (s) => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
+  const lines = [
+    'Business,' + esc(biz),
+    'Statement,' + esc(partyType === 'supplier' ? 'Accounts payable' : 'Accounts receivable'),
+    'Party,' + esc(partyName || partyId || ''),
+    'Control account,' + esc(act.controlId),
+    'Balance,' + bal,
+    'Currency,' + rep,
+    'As of,' + (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10)),
+    '',
+    'Date,Memo,Source,Debit,Credit'
+  ];
+  act.journals.forEach(j => {
+    lines.push([
+      j.date || '',
+      esc(j.memo || ''),
+      esc(j.source || ''),
+      j.debit || 0,
+      j.credit || 0
+    ].join(','));
+  });
+  if (act.openDocs.length) {
+    lines.push('');
+    lines.push('Open documents');
+    lines.push('Type,Label,Date,Amount,Status');
+    act.openDocs.forEach(d => {
+      lines.push([d.kind, esc(d.label), d.date || '', d.amount || 0, esc(d.status || '')].join(','));
+    });
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const safe = String(partyName || partyId || 'party').replace(/[^\w.-]+/g, '_').slice(0, 40);
+  a.download = 'invoicedey-' + (partyType === 'supplier' ? 'ap' : 'ar') + '-' + safe + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Statement CSV downloaded');
+}
+
+/** Phase 4 — printable statement window. */
+function exportPartyStatementPdf(partyType, partyId, partyName) {
+  const act = partySubledgerActivity(partyType, partyId, partyName);
+  const rep = (db.profile && db.profile.reporting) || 'NGN';
+  const fmt = (n) => (typeof money === 'function' ? money(n, rep) : String(n));
+  const bal = partyType === 'supplier'
+    ? (partyId ? partyApBalance(partyId) : 0)
+    : (partyId ? partyArBalance(partyId) : 0);
+  const biz = (db.profile && (db.profile.businessName || db.profile.name)) || 'invoicedey';
+  const asOf = typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10);
+  let rows = act.journals.map(j =>
+    '<tr><td>' + (j.date || '') + '</td><td>' + String(j.memo || '').replace(/</g, '') +
+    '</td><td style="text-align:right">' + (j.debit > 0.001 ? fmt(j.debit) : '') +
+    '</td><td style="text-align:right">' + (j.credit > 0.001 ? fmt(j.credit) : '') + '</td></tr>'
+  ).join('');
+  if (!rows) rows = '<tr><td colspan="4">No movements</td></tr>';
+  const html = '<!DOCTYPE html><html><head><title>Statement · ' + String(partyName || '').replace(/</g, '') +
+    '</title><style>body{font-family:system-ui,sans-serif;padding:24px;color:#111}' +
+    'h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;margin:16px 0 8px;color:#444}' +
+    'table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #e5e7eb;padding:6px 4px;text-align:left}' +
+    'th{color:#6b7280;font-weight:600}.meta{color:#6b7280;font-size:12px;margin-bottom:16px}' +
+    '.bal{font-size:20px;font-weight:800;margin:8px 0 16px}@media print{button{display:none}}</style></head><body>' +
+    '<button onclick="window.print()" style="margin-bottom:12px">Print / Save PDF</button>' +
+    '<h1>' + String(biz).replace(/</g, '') + '</h1>' +
+    '<div class="meta">' + (partyType === 'supplier' ? 'Accounts payable statement' : 'Accounts receivable statement') +
+    ' · as of ' + asOf + '</div>' +
+    '<h2>' + String(partyName || partyId || 'Party').replace(/</g, '') + '</h2>' +
+    '<div class="bal">' + (partyType === 'supplier' ? 'You owe ' : 'Balance due ') + fmt(bal) + '</div>' +
+    '<table><thead><tr><th>Date</th><th>Memo</th><th style="text-align:right">Debit</th><th style="text-align:right">Credit</th></tr></thead>' +
+    '<tbody>' + rows + '</tbody></table>' +
+    '<p class="meta" style="margin-top:24px">Control ' + act.controlId + ' · Generated by invoicedey</p></body></html>';
+  const w = window.open('', '_blank', 'noopener,noreferrer,width=720,height=900');
+  if (!w) { toast('Allow pop-ups to print the statement'); return; }
+  w.document.write(html);
+  w.document.close();
+}
+
+/**
+ * Phase 5 (optional): dedicated COA sub-account per party under AR/AP control.
+ * Off by default — enable booksSettings.partySubAccounts = true.
+ */
+function partySubAccountsEnabled() {
+  return !!(db.booksSettings && db.booksSettings.partySubAccounts);
+}
+
+function ensurePartySubAccount(partyType, partyId, partyName) {
+  if (!partySubAccountsEnabled() || !partyId) return null;
+  ensureBooksDb();
+  if (!Array.isArray(db.coaExtra)) db.coaExtra = [];
+  const prefix = partyType === 'supplier' ? 'AP' : 'AR';
+  const id = prefix + '-' + String(partyId).replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+  const existing = db.coaExtra.find(a => a.id === id) || (typeof getCoaAll === 'function' ? getCoaAll() : []).find(a => a.id === id);
+  if (existing) return existing.id;
+  const name = (partyType === 'supplier' ? 'AP · ' : 'AR · ') + String(partyName || partyId).slice(0, 60);
+  const row = partyType === 'supplier'
+    ? { id, name, type: 'liability', statement: 'bs', fsLine: 'payables', cfSection: 'operating', parentControl: true }
+    : { id, name, type: 'asset', statement: 'bs', fsLine: 'receivables', cfSection: 'operating', parentControl: true };
+  db.coaExtra.push(row);
+  try { save(); } catch (_) {}
+  return id;
+}
+
+/** When party sub-accounts on, resolve posting account for AR/AP line. */
+function partyControlAccountForPost(partyType, partyId, partyName) {
+  if (partySubAccountsEnabled() && partyId) {
+    const sub = ensurePartySubAccount(partyType, partyId, partyName);
+    if (sub) return sub;
+  }
+  return partyType === 'supplier'
+    ? ((typeof getApControlId === 'function') ? getApControlId() : AP_CONTROL_ID)
+    : ((typeof getArControlId === 'function') ? getArControlId() : AR_CONTROL_ID);
 }
 
 function recordCashFromInvoicePayment(inv, payment) {
@@ -22087,8 +22290,11 @@ function accrueInvoiceIfNeeded(inv, opts) {
   }
   inv.revenueAccountId = revId;
   const taxId = getOutputTaxAccountId();
+  const arPostId = (typeof partyControlAccountForPost === 'function')
+    ? partyControlAccountForPost('client', party.partyId, party.partyName)
+    : arId;
   const lines = [
-    withPartyOnArApLine({ accountId: arId, debit: totalRep, credit: 0 }, party),
+    withPartyOnArApLine({ accountId: arPostId, debit: totalRep, credit: 0 }, party),
     { accountId: revId, debit: 0, credit: revRep }
   ];
   if (taxRep > 0.001) {
@@ -24195,7 +24401,9 @@ function accrueSupplierBill(bill) {
     lines.push({ accountId: inTax, debit: taxRep, credit: 0 });
   }
   const party = partyFromBill(bill);
-  const apId = (typeof getApControlId === 'function') ? getApControlId() : AP_CONTROL_ID;
+  const apId = (typeof partyControlAccountForPost === 'function')
+    ? partyControlAccountForPost('supplier', party.partyId, party.partyName)
+    : ((typeof getApControlId === 'function') ? getApControlId() : AP_CONTROL_ID);
   lines.push(withPartyOnArApLine({ accountId: apId, debit: 0, credit: totalRep }, party));
   postJournal({
     date: bill.date || today,
@@ -25760,6 +25968,8 @@ function openPartyLedgerModal(opts) {
   }
   body.innerHTML = html;
 
+  window._partyLedgerCtx = { partyType, partyId, partyName };
+
   if (gotoBtn) {
     if (partyId && partyType === 'client') {
       gotoBtn.hidden = false;
@@ -25777,12 +25987,21 @@ function openPartyLedgerModal(opts) {
         closePartyLedgerModal();
         const s = (db.suppliers || []).find(x => x.id === partyId);
         if (s && typeof openSupplierModal === 'function') openSupplierModal(s);
-        else if (typeof switchTo === 'function') switchTo('inventory');
+        else if (typeof switchTo === 'function') switchTo('suppliers');
       };
     } else {
       gotoBtn.hidden = true;
       gotoBtn.onclick = null;
     }
+  }
+
+  const csvBtn = document.getElementById('partyLedgerCsv');
+  const pdfBtn = document.getElementById('partyLedgerPdf');
+  if (csvBtn) {
+    csvBtn.onclick = () => exportPartyStatementCsv(partyType, partyId, partyName);
+  }
+  if (pdfBtn) {
+    pdfBtn.onclick = () => exportPartyStatementPdf(partyType, partyId, partyName);
   }
 
   document.getElementById('partyLedgerModal')?.classList.add('show');
@@ -25808,23 +26027,54 @@ function renderArApSubledgers() {
         '" data-party-id="' + pid + '" data-party-name="' + name + '" ' +
         'style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:8px 6px;border:none;border-bottom:1px solid var(--line);background:transparent;cursor:pointer;text-align:left;width:100%;border-radius:8px">' +
         '<span style="font-size:13px;font-weight:600;color:var(--text)">' + name +
-        '<span class="mini" style="display:block;font-weight:500;color:var(--muted);margin-top:2px">View statement</span></span>' +
+        '<span class="mini" style="display:block;font-weight:500;color:var(--muted);margin-top:2px">Statement · CSV · PDF</span></span>' +
         '<span style="font-size:13px;font-variant-numeric:tabular-nums;font-weight:700;color:var(--text)">' + fmt(r.balance) + '</span></button>';
     }).join('') +
       (rows.length > 12 ? '<p class="mini" style="margin:6px 0 0">+' + (rows.length - 12) + ' more</p>' : '') +
       '</div>';
   };
+
+  // Phase 3 — control check + untagged lines
   let checkHint = '';
   try {
     const c = arApControlCheck();
-    if (Math.abs(c.arDiff) > 1 || Math.abs(c.apDiff) > 1) {
-      checkHint = '<p class="mini" style="margin:8px 0 0;color:var(--muted)">Control check: AR sub ' +
-        fmt(c.subAr) + ' vs GL ' + fmt(c.glAr) +
-        (Math.abs(c.arDiff) > 1 ? ' · gap ' + fmt(c.arDiff) + ' (untagged lines)' : '') +
-        ' · AP sub ' + fmt(c.subAp) + ' vs GL ' + fmt(c.glAp) +
-        (Math.abs(c.apDiff) > 1 ? ' · gap ' + fmt(c.apDiff) : '') + '</p>';
+    const gaps = untaggedArApLines();
+    const arGaps = gaps.filter(g => g.side === 'ar');
+    const apGaps = gaps.filter(g => g.side === 'ap');
+    if (Math.abs(c.arDiff) > 1 || Math.abs(c.apDiff) > 1 || gaps.length) {
+      checkHint = '<div style="margin-top:10px;padding:10px 12px;border:1px solid ' +
+        ((Math.abs(c.arDiff) > 1 || Math.abs(c.apDiff) > 1) ? '#fcd34d' : 'var(--line)') +
+        ';border-radius:10px;background:' +
+        ((Math.abs(c.arDiff) > 1 || Math.abs(c.apDiff) > 1) ? '#fffbeb' : 'var(--panel-2)') + '">' +
+        '<div style="font-size:11px;font-weight:800;text-transform:uppercase;color:#92400e;margin-bottom:6px">Control check</div>' +
+        '<div class="mini" style="color:var(--muted)">AR sub ' + fmt(c.subAr) + ' · GL ' + fmt(c.glAr) +
+        (Math.abs(c.arDiff) > 1 ? ' · <b style="color:#92400e">gap ' + fmt(c.arDiff) + '</b>' : ' · matched') +
+        '<br>AP sub ' + fmt(c.subAp) + ' · GL ' + fmt(c.glAp) +
+        (Math.abs(c.apDiff) > 1 ? ' · <b style="color:#92400e">gap ' + fmt(c.apDiff) + '</b>' : ' · matched') +
+        '</div>';
+      if (gaps.length) {
+        checkHint += '<div style="margin-top:8px;font-size:12px"><b>' + gaps.length +
+          ' untagged line' + (gaps.length === 1 ? '' : 's') + '</b> on control accounts — assign a party to close the gap.</div>';
+        checkHint += '<div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">';
+        gaps.slice(0, 8).forEach((g, i) => {
+          const opts = g.side === 'ar'
+            ? (db.clients || []).map(c => '<option value="' + c.id + '">' + String(c.name || '').replace(/</g, '') + '</option>').join('')
+            : (db.suppliers || []).map(s => '<option value="' + s.id + '">' + String(s.name || '').replace(/</g, '') + '</option>').join('');
+          checkHint += '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 0;border-top:1px solid rgba(0,0,0,.06)">' +
+            '<div style="flex:1;min-width:120px;font-size:12px"><b>' + (g.side === 'ar' ? 'AR' : 'AP') + '</b> · ' +
+            (g.date || '') + ' · ' + String(g.memo || '').slice(0, 40).replace(/</g, '') +
+            ' · ' + fmt(g.amount) + '</div>' +
+            '<select data-tag-side="' + g.side + '" data-tag-jid="' + g.journalId + '" data-tag-li="' + g.lineIndex +
+            '" style="font-size:12px;min-width:120px;max-width:180px">' +
+            '<option value="">— Party —</option>' + opts + '</select>' +
+            '<button type="button" class="button small" data-tag-apply="' + i + '">Tag</button></div>';
+        });
+        checkHint += '</div>';
+      }
+      checkHint += '</div>';
     }
-  } catch (_) {}
+  } catch (e) { console.warn('ar/ap check', e); }
+
   if (arEl) {
     arEl.innerHTML = rowHtml(arSubledgerBalances(), 'No tagged customer AR yet — send an invoice to build the subledger.', 'client') + checkHint;
     arEl.querySelectorAll('[data-party-type]').forEach(btn => {
@@ -25833,6 +26083,27 @@ function renderArApSubledgers() {
         partyId: btn.getAttribute('data-party-id'),
         partyName: btn.getAttribute('data-party-name')
       });
+    });
+    arEl.querySelectorAll('[data-tag-apply]').forEach(btn => {
+      btn.onclick = () => {
+        const row = btn.closest('div');
+        const sel = row && row.querySelector('select[data-tag-jid]');
+        if (!sel || !sel.value) { toast('Pick a party first'); return; }
+        const side = sel.getAttribute('data-tag-side');
+        const jid = sel.getAttribute('data-tag-jid');
+        const li = Number(sel.getAttribute('data-tag-li'));
+        const partyType = side === 'ar' ? 'client' : 'supplier';
+        let partyName = '';
+        if (partyType === 'client') {
+          partyName = (db.clients || []).find(c => c.id === sel.value)?.name || '';
+        } else {
+          partyName = (db.suppliers || []).find(s => s.id === sel.value)?.name || '';
+        }
+        if (tagArApJournalLine(jid, li, { partyType, partyId: sel.value, partyName })) {
+          try { backfillArApPartyTags(); } catch (_) {}
+          renderArApSubledgers();
+        }
+      };
     });
   }
   if (apEl) {
@@ -25853,6 +26124,7 @@ function booksView() {
   try { syncBooksCustomDateUI(); } catch {}
   try { syncBooksPeriodChips(); } catch {}
   try { syncBooksPeriodLockUI(); } catch {}
+  try { syncPartySubAccountsUI(); } catch {}
 
   // purge accidental binary statement imports
   try {
@@ -33921,9 +34193,28 @@ function addPaymentToEdit(amount, date, note, method) {
     }
   }
   save();
-  renderPayments();
-  preview();
-  toast(edit.paid ? 'Paid in full.' : 'Partial payment recorded.');
+  const lastPay = edit.payments[edit.payments.length - 1];
+  const afterAccrue = () => {
+    try {
+      if (lastPay) recordCashFromInvoicePayment(edit, lastPay);
+    } catch (e) { console.warn('pay journal', e); }
+    renderPayments();
+    preview();
+    toast(edit.paid ? 'Paid in full.' : 'Partial payment recorded.');
+  };
+  // Ensure AR was posted with an explicit revenue ledger before clearing AR
+  const invKey = 'inv:' + edit.id;
+  const hasAccrual = (db.journals || []).some(j => j && !j.reversed && j.sourceKey === 'j:' + invKey && j.source === 'invoice_accrual');
+  if (!hasAccrual && typeof postInvoiceAccrualWithLedgerPick === 'function') {
+    postInvoiceAccrualWithLedgerPick(edit).then(ok => {
+      if (!ok) {
+        toast('Payment saved — post revenue ledger when ready so AR clears correctly');
+      }
+      afterAccrue();
+    }).catch(afterAccrue);
+    return;
+  }
+  afterAccrue();
 }
 
 
