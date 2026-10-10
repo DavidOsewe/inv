@@ -20144,17 +20144,7 @@ function suppliersDir() {
       const sid = btn.getAttribute('data-dir-bill');
       const s = (db.suppliers || []).find(x => x.id === sid);
       try {
-        openBillModal();
-        // Pre-fill supplier name when modal fields exist
-        setTimeout(() => {
-          const nameEl = document.getElementById('billSupplier') || document.getElementById('mBillSupplier') || document.querySelector('#billModal input[placeholder*="upplier" i]');
-          if (nameEl && s) {
-            nameEl.value = s.name || '';
-            nameEl.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-          // Store preferred supplier for bill post
-          try { window._pendingBillSupplierId = sid; window._pendingBillSupplierName = s?.name || ''; } catch (_) {}
-        }, 30);
+        openBillModal({ supplier: s, supplierId: sid, supplierName: s?.name || btn.getAttribute('data-dir-bill-name') || '' });
       } catch (e) {
         toast(e.message || 'Could not open expense request');
       }
@@ -20946,13 +20936,27 @@ function persist(s) {
     track('invoice_activation', { invoice_id: edit.id, invoice_number: edit.number, activation: 'first_invoice_created' });
   }
   if (s === 'Sent') track('invoice_sent', { invoice_id: edit.id, invoice_number: edit.number, currency: edit.currency });
-  try { accrueInvoiceIfNeeded(edit); } catch (e) { console.warn('accrue', e); }
   ensurePayments(edit);
   syncPaidFlag(edit);
   if (edit.paid) track('invoice_paid', { invoice_id: edit.cloudId || edit.id, invoice_number: edit.number, currency: edit.currency });
-  toast(edit.paid ? 'Invoice paid in full.' : amountPaid(edit) > 0 ? 'Invoice saved (partially paid).' : s === 'Sent' ? 'Invoice marked as sent.' : 'Draft saved.');
-  switchTo('invoices');
-  if (isNew) maybePromptSignup();
+  const leaveDraft = edit.status && edit.status !== 'Draft';
+  const finishSaveUi = () => {
+    toast(edit.paid ? 'Invoice paid in full.' : amountPaid(edit) > 0 ? 'Invoice saved (partially paid).' : s === 'Sent' ? 'Invoice marked as sent.' : 'Draft saved.');
+    switchTo('invoices');
+    if (isNew) maybePromptSignup();
+  };
+  // Mirror payables: leaving Draft → pick revenue ledger before AR posts
+  if (leaveDraft && typeof postInvoiceAccrualWithLedgerPick === 'function') {
+    const key = 'inv:' + edit.id;
+    const already = (db.journals || []).some(j => j && !j.reversed && j.sourceKey === 'j:' + key && j.source === 'invoice_accrual');
+    if (!already) {
+      postInvoiceAccrualWithLedgerPick(edit).then(() => finishSaveUi()).catch(() => finishSaveUi());
+      return;
+    }
+  } else if (leaveDraft) {
+    try { accrueInvoiceIfNeeded(edit, { silent: true }); } catch (e) { console.warn('accrue', e); }
+  }
+  finishSaveUi();
 }
 
 
@@ -22050,12 +22054,22 @@ function recordCashFromInvoicePayment(inv, payment) {
 }
 
 /** Accrue revenue when invoice leaves Draft (sent / open). Splits VAT/tax if present. */
-function accrueInvoiceIfNeeded(inv) {
-  if (!inv || inv.status === 'Draft') return;
+/**
+ * Accrue invoice to AR + revenue.
+ * opts.revenueAccountId — required for first post (mirrors expense ledger on bills).
+ * opts.silent — use inv.revenueAccountId or system revenue if already known (sync/repair only).
+ */
+function accrueInvoiceIfNeeded(inv, opts) {
+  if (!inv || inv.status === 'Draft') return false;
   ensureBooksDb();
+  opts = opts || {};
   const key = 'inv:' + inv.id;
+  // Already posted?
+  if ((db.journals || []).some(j => j && !j.reversed && j.sourceKey === 'j:' + key && j.source === 'invoice_accrual')) {
+    return true;
+  }
   const invTotal = total(inv);
-  if (!(invTotal > 0)) return;
+  if (!(invTotal > 0)) return false;
   const taxAmt = (typeof tax === 'function' ? tax(inv) : 0) || 0;
   const subAmt = Math.max(0, invTotal - taxAmt);
   const totalRep = toRep(invTotal, inv.currency);
@@ -22063,7 +22077,15 @@ function accrueInvoiceIfNeeded(inv) {
   const revRep = toRep(subAmt, inv.currency);
   const party = partyFromInvoice(inv);
   const arId = getArControlId();
-  const revId = getRevenueAccountId();
+  let revId = String(opts.revenueAccountId || inv.revenueAccountId || '').trim();
+  if (!revId && opts.silent) {
+    try { revId = getRevenueAccountId(); } catch (_) { revId = '4000'; }
+  }
+  if (!revId) {
+    if (!opts.silent) throw new Error('Revenue ledger required — pick an income account before posting');
+    return false;
+  }
+  inv.revenueAccountId = revId;
   const taxId = getOutputTaxAccountId();
   const lines = [
     withPartyOnArApLine({ accountId: arId, debit: totalRep, credit: 0 }, party),
@@ -22072,7 +22094,6 @@ function accrueInvoiceIfNeeded(inv) {
   if (taxRep > 0.001) {
     lines.push({ accountId: taxId, debit: 0, credit: taxRep });
   } else {
-    // no tax line — revenue takes full credit
     lines[1].credit = totalRep;
   }
   postJournal({
@@ -22083,6 +22104,49 @@ function accrueInvoiceIfNeeded(inv) {
     sourceKey: 'j:' + key,
     currency: db.profile.reporting || 'USD',
     lines
+  });
+  return true;
+}
+
+/** Open ledger picker then accrue invoice (AR control + chosen revenue). */
+function postInvoiceAccrualWithLedgerPick(inv) {
+  if (!inv || inv.status === 'Draft') return Promise.resolve(false);
+  ensureBooksDb();
+  const key = 'inv:' + inv.id;
+  if ((db.journals || []).some(j => j && !j.reversed && j.sourceKey === 'j:' + key && j.source === 'invoice_accrual')) {
+    return Promise.resolve(true);
+  }
+  const c = typeof client === 'function' ? client(inv.client) : null;
+  const clientName = (c && c.name) || inv.clientName || '';
+  return pickExpenseLedgerFromCoa({
+    defaultCode: inv.revenueAccountId || '',
+    forceDefault: false,
+    amount: total(inv),
+    tax: (typeof tax === 'function' ? tax(inv) : 0) || 0,
+    currency: inv.currency,
+    supplier: clientName, // reused meta line as counterparty
+    note: (inv.number ? ('Invoice ' + inv.number) : 'Invoice') + (inv.title ? (' · ' + inv.title) : ''),
+    documents: [],
+    kind: 'invoice',
+    requesterEmail: null
+  }).then(code => {
+    if (!code) {
+      toast('Revenue ledger required to post invoice to books');
+      return false;
+    }
+    inv.revenueAccountId = code;
+    try {
+      accrueInvoiceIfNeeded(inv, { revenueAccountId: code });
+      // Persist on stored invoice
+      const n = (db.invoices || []).findIndex(i => i.id === inv.id);
+      if (n >= 0) db.invoices[n].revenueAccountId = code;
+      try { save(); } catch (_) {}
+      toast('Invoice posted · AR / ' + (typeof coaName === 'function' ? coaName(code) : code));
+      return true;
+    } catch (e) {
+      toast(e.message || 'Could not post invoice');
+      return false;
+    }
   });
 }
 
@@ -22135,7 +22199,11 @@ function syncAllInvoiceAccruals() {
   if (db.booksSettings && db.booksSettings.invoiceFeed === false) return;
   (db.invoices || []).forEach(inv => {
     syncPaidFlag(inv);
-    accrueInvoiceIfNeeded(inv);
+    // Only silent-post when revenue ledger was already chosen (or legacy invoices)
+    try {
+      if (inv.revenueAccountId) accrueInvoiceIfNeeded(inv, { revenueAccountId: inv.revenueAccountId, silent: true });
+      else accrueInvoiceIfNeeded(inv, { silent: true }); // uses system revenue for pre-picker invoices
+    } catch (e) { console.warn('accrue sync', e); }
     ensurePayments(inv);
     (inv.payments || []).forEach(p => recordCashFromInvoicePayment(inv, p));
   });
@@ -23602,7 +23670,8 @@ function advanceExpenseBillLevel(billId, opts) {
   };
   // Always open post modal so accountant confirms Dr/Cr + ledger (never silent post / never Mark paid here)
   pickExpenseLedgerFromCoa({
-    defaultCode: bill.category && bill.category !== 'other_out' ? bill.category : '5700',
+    defaultCode: bill.category && bill.category !== 'other_out' ? bill.category : '',
+    forceDefault: false,
     amount: bill.amount,
     tax: bill.tax,
     currency: bill.currency,
@@ -23612,7 +23681,7 @@ function advanceExpenseBillLevel(billId, opts) {
     kind: 'bill',
     requesterEmail: bill.requested_by_email || null
   }).then(code => {
-    if (!code) { toast('Post cancelled'); return; }
+    if (!code) { toast('Post cancelled — choose a ledger to post'); return; }
     finishBillPost(code);
   });
 }
@@ -23669,12 +23738,18 @@ function pickExpenseLedgerFromCoa(defaultCodeOrOpts, maybeOpts) {
     }
     const list = listExpenseCoaForPick();
     const pref = String(opts.defaultCode || '5700').trim();
-    const kind = opts.kind === 'cash' ? 'cash' : 'bill';
-    if (title) title.textContent = kind === 'cash' ? 'Approve & post · cash expense' : 'Approve & post · supplier bill';
+    const kind = opts.kind === 'cash' ? 'cash' : (opts.kind === 'invoice' ? 'invoice' : 'bill');
+    if (title) {
+      title.textContent = kind === 'cash' ? 'Approve & post · cash expense'
+        : kind === 'invoice' ? 'Post invoice · revenue ledger'
+        : 'Approve & post · supplier bill';
+    }
     if (sub) {
       sub.textContent = kind === 'cash'
-        ? 'This posts Dr expense / Cr cash — not a separate “mark paid” step.'
-        : 'This posts Dr expense / Cr accounts payable (2000). “Mark paid” is only after this, when cash leaves the bank.';
+        ? 'You choose the expense (or asset) ledger. This posts Dr that account / Cr cash — not a separate “mark paid” step.'
+        : kind === 'invoice'
+        ? 'You choose the revenue (income) ledger. This posts Dr accounts receivable / Cr that revenue account. Collecting payment later only moves cash.'
+        : 'You choose the expense (or asset) ledger. This posts Dr that account / Cr trade payables. Paying later only moves cash.';
     }
     if (meta) {
       const bits = [];
@@ -23683,6 +23758,10 @@ function pickExpenseLedgerFromCoa(defaultCodeOrOpts, maybeOpts) {
       if (opts.amount != null && typeof money === 'function') bits.push(money(opts.amount, opts.currency));
       else if (opts.amount != null) bits.push(String(opts.amount));
       if (opts.requesterEmail) bits.push('by ' + opts.requesterEmail);
+      if (pref && pref !== 'other_out') {
+        const sug = (typeof coaName === 'function' ? coaName(pref) : pref);
+        bits.push('suggested: ' + pref + (sug && sug !== pref ? (' · ' + sug) : ''));
+      }
       meta.textContent = bits.filter(Boolean).join(' · ');
     }
     if (docsEl) {
@@ -23695,36 +23774,97 @@ function pickExpenseLedgerFromCoa(defaultCodeOrOpts, maybeOpts) {
         docsEl.innerHTML = '<p class="section-sub" style="margin:0">No attachment on this request.</p>';
       }
     }
-    sel.innerHTML = list.map(a =>
+    // Income first for invoices; expense first for bills/cash
+    let pickList = list;
+    if (kind === 'invoice') {
+      const rank = (t) => {
+        const x = String(t || '').toLowerCase();
+        if (x === 'income') return 0;
+        if (x === 'liability') return 1;
+        if (x === 'equity') return 2;
+        if (x === 'asset') return 3;
+        if (x === 'expense') return 4;
+        return 5;
+      };
+      pickList = list.slice().sort((a, b) => {
+        const rd = rank(a.type) - rank(b.type);
+        if (rd) return rd;
+        return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+      });
+    }
+    const forceDefault = !!opts.forceDefault;
+    const hasPref = forceDefault && pref && pickList.some(a => String(a.id) === pref);
+    const label = kind === 'invoice' ? '— Select revenue / income account —' : '— Select ledger account —';
+    sel.innerHTML = '<option value="">' + label + '</option>' + pickList.map(a =>
       '<option value="' + String(a.id).replace(/"/g, '') + '"' +
-      (String(a.id) === pref ? ' selected' : '') + '>' +
+      (hasPref && String(a.id) === pref ? ' selected' : '') + '>' +
       String(a.id) + ' · ' + String(a.name || '').replace(/</g, '') +
       (a.type ? (' · ' + a.type) : '') + '</option>'
     ).join('');
-    if (codeInp) codeInp.value = pref;
+    if (codeInp) codeInp.value = hasPref ? pref : '';
+    try {
+      const apId = (typeof getApControlId === 'function') ? getApControlId() : '2000';
+      const arId = (typeof getArControlId === 'function') ? getArControlId() : '1100';
+      window._expensePickApId = apId;
+      window._expensePickArId = arId;
+    } catch (_) {
+      window._expensePickApId = '2000';
+      window._expensePickArId = '1100';
+    }
+
+    const fieldLabel = document.querySelector('#expenseLedgerPickModal label');
+    if (fieldLabel) {
+      fieldLabel.textContent = kind === 'invoice'
+        ? 'Revenue / income ledger (full COA)'
+        : 'Expense / P&L ledger (full COA)';
+    }
+    const okBtn = document.getElementById('expenseLedgerPickOk');
+    if (okBtn) {
+      okBtn.textContent = kind === 'invoice'
+        ? 'Post journal (Dr AR / Cr revenue)'
+        : kind === 'cash'
+        ? 'Post journal (Dr expense / Cr cash)'
+        : 'Post journal (Dr expense / Cr AP)';
+    }
 
     const refreshPreview = () => {
       if (!preview) return;
-      const code = ((codeInp && codeInp.value) || sel.value || pref || '5700').trim();
+      const code = ((codeInp && codeInp.value.trim()) || sel.value || '').trim();
+      if (!code) {
+        preview.innerHTML = '<div style="color:var(--muted)">Select a ledger to preview the journal.</div>';
+        return;
+      }
       const nm = (typeof coaName === 'function' ? coaName(code) : code);
       const amt = Number(opts.amount) || 0;
       const tax = Number(opts.tax) || 0;
       const net = Math.max(0, amt - tax);
       const amtLabel = typeof money === 'function' ? money(amt, opts.currency) : String(amt);
       const netLabel = typeof money === 'function' ? money(net, opts.currency) : String(net);
+      const apId = window._expensePickApId || '2000';
+      const arId = window._expensePickArId || '1100';
+      const apNm = (typeof coaName === 'function' ? coaName(apId) : 'Accounts payable');
+      const arNm = (typeof coaName === 'function' ? coaName(arId) : 'Accounts receivable');
       if (kind === 'cash') {
         preview.innerHTML =
           '<div style="font-weight:700;margin-bottom:6px">Journal preview</div>' +
           '<div>Dr ' + code + ' · ' + String(nm).replace(/</g, '') + ' <b style="float:right">' + amtLabel + '</b></div>' +
           '<div>Cr cash / bank <b style="float:right">' + amtLabel + '</b></div>';
+      } else if (kind === 'invoice') {
+        preview.innerHTML =
+          '<div style="font-weight:700;margin-bottom:6px">Journal preview (invoice accrual)</div>' +
+          '<div>Dr ' + arId + ' · ' + String(arNm).replace(/</g, '') + ' <b style="float:right">' + amtLabel + '</b></div>' +
+          '<div>Cr ' + code + ' · ' + String(nm).replace(/</g, '') + ' <b style="float:right">' + netLabel + '</b></div>' +
+          (tax > 0.001 ? ('<div>Cr output tax <b style="float:right">' +
+            (typeof money === 'function' ? money(tax, opts.currency) : tax) + '</b></div>') : '') +
+          '<p class="section-sub" style="margin:8px 0 0">Collecting payment later: record payment (Dr bank / Cr AR). Revenue choice is only here.</p>';
       } else {
         preview.innerHTML =
           '<div style="font-weight:700;margin-bottom:6px">Journal preview (accrual)</div>' +
           '<div>Dr ' + code + ' · ' + String(nm).replace(/</g, '') + ' <b style="float:right">' + netLabel + '</b></div>' +
-          (tax > 0.001 ? ('<div>Dr 1200 · Input VAT <b style="float:right">' +
+          (tax > 0.001 ? ('<div>Dr input tax <b style="float:right">' +
             (typeof money === 'function' ? money(tax, opts.currency) : tax) + '</b></div>') : '') +
-          '<div>Cr 2000 · Accounts payable <b style="float:right">' + amtLabel + '</b></div>' +
-          '<p class="section-sub" style="margin:8px 0 0">Paying the supplier later uses <b>Mark paid</b> (Dr AP / Cr bank).</p>';
+          '<div>Cr ' + apId + ' · ' + String(apNm).replace(/</g, '') + ' <b style="float:right">' + amtLabel + '</b></div>' +
+          '<p class="section-sub" style="margin:8px 0 0">Paying the supplier later: <b>Pay</b> on Money out (Dr AP / Cr bank). Ledger choice is only here.</p>';
       }
     };
     sel.onchange = refreshPreview;
@@ -24032,14 +24172,16 @@ function accrueSupplierBill(bill) {
   const totalRep = toRep(totalAmt, bill.currency);
   const taxRep = toRep(taxAmt, bill.currency);
   const netRep = toRep(net, bill.currency);
-  // category may be a COA account id (preferred) or a legacy category key.
-  // Requesters often leave this blank — accountant sets it on approve; default 5700 as last resort.
-  let expenseAccount = (bill.category || '').trim() || '5700';
+  // category must be a real COA account id chosen by the accountant at post time.
+  let expenseAccount = (bill.category || '').trim();
   if (typeof EXPENSE_ACCOUNT_BY_CATEGORY !== 'undefined' && EXPENSE_ACCOUNT_BY_CATEGORY[expenseAccount]) {
     expenseAccount = EXPENSE_ACCOUNT_BY_CATEGORY[expenseAccount];
   }
+  if (!expenseAccount || expenseAccount === 'other_out') {
+    throw new Error('Expense ledger required — accountant must pick an account before posting');
+  }
   if (typeof getCoa === 'function' && !getCoa().some(a => a.id === expenseAccount)) {
-    expenseAccount = (typeof EXPENSE_ACCOUNT_BY_CATEGORY !== 'undefined' && EXPENSE_ACCOUNT_BY_CATEGORY[bill.category]) || '5700';
+    throw new Error('Unknown ledger ' + expenseAccount + ' — pick a valid COA account');
   }
   bill.category = expenseAccount;
   const lines = [];
@@ -31515,68 +31657,108 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
   }
   db.bills = db.bills || [];
   db.bills.push(bill);
-  if (status === 'open') {
-    try {
-      accrueSupplierBill(bill);
-    } catch (err) {
-      console.warn(err);
-      db.bills = db.bills.filter(b => b.id !== bill.id);
-      toast('Could not post bill to ledger — ' + (err.message || 'error'));
-      return;
+
+  const afterBillQueuedOrPosted = () => {
+    try { refreshApprovalsUI(); } catch (_) {}
+    if (typeof can === 'function' && can('books.view') && (bill.status === 'open' || status === 'open')) {
+      try {
+        booksPage = 'ap';
+        booksTab = 'payables';
+        setBooksPage('ap', 'payables');
+        renderBooksPayables();
+      } catch (_) {
+        try { booksTab = 'payables'; booksView(); } catch (__) {}
+      }
     }
+    try { track('bill_accrued', { category: bill.category, status: bill.status || status, auto_posted: !!path.autoPosted }); } catch (_) {}
+  };
+
+  // Direct / fast-lane post: accountant must pick the expense ledger (never silent default)
+  if (status === 'open') {
+    closeBillModal();
+    pickExpenseLedgerFromCoa({
+      defaultCode: bill.category && bill.category !== 'other_out' ? bill.category : '',
+      forceDefault: false,
+      amount: bill.amount,
+      tax: bill.tax,
+      currency: bill.currency,
+      supplier: bill.supplier,
+      note: bill.note,
+      documents: bill.documents || [],
+      kind: 'bill',
+      requesterEmail: bill.requested_by_email || null
+    }).then(code => {
+      if (!code) {
+        db.bills = (db.bills || []).filter(b => b.id !== bill.id);
+        try { save(); } catch (_) {}
+        toast('Post cancelled — choose a ledger to post the bill');
+        return;
+      }
+      bill.category = code;
+      try {
+        accrueSupplierBill(bill);
+      } catch (err) {
+        console.warn(err);
+        db.bills = (db.bills || []).filter(b => b.id !== bill.id);
+        toast('Could not post bill to ledger — ' + (err.message || 'error'));
+        try { save(); } catch (_) {}
+        return;
+      }
+      try {
+        const matchBit = bill.purchase_id
+          ? (' · PO ' + (path.match && path.match.purchase_number ? path.match.purchase_number : '') + ' · ' + (bill.match_status || ''))
+          : '';
+        appendBooksAudit(
+          path.autoPosted ? 'bill.auto_posted' : 'bill.created',
+          'bill',
+          bill.id,
+          (path.autoPosted ? 'Posted · ' : 'Bill accrued · ') +
+            (bill.supplier || 'Supplier') + ' · ' + (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
+            ' · ledger ' + (bill.category || '') + matchBit +
+            ((bill.documents || []).length ? (' · ' + bill.documents.length + ' file(s)') : ''),
+          null,
+          { id: bill.id, supplier: bill.supplier, amount: bill.amount, currency: bill.currency, status: bill.status, category: bill.category, documents: bill.documents || [], purchase_id: bill.purchase_id, match_status: bill.match_status, auto_posted: bill.auto_posted },
+          { documents: bill.documents || [], documentCount: (bill.documents || []).length, status: bill.status, category: bill.category, auto_posted: !!path.autoPosted, reasons: path.reasons || [] }
+        );
+      } catch (_) {}
+      save();
+      try { queueBooksCloudSync(); } catch (_) {}
+      toast('Posted to AP · ' + (typeof coaName === 'function' ? coaName(bill.category) : bill.category) + ' · pay when due from Money out');
+      afterBillQueuedOrPosted();
+    });
+    return;
   }
+
+  // Queued for approval — no journal yet
   try {
     const matchBit = bill.purchase_id
       ? (' · PO ' + (path.match && path.match.purchase_number ? path.match.purchase_number : '') + ' · ' + (bill.match_status || ''))
       : '';
     appendBooksAudit(
-      path.autoPosted ? 'bill.auto_posted' : (status === 'open' ? 'bill.created' : 'bill.submitted'),
+      'bill.submitted',
       'bill',
       bill.id,
-      (path.autoPosted ? 'O3 auto-post · ' : (status === 'open' ? 'Bill accrued · ' : ('Bill submitted · ' + status + ' · '))) +
+      ('Bill submitted · ' + status + ' · ') +
         (bill.supplier || 'Supplier') + ' · ' + (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
         matchBit +
         ((bill.documents || []).length ? (' · ' + bill.documents.length + ' file(s)') : ''),
       null,
-      { id: bill.id, supplier: bill.supplier, amount: bill.amount, currency: bill.currency, status, documents: bill.documents || [], purchase_id: bill.purchase_id, match_status: bill.match_status, auto_posted: bill.auto_posted },
-      { documents: bill.documents || [], documentCount: (bill.documents || []).length, status, auto_posted: !!path.autoPosted, reasons: path.reasons || [] }
+      { id: bill.id, supplier: bill.supplier, amount: bill.amount, currency: bill.currency, status, documents: bill.documents || [], purchase_id: bill.purchase_id, match_status: bill.match_status, auto_posted: false },
+      { documents: bill.documents || [], documentCount: (bill.documents || []).length, status, reasons: path.reasons || [] }
     );
   } catch (_) {}
   save();
   try { queueBooksCloudSync(); } catch (_) {}
   closeBillModal();
-  if (status === 'pending_review' || status === 'pending_approval') {
-    const variance = path.match && path.match.status === 'variance';
-    toast(variance
-      ? 'Queued — PO amount variance ' + path.match.variancePct + '% (needs review)'
-      : 'Request submitted — track it under Approvals → My requests');
-    try {
-      notifyApproversOfRequest(bill, 'bill', variance ? 'Review needed (PO variance)' : 'New expense request');
-    } catch (_) {}
-    try { refreshApprovalsUI(); renderDashboardApprovals(); } catch (_) {}
-  } else if (path.autoPosted) {
-    toast('Fast lane · posted to AP (policy). Pay when due from Money out.');
-    try { refreshApprovalsUI(); renderDashboardApprovals(); } catch (_) {}
-  } else {
-    const apprOff = typeof approvalsEnabledExpenses === 'function' && !approvalsEnabledExpenses();
-    toast(apprOff
-      ? 'Bill posted to AP (expense approvals are OFF in Profile)'
-      : 'Bill accrued · AP open · see Money out');
-  }
-  try { refreshApprovalsUI(); } catch (_) {}
-  // Only jump to Books if the user can open it
-  if (typeof can === 'function' && can('books.view')) {
-    try {
-      booksPage = 'ap';
-      booksTab = 'payables';
-      setBooksPage('ap', 'payables');
-      renderBooksPayables();
-    } catch (_) {
-      booksTab = 'payables';
-      booksView();
-    }
-  }
-  try { track('bill_accrued', { category: bill.category, status, auto_posted: !!path.autoPosted }); } catch (_) {}
+  const variance = path.match && path.match.status === 'variance';
+  toast(variance
+    ? 'Queued — PO amount variance ' + path.match.variancePct + '% (needs review)'
+    : 'Request submitted — track it under Approvals → My requests');
+  try {
+    notifyApproversOfRequest(bill, 'bill', variance ? 'Review needed (PO variance)' : 'New expense request');
+  } catch (_) {}
+  try { refreshApprovalsUI(); renderDashboardApprovals(); } catch (_) {}
+  afterBillQueuedOrPosted();
 });
 
 document.getElementById('btnExportBooks')?.addEventListener('click', exportBooksCsv);
