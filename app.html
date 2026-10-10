@@ -6737,6 +6737,27 @@ body:has(.modalback.show) .notif-panel {
   </div>
 </div>
 
+<!-- AR/AP party subledger drill-down -->
+<div class="modalback" id="partyLedgerModal">
+  <div class="modal" style="max-width:640px;max-height:90vh;overflow:auto">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+      <div>
+        <h2 id="partyLedgerTitle" style="margin:0">Party ledger</h2>
+        <p class="section-sub" id="partyLedgerSub" style="margin:6px 0 0">Subledger under the AR/AP control account</p>
+      </div>
+      <div style="text-align:right">
+        <div class="mini" style="color:var(--muted);text-transform:uppercase;font-size:11px" id="partyLedgerBalLabel">Balance</div>
+        <div style="font-size:20px;font-weight:800" id="partyLedgerBal">—</div>
+      </div>
+    </div>
+    <div id="partyLedgerBody" style="margin-top:16px"></div>
+    <div class="buttons" style="justify-content:flex-end;margin-top:16px;gap:10px;flex-wrap:wrap">
+      <button class="button" type="button" id="partyLedgerClose">Close</button>
+      <button class="button" type="button" id="partyLedgerGoto" hidden>Open profile</button>
+    </div>
+  </div>
+</div>
+
 <div class="modalback" id="recurringModal">
   <div class="modal" style="max-width:420px">
     <h2>Make recurring</h2>
@@ -12097,6 +12118,29 @@ function openSupplierModal(s) {
   document.getElementById('supplierPhone').value = s?.phone || '';
   document.getElementById('supplierEmail').value = s?.email || '';
   document.getElementById('supplierNote').value = s?.note || '';
+  let apHint = document.getElementById('supplierApHint');
+  if (!apHint) {
+    const note = document.getElementById('supplierNote');
+    if (note && note.parentElement) {
+      apHint = document.createElement('p');
+      apHint.id = 'supplierApHint';
+      apHint.className = 'section-sub';
+      apHint.style.margin = '8px 0 0';
+      note.parentElement.appendChild(apHint);
+    }
+  }
+  if (apHint) {
+    if (s && s.id) {
+      let apBal = 0;
+      try { apBal = typeof partyApBalance === 'function' ? partyApBalance(s.id) : 0; } catch (_) {}
+      apHint.textContent = apBal > 0.001
+        ? 'AP ledger balance: ' + (typeof money === 'function' ? money(apBal) : apBal) + ' · use Statement on the list for full history'
+        : 'AP ledger balance: settled (or no tagged bills yet)';
+      apHint.style.display = '';
+    } else {
+      apHint.style.display = 'none';
+    }
+  }
   document.getElementById('supplierModal').classList.add('show');
   document.getElementById('supplierName').focus();
 }
@@ -16314,30 +16358,45 @@ function renderSuppliersList() {
     return;
   }
   el.innerHTML = `<table class="table desktop-table">
-    <thead><tr><th>Name</th><th>Phone</th><th class="right">Balance owed</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Phone</th><th class="right">AP balance</th><th></th></tr></thead>
     <tbody>${db.suppliers.map(s => {
-      const bal = supplierBalance(s.id);
+      const invBal = supplierBalance(s.id);
+      let glAp = 0;
+      try { glAp = typeof partyApBalance === 'function' ? partyApBalance(s.id) : 0; } catch (_) {}
+      const bal = Math.abs(glAp) > 0.001 ? glAp : invBal;
       return `<tr>
         <td><b>${s.name}</b></td>
         <td>${s.phone || '—'}</td>
-        <td class="right">${bal > 0.001 ? formatPosMoney(bal) : '—'}</td>
+        <td class="right">${bal > 0.001 ? (typeof money === 'function' ? money(bal) : formatPosMoney(bal)) : '—'}</td>
         <td><div class="client-actions">
+          <button class="button small" type="button" data-party-ap="${s.id}" data-party-ap-name="${String(s.name || '').replace(/"/g, '')}">Statement</button>
           <button class="button small" type="button" data-edit-supplier="${s.id}">Edit</button>
           <button class="button small" type="button" data-pay-supplier="${s.id}">Pay</button>
         </div></td>
       </tr>`;
     }).join('')}</tbody></table>
     <div class="mobile-list">${db.suppliers.map(s => {
-      const bal = supplierBalance(s.id);
+      const invBal = supplierBalance(s.id);
+      let glAp = 0;
+      try { glAp = typeof partyApBalance === 'function' ? partyApBalance(s.id) : 0; } catch (_) {}
+      const bal = Math.abs(glAp) > 0.001 ? glAp : invBal;
       return `<div class="mobile-card">
         <div class="mobile-card-title">${s.name}</div>
-        <div class="mobile-card-sub">${s.phone || 'No phone'}${bal > 0.001 ? ' · Owes ' + formatPosMoney(bal) : ''}</div>
+        <div class="mobile-card-sub">${s.phone || 'No phone'}${bal > 0.001 ? ' · AP ' + (typeof money === 'function' ? money(bal) : formatPosMoney(bal)) : ''}</div>
         <div class="mobile-card-actions">
+          <button class="button small" type="button" data-party-ap="${s.id}" data-party-ap-name="${String(s.name || '').replace(/"/g, '')}">Statement</button>
           <button class="button small" type="button" data-edit-supplier="${s.id}">Edit</button>
           <button class="button small" type="button" data-pay-supplier="${s.id}">Pay</button>
         </div>
       </div>`;
     }).join('')}</div>`;
+  el.querySelectorAll('[data-party-ap]').forEach(btn => {
+    btn.addEventListener('click', () => openPartyLedgerModal({
+      partyType: 'supplier',
+      partyId: btn.getAttribute('data-party-ap'),
+      partyName: btn.getAttribute('data-party-ap-name') || ''
+    }));
+  });
 }
 
 /* ---------- POS + Inventory (Phase 1) ---------- */
@@ -19896,19 +19955,24 @@ function clients() {
       syncPaidFlag(i);
       return n + (balanceDue(i) > 0.001 && i.status !== 'Draft' ? balanceDue(i) * ((fx[i.currency] ?? 1) / (fx[db.profile.reporting] ?? 1)) : 0);
     }, 0);
+    let glAr = 0;
+    try { glAr = typeof partyArBalance === 'function' ? partyArBalance(c.id) : 0; } catch (_) {}
+    const displayOwe = Math.abs(glAr) > 0.001 ? glAr : outstanding;
     const initials = String(c.name || '?').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase();
-    const owe = outstanding > 0.001
-      ? `<div class="client-meta" style="color:var(--red-text)">Owes ${money(outstanding)}</div>`
+    const owe = displayOwe > 0.001
+      ? `<div class="client-meta" style="color:var(--red-text)">AR ${money(displayOwe)}</div>`
       : count ? `<div class="client-meta">Settled</div>` : '';
     const delBtn = (c.isUnassigned || c.name === 'Unassigned')
       ? ''
       : `<button class="button danger" type="button" data-delete-client="${c.id}" style="padding:7px 10px;font-size:12px">Delete</button>`;
+    const stmtBtn = `<button class="button" type="button" data-party-ar="${c.id}" data-party-ar-name="${String(c.name || '').replace(/"/g, '')}" style="padding:7px 10px;font-size:12px">Statement</button>`;
     const tableRow = `<tr>
         <td><div style="display:flex;align-items:center;gap:10px"><span class="account-avatar" style="width:32px;height:32px;flex-basis:32px;font-size:11px;border-radius:10px">${initials || '?'}</span><div><b>${c.name}</b>${c.taxId ? `<div class="client-meta">${c.taxId}</div>` : ''}</div></div></td>
         <td>${c.email || '—'}</td>
         <td style="max-width:220px;white-space:pre-line;font-size:12px;color:var(--muted)">${c.address || '—'}</td>
         <td class="right"><b>${count}</b>${owe}</td>
         <td><div class="client-actions">
+          ${stmtBtn}
           <button class="button" type="button" data-edit-client="${c.id}" style="padding:7px 10px;font-size:12px">Edit</button>
           ${delBtn}
         </div></td>
@@ -19925,10 +19989,11 @@ function clients() {
         </div>
         <div class="mobile-card-meta">
           <span><b>${count}</b> invoice${count === 1 ? '' : 's'}</span>
-          ${outstanding > 0.001 ? `<span style="color:var(--red-text)">Owes ${money(outstanding)}</span>` : count ? '<span>Settled</span>' : ''}
+          ${displayOwe > 0.001 ? `<span style="color:var(--red-text)">AR ${money(displayOwe)}</span>` : count ? '<span>Settled</span>' : ''}
         </div>
         ${c.address ? `<div class="mobile-card-sub" style="margin-bottom:8px;white-space:pre-line">${c.address}</div>` : ''}
         <div class="mobile-card-actions">
+          <button class="button small" type="button" data-party-ar="${c.id}" data-party-ar-name="${String(c.name || '').replace(/"/g, '')}">Statement</button>
           <button class="button small" type="button" data-edit-client="${c.id}">Edit</button>
           ${delBtn}
         </div>
@@ -19937,7 +20002,7 @@ function clients() {
   });
 
   $('#clientList').innerHTML = `<table class="table desktop-table">
-    <thead><tr><th>Client</th><th>Email</th><th>Address</th><th class="right">Invoices</th><th class="right">Actions</th></tr></thead>
+    <thead><tr><th>Client</th><th>Email</th><th>Address</th><th class="right">Invoices / AR</th><th class="right">Actions</th></tr></thead>
     <tbody>${rows.map(r => r.tableRow).join('')}</tbody>
   </table>
   <div class="mobile-list" role="list">${rows.map(r => r.card).join('')}</div>`;
@@ -25056,20 +25121,193 @@ function cashEquivalentsTotal(bal) {
   return n;
 }
 
+/** Journals + open docs for one AR/AP party (Phase 2 drill-down). */
+function partySubledgerActivity(partyType, partyId, partyName) {
+  ensureBooksDb();
+  const controlId = partyType === 'supplier'
+    ? ((typeof getApControlId === 'function') ? getApControlId() : '2000')
+    : ((typeof getArControlId === 'function') ? getArControlId() : '1100');
+  const pid = String(partyId || '').trim();
+  const pname = String(partyName || '').trim().toLowerCase();
+  const journals = [];
+  (db.journals || []).forEach(j => {
+    if (!j || j.reversed) return;
+    const hit = (j.lines || []).some(l => {
+      if (String(l.accountId) !== String(controlId)) return false;
+      if (pid && String(l.partyId || '') === pid) return true;
+      if (!pid && pname && String(l.partyName || '').trim().toLowerCase() === pname) return true;
+      return false;
+    });
+    if (!hit) return;
+    const line = (j.lines || []).find(l => String(l.accountId) === String(controlId));
+    journals.push({
+      id: j.id,
+      date: j.date,
+      memo: j.memo || j.source || '',
+      source: j.source,
+      debit: Number(line && line.debit) || 0,
+      credit: Number(line && line.credit) || 0
+    });
+  });
+  journals.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+  let openDocs = [];
+  if (partyType === 'client') {
+    openDocs = (db.invoices || []).filter(inv => {
+      if (pid && String(inv.client) !== pid) return false;
+      if (!pid && pname) {
+        const c = inv.client ? client(inv.client) : null;
+        const n = String((c && c.name) || inv.clientName || '').toLowerCase();
+        if (n !== pname) return false;
+      }
+      if (!pid && !pname) return false;
+      try { syncPaidFlag(inv); } catch (_) {}
+      return inv.status !== 'Draft' && balanceDue(inv) > 0.001;
+    }).map(inv => ({
+      kind: 'invoice',
+      id: inv.id,
+      label: inv.number || 'Invoice',
+      date: inv.issue || inv.due || '',
+      amount: balanceDue(inv),
+      currency: inv.currency
+    }));
+  } else {
+    openDocs = (db.bills || []).filter(b => {
+      if (b.status === 'paid' || b.status === 'rejected') return false;
+      if (pid && String(b.supplier_id || b.supplierId || '') === pid) return true;
+      if (pname && String(b.supplier || '').trim().toLowerCase() === pname) return true;
+      return false;
+    }).map(b => ({
+      kind: 'bill',
+      id: b.id,
+      label: b.supplier || 'Bill',
+      date: b.date || '',
+      amount: Number(b.amount) || 0,
+      currency: b.currency,
+      status: b.status
+    }));
+  }
+  return { controlId, journals, openDocs };
+}
+
+function openPartyLedgerModal(opts) {
+  opts = opts || {};
+  const partyType = opts.partyType === 'supplier' ? 'supplier' : 'client';
+  const partyId = String(opts.partyId || '');
+  const partyName = String(opts.partyName || (partyType === 'client'
+    ? (client(partyId)?.name || '')
+    : ((db.suppliers || []).find(s => s.id === partyId)?.name || '')) || 'Party');
+  const bal = partyType === 'supplier'
+    ? (partyId ? partyApBalance(partyId) : (apSubledgerBalances().find(r => r.partyName === partyName)?.balance || 0))
+    : (partyId ? partyArBalance(partyId) : (arSubledgerBalances().find(r => r.partyName === partyName)?.balance || 0));
+  const rep = (db.profile && db.profile.reporting) || 'NGN';
+  const fmt = (n, cur) => (typeof money === 'function' ? money(n, cur || rep) : String(n));
+  const act = partySubledgerActivity(partyType, partyId, partyName);
+
+  const titleEl = document.getElementById('partyLedgerTitle');
+  const subEl = document.getElementById('partyLedgerSub');
+  const balEl = document.getElementById('partyLedgerBal');
+  const balLabel = document.getElementById('partyLedgerBalLabel');
+  const body = document.getElementById('partyLedgerBody');
+  const gotoBtn = document.getElementById('partyLedgerGoto');
+  if (!body) return;
+
+  if (titleEl) titleEl.textContent = partyName || (partyType === 'supplier' ? 'Supplier' : 'Customer');
+  if (subEl) {
+    subEl.textContent = (partyType === 'supplier' ? 'Accounts payable' : 'Accounts receivable') +
+      ' · control ' + act.controlId + (partyId ? '' : ' · matched by name');
+  }
+  if (balLabel) balLabel.textContent = partyType === 'supplier' ? 'You owe' : 'They owe';
+  if (balEl) {
+    balEl.textContent = fmt(bal);
+    balEl.style.color = Math.abs(bal) > 0.001 ? (partyType === 'supplier' ? 'var(--text)' : 'var(--red-text)') : '';
+  }
+
+  let html = '';
+  if (act.openDocs.length) {
+    html += '<h3 style="font-size:13px;margin:0 0 8px">Open ' + (partyType === 'supplier' ? 'bills' : 'invoices') + '</h3>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">';
+    act.openDocs.slice(0, 20).forEach(d => {
+      html += '<div style="display:flex;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px">' +
+        '<div><b>' + String(d.label).replace(/</g, '') + '</b>' +
+        (d.date ? '<div class="mini" style="color:var(--muted)">' + d.date + (d.status ? ' · ' + d.status : '') + '</div>' : '') +
+        '</div><b style="font-variant-numeric:tabular-nums">' + fmt(d.amount, d.currency) + '</b></div>';
+    });
+    html += '</div>';
+  } else {
+    html += '<p class="section-sub" style="margin:0 0 12px">No open ' + (partyType === 'supplier' ? 'bills' : 'invoices') + ' for this party.</p>';
+  }
+
+  html += '<h3 style="font-size:13px;margin:0 0 8px">Ledger movements</h3>';
+  if (!act.journals.length) {
+    html += '<p class="section-sub" style="margin:0">No tagged journal lines yet on the control account.</p>';
+  } else {
+    html += '<div style="overflow:auto"><table class="table" style="font-size:12px"><thead><tr>' +
+      '<th>Date</th><th>Memo</th><th class="right">Debit</th><th class="right">Credit</th></tr></thead><tbody>';
+    act.journals.slice(0, 40).forEach(j => {
+      html += '<tr><td>' + (j.date || '—') + '</td><td>' + String(j.memo || '').replace(/</g, '') +
+        (j.source ? ' <span class="mini" style="color:var(--muted)">' + j.source + '</span>' : '') +
+        '</td><td class="right">' + (j.debit > 0.001 ? fmt(j.debit) : '—') +
+        '</td><td class="right">' + (j.credit > 0.001 ? fmt(j.credit) : '—') + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    if (act.journals.length > 40) {
+      html += '<p class="mini" style="margin:8px 0 0">Showing latest 40 of ' + act.journals.length + '</p>';
+    }
+  }
+  body.innerHTML = html;
+
+  if (gotoBtn) {
+    if (partyId && partyType === 'client') {
+      gotoBtn.hidden = false;
+      gotoBtn.textContent = 'Open client';
+      gotoBtn.onclick = () => {
+        closePartyLedgerModal();
+        const c = client(partyId);
+        if (c && typeof openClientModal === 'function') openClientModal(c);
+        else if (typeof switchTo === 'function') switchTo('clients');
+      };
+    } else if (partyId && partyType === 'supplier') {
+      gotoBtn.hidden = false;
+      gotoBtn.textContent = 'Open supplier';
+      gotoBtn.onclick = () => {
+        closePartyLedgerModal();
+        const s = (db.suppliers || []).find(x => x.id === partyId);
+        if (s && typeof openSupplierModal === 'function') openSupplierModal(s);
+        else if (typeof switchTo === 'function') switchTo('inventory');
+      };
+    } else {
+      gotoBtn.hidden = true;
+      gotoBtn.onclick = null;
+    }
+  }
+
+  document.getElementById('partyLedgerModal')?.classList.add('show');
+}
+
+function closePartyLedgerModal() {
+  document.getElementById('partyLedgerModal')?.classList.remove('show');
+}
+
 function renderArApSubledgers() {
   const rep = (db.profile && db.profile.reporting) || 'NGN';
   const arEl = document.getElementById('booksArSubledger');
   const apEl = document.getElementById('booksApSubledger');
   const fmt = (n) => (typeof money === 'function' ? money(n, rep) : String(n));
-  const rowHtml = (rows, emptyMsg) => {
+  const rowHtml = (rows, emptyMsg, partyType) => {
     if (!rows.length) {
       return '<p class="section-sub" style="margin:0">' + emptyMsg + '</p>';
     }
-    return '<div style="display:flex;flex-direction:column;gap:6px">' + rows.slice(0, 12).map(r =>
-      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line)">' +
-      '<span style="font-size:13px;font-weight:600">' + String(r.partyName || 'Unassigned').replace(/</g, '') + '</span>' +
-      '<span style="font-size:13px;font-variant-numeric:tabular-nums;font-weight:700">' + fmt(r.balance) + '</span></div>'
-    ).join('') +
+    return '<div style="display:flex;flex-direction:column;gap:4px">' + rows.slice(0, 12).map(r => {
+      const name = String(r.partyName || 'Unassigned').replace(/</g, '').replace(/"/g, '&quot;');
+      const pid = String(r.partyId || '').replace(/"/g, '');
+      return '<button type="button" class="party-sub-row" data-party-type="' + partyType +
+        '" data-party-id="' + pid + '" data-party-name="' + name + '" ' +
+        'style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:8px 6px;border:none;border-bottom:1px solid var(--line);background:transparent;cursor:pointer;text-align:left;width:100%;border-radius:8px">' +
+        '<span style="font-size:13px;font-weight:600;color:var(--text)">' + name +
+        '<span class="mini" style="display:block;font-weight:500;color:var(--muted);margin-top:2px">View statement</span></span>' +
+        '<span style="font-size:13px;font-variant-numeric:tabular-nums;font-weight:700;color:var(--text)">' + fmt(r.balance) + '</span></button>';
+    }).join('') +
       (rows.length > 12 ? '<p class="mini" style="margin:6px 0 0">+' + (rows.length - 12) + ' more</p>' : '') +
       '</div>';
   };
@@ -25085,10 +25323,24 @@ function renderArApSubledgers() {
     }
   } catch (_) {}
   if (arEl) {
-    arEl.innerHTML = rowHtml(arSubledgerBalances(), 'No tagged customer AR yet — send an invoice to build the subledger.') + checkHint;
+    arEl.innerHTML = rowHtml(arSubledgerBalances(), 'No tagged customer AR yet — send an invoice to build the subledger.', 'client') + checkHint;
+    arEl.querySelectorAll('[data-party-type]').forEach(btn => {
+      btn.onclick = () => openPartyLedgerModal({
+        partyType: btn.getAttribute('data-party-type'),
+        partyId: btn.getAttribute('data-party-id'),
+        partyName: btn.getAttribute('data-party-name')
+      });
+    });
   }
   if (apEl) {
-    apEl.innerHTML = rowHtml(apSubledgerBalances(), 'No tagged supplier AP yet — post a supplier bill to build the subledger.');
+    apEl.innerHTML = rowHtml(apSubledgerBalances(), 'No tagged supplier AP yet — post a supplier bill to build the subledger.', 'supplier');
+    apEl.querySelectorAll('[data-party-type]').forEach(btn => {
+      btn.onclick = () => openPartyLedgerModal({
+        partyType: btn.getAttribute('data-party-type'),
+        partyId: btn.getAttribute('data-party-id'),
+        partyName: btn.getAttribute('data-party-name')
+      });
+    });
   }
 }
 
@@ -31205,6 +31457,16 @@ document.addEventListener('click', e => {
     return;
   }
 
+  const partyAr = e.target.closest('[data-party-ar]');
+  if (partyAr) {
+    openPartyLedgerModal({
+      partyType: 'client',
+      partyId: partyAr.getAttribute('data-party-ar'),
+      partyName: partyAr.getAttribute('data-party-ar-name') || ''
+    });
+    return;
+  }
+
   const editClient = e.target.closest('[data-edit-client]');
   if (editClient) {
     const c = db.clients.find(x => x.id === editClient.dataset.editClient);
@@ -31241,8 +31503,16 @@ async function openClientModal(client) {
   }
   editingClientId = client ? client.id : null;
   $('#clientModalTitle').textContent = client ? 'Edit client' : 'Add a client';
+  let arLine = '';
+  if (client && client.id) {
+    let arBal = 0;
+    try { arBal = typeof partyArBalance === 'function' ? partyArBalance(client.id) : 0; } catch (_) {}
+    arLine = arBal > 0.001
+      ? ' · AR balance ' + (typeof money === 'function' ? money(arBal) : arBal)
+      : ' · AR settled';
+  }
   $('#clientModalSub').textContent = client
-    ? 'Update this client’s details. Existing invoices keep the same link.'
+    ? ('Update this client’s details. Existing invoices keep the same link.' + arLine)
     : 'Save a client once and invoice them in seconds.';
   $('#mName').value = client?.name || '';
   $('#mEmail').value = client?.email || '';
@@ -31251,6 +31521,28 @@ async function openClientModal(client) {
   $('#mAddress').value = client?.address || '';
   $('#confirm').textContent = client ? 'Update client' : 'Save client';
   $('#modalDeleteClient').style.display = client ? 'inline-block' : 'none';
+  // Statement action when editing
+  let stmt = document.getElementById('clientModalStatement');
+  if (!stmt && client) {
+    const del = document.getElementById('modalDeleteClient');
+    if (del && del.parentElement) {
+      stmt = document.createElement('button');
+      stmt.type = 'button';
+      stmt.className = 'button';
+      stmt.id = 'clientModalStatement';
+      stmt.textContent = 'AR statement';
+      del.parentElement.insertBefore(stmt, del);
+    }
+  }
+  if (stmt) {
+    if (client) {
+      stmt.style.display = '';
+      stmt.onclick = () => openPartyLedgerModal({ partyType: 'client', partyId: client.id, partyName: client.name });
+    } else {
+      stmt.style.display = 'none';
+      stmt.onclick = null;
+    }
+  }
   clearInvalid(document.getElementById('modal'));
   showBanner('clientErrors', []);
   $('#modal').classList.add('show');
@@ -33198,6 +33490,23 @@ function addPaymentToEdit(amount, date, note, method) {
       renderPayments();
       preview();
       toast('Payment removed.');
+    }
+  });
+})();
+
+/* Party AR/AP statement modal */
+(function wirePartyLedgerModal() {
+  const modal = document.getElementById('partyLedgerModal');
+  const closeBtn = document.getElementById('partyLedgerClose');
+  if (closeBtn) closeBtn.onclick = () => { try { closePartyLedgerModal(); } catch (_) {} };
+  if (modal) {
+    modal.addEventListener('click', e => {
+      if (e.target === modal) try { closePartyLedgerModal(); } catch (_) {}
+    });
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && modal?.classList.contains('show')) {
+      try { closePartyLedgerModal(); } catch (_) {}
     }
   });
 })();
