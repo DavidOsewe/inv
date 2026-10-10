@@ -5000,6 +5000,18 @@ body:has(.modalback.show) .notif-panel {
           <div class="books-metric"><small>Expenses (P&amp;L)</small><b id="booksExpenses">—</b><span class="mini">All expense ledgers · period</span></div>
           <div class="books-metric"><small>Tax control</small><b id="booksTaxControl">—</b><span class="mini">Output − input</span></div>
         </div>
+        <div class="two" style="gap:12px;margin-top:8px;align-items:stretch">
+          <div class="insight" style="flex:1;margin:0">
+            <h3 class="books-panel-title">Receivables by customer</h3>
+            <p class="section-sub" style="margin:0 0 8px">Subledger under AR control (1100). New invoices/payments tag the client automatically.</p>
+            <div id="booksArSubledger"></div>
+          </div>
+          <div class="insight" style="flex:1;margin:0">
+            <h3 class="books-panel-title">Payables by supplier</h3>
+            <p class="section-sub" style="margin:0 0 8px">Subledger under AP control (2000). Bills and payments tag the supplier.</p>
+            <div id="booksApSubledger"></div>
+          </div>
+        </div>
         <div class="insight" style="margin-top:4px">
           <h3 class="books-panel-title">Where money went</h3>
           <p class="books-panel-lead" id="booksExpenseLead">Full P&amp;L expenses by account · period above. Cash outs that are not expenses (drawings, inventory, AP, assets) are listed separately.</p>
@@ -12441,16 +12453,24 @@ async function confirmReceiveGoods() {
     try {
       const key = 'po_recv:' + receipt.id;
       const mode = document.getElementById('receivePayMode')?.value || 'ap';
-      const creditAccount = mode === 'cash' ? '1000' : '2000';
+      const creditAccount = mode === 'cash' ? '1000' : (typeof AP_CONTROL_ID !== 'undefined' ? AP_CONTROL_ID : '2000');
+      const sup = (db.suppliers || []).find(s => s.id === po.supplier_id);
+      const party = mode === 'cash' ? null : {
+        partyType: 'supplier',
+        partyId: String(po.supplier_id || ''),
+        partyName: String((sup && sup.name) || '').slice(0, 120)
+      };
+      const apLine = { accountId: creditAccount, debit: 0, credit: receiptValue };
       postJournal({
         date: now.slice(0, 10),
-        memo: 'Goods received · ' + po.purchase_number + (mode === 'cash' ? ' (paid)' : ' (on account)'),
+        memo: 'Goods received · ' + po.purchase_number + (mode === 'cash' ? ' (paid)' : ' (on account)') +
+          (party && party.partyName ? ' · ' + party.partyName : ''),
         source: 'purchase_receive',
         sourceKey: 'j:' + key,
         currency: po.currency || posCurrency(),
         lines: [
           { accountId: '1300', debit: receiptValue, credit: 0 },
-          { accountId: creditAccount, debit: 0, credit: receiptValue }
+          (party && typeof withPartyOnArApLine === 'function') ? withPartyOnArApLine(apLine, party) : apLine
         ]
       });
       if (mode === 'cash' && !db.cashEntries.some(e => e.sourceKey === key)) {
@@ -21166,11 +21186,18 @@ function postJournal({ date, memo, source, sourceKey, lines, currency, reversedF
   }
   const rep = (db.profile && db.profile.reporting) || 'NGN';
   const cur = currency || rep;
-  const normalized = (lines || []).map(l => ({
-    accountId: String(l.accountId || '').trim(),
-    debit: Math.max(0, Number(l.debit) || 0),
-    credit: Math.max(0, Number(l.credit) || 0)
-  })).filter(l => l.accountId && (l.debit > 0 || l.credit > 0));
+  const normalized = (lines || []).map(l => {
+    const row = {
+      accountId: String(l.accountId || '').trim(),
+      debit: Math.max(0, Number(l.debit) || 0),
+      credit: Math.max(0, Number(l.credit) || 0)
+    };
+    // Subledger tags (AR/AP party) — optional on any line
+    if (l.partyType) row.partyType = String(l.partyType);
+    if (l.partyId) row.partyId = String(l.partyId);
+    if (l.partyName) row.partyName = String(l.partyName).slice(0, 120);
+    return row;
+  }).filter(l => l.accountId && (l.debit > 0 || l.credit > 0));
 
   // Reject lines with both debit and credit
   if (normalized.some(l => l.debit > 0 && l.credit > 0)) {
@@ -21389,6 +21416,188 @@ function journalActivity(journalId) {
 }
 
 
+/** AR / AP control accounts (GL). Party detail lives on journal lines. */
+const AR_CONTROL_ID = '1100';
+const AP_CONTROL_ID = '2000';
+
+function partyFromInvoice(inv) {
+  if (!inv) return { partyType: 'client', partyId: '', partyName: '' };
+  const c = inv.client ? client(inv.client) : null;
+  return {
+    partyType: 'client',
+    partyId: String(inv.client || c?.id || ''),
+    partyName: String((c && c.name) || inv.clientName || inv.billTo || '').slice(0, 120)
+  };
+}
+
+function partyFromBill(bill) {
+  if (!bill) return { partyType: 'supplier', partyId: '', partyName: '' };
+  let sid = String(bill.supplier_id || bill.supplierId || '');
+  let sname = String(bill.supplier || '').trim();
+  if (!sid && sname && Array.isArray(db.suppliers)) {
+    const hit = db.suppliers.find(s => String(s.name || '').trim().toLowerCase() === sname.toLowerCase());
+    if (hit) sid = String(hit.id);
+  }
+  if (!sname && sid && Array.isArray(db.suppliers)) {
+    const hit = db.suppliers.find(s => String(s.id) === sid);
+    if (hit) sname = hit.name || '';
+  }
+  return {
+    partyType: 'supplier',
+    partyId: sid,
+    partyName: sname.slice(0, 120)
+  };
+}
+
+function withPartyOnArApLine(line, party) {
+  if (!line || !party) return line;
+  const id = String(line.accountId || '');
+  if (id !== AR_CONTROL_ID && id !== AP_CONTROL_ID) return line;
+  return {
+    ...line,
+    partyType: party.partyType || line.partyType,
+    partyId: party.partyId || line.partyId || '',
+    partyName: party.partyName || line.partyName || ''
+  };
+}
+
+/**
+ * Backfill party tags on existing AR/AP journal lines from invoice/bill source keys.
+ * Idempotent; safe to run on books open.
+ */
+function backfillArApPartyTags() {
+  ensureBooksDb();
+  let n = 0;
+  (db.journals || []).forEach(j => {
+    if (!j || j.reversed || !Array.isArray(j.lines)) return;
+    const sk = String(j.sourceKey || '');
+    let party = null;
+    if (j.source === 'invoice_accrual' || /^j:inv:/.test(sk)) {
+      const invId = sk.replace(/^j:inv:/, '').replace(/^inv:/, '');
+      const inv = (db.invoices || []).find(i => i.id === invId);
+      if (inv) party = partyFromInvoice(inv);
+    } else if (j.source === 'invoice_payment' || /^j:pay:/.test(sk)) {
+      const payKey = sk.replace(/^j:/, '');
+      const inv = (db.invoices || []).find(i =>
+        (i.payments || []).some(p => ('pay:' + (p.id || (p.date + ':' + p.amount))) === payKey)
+      );
+      if (inv) party = partyFromInvoice(inv);
+    } else if (j.source === 'bill_accrual' || /^j:bill:/.test(sk)) {
+      const billId = sk.replace(/^j:bill:/, '').replace(/^bill:/, '');
+      const bill = (db.bills || []).find(b => b.id === billId);
+      if (bill) party = partyFromBill(bill);
+    } else if (j.source === 'bill_payment' || /^j:billpay:/.test(sk)) {
+      const billId = sk.replace(/^j:billpay:/, '').replace(/^billpay:/, '');
+      const bill = (db.bills || []).find(b => b.id === billId);
+      if (bill) party = partyFromBill(bill);
+    }
+    if (!party) return;
+    j.lines.forEach(line => {
+      const id = String(line.accountId || '');
+      if (id !== AR_CONTROL_ID && id !== AP_CONTROL_ID) return;
+      if (line.partyId && line.partyName) return;
+      if (party.partyType) line.partyType = party.partyType;
+      if (party.partyId) line.partyId = party.partyId;
+      if (party.partyName) line.partyName = party.partyName;
+      n++;
+    });
+  });
+  if (n) {
+    try { save(); } catch (_) {}
+  }
+  return n;
+}
+
+/**
+ * Net balance by party for a control account.
+ * AR (1100): debit − credit → amount customer owes (positive).
+ * AP (2000): credit − debit → amount you owe (positive).
+ */
+function partyControlBalances(controlId, partyType) {
+  ensureBooksDb();
+  const map = new Map(); // key = partyId || name||'unknown'
+  (db.journals || []).forEach(j => {
+    if (!j || j.reversed) return;
+    (j.lines || []).forEach(line => {
+      if (String(line.accountId) !== String(controlId)) return;
+      if (partyType && line.partyType && line.partyType !== partyType) return;
+      const pid = String(line.partyId || '').trim();
+      const pname = String(line.partyName || '').trim();
+      const key = pid || (pname ? 'name:' + pname.toLowerCase() : 'unknown');
+      if (!map.has(key)) {
+        map.set(key, {
+          partyId: pid,
+          partyName: pname || (pid ? (partyType === 'client'
+            ? (client(pid)?.name || pid)
+            : ((db.suppliers || []).find(s => s.id === pid)?.name || pid)) : 'Unassigned'),
+          partyType: line.partyType || partyType || '',
+          debit: 0,
+          credit: 0
+        });
+      }
+      const row = map.get(key);
+      row.debit += Number(line.debit) || 0;
+      row.credit += Number(line.credit) || 0;
+      if (pname && (!row.partyName || row.partyName === pid)) row.partyName = pname;
+    });
+  });
+  const isAr = String(controlId) === AR_CONTROL_ID;
+  return Array.from(map.values()).map(r => {
+    const net = isAr ? (r.debit - r.credit) : (r.credit - r.debit);
+    return {
+      partyId: r.partyId,
+      partyName: r.partyName,
+      partyType: r.partyType,
+      debit: Math.round(r.debit * 100) / 100,
+      credit: Math.round(r.credit * 100) / 100,
+      balance: Math.round(net * 100) / 100
+    };
+  }).filter(r => Math.abs(r.balance) > 0.009)
+    .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
+}
+
+function arSubledgerBalances() {
+  return partyControlBalances(AR_CONTROL_ID, 'client');
+}
+
+function apSubledgerBalances() {
+  return partyControlBalances(AP_CONTROL_ID, 'supplier');
+}
+
+function partyArBalance(partyId) {
+  if (!partyId) return 0;
+  const row = arSubledgerBalances().find(r => r.partyId === String(partyId));
+  return row ? row.balance : 0;
+}
+
+function partyApBalance(partyId) {
+  if (!partyId) return 0;
+  const row = apSubledgerBalances().find(r => r.partyId === String(partyId));
+  return row ? row.balance : 0;
+}
+
+/** Control total from GL vs sum of tagged subledger (for reconciliation strip). */
+function arApControlCheck() {
+  let glAr = 0, glAp = 0;
+  try {
+    if (typeof accountBalance === 'function') {
+      glAr = accountBalance(AR_CONTROL_ID) || 0;
+      glAp = accountBalance(AP_CONTROL_ID) || 0;
+    }
+  } catch (_) {}
+  // Liability natural credit → display positive AP as -gl if signed asset-style
+  const arSub = arSubledgerBalances().reduce((n, r) => n + r.balance, 0);
+  const apSub = apSubledgerBalances().reduce((n, r) => n + r.balance, 0);
+  return {
+    glAr: Math.round(glAr * 100) / 100,
+    glAp: Math.round(Math.abs(glAp) * 100) / 100,
+    subAr: Math.round(arSub * 100) / 100,
+    subAp: Math.round(apSub * 100) / 100,
+    arDiff: Math.round((glAr - arSub) * 100) / 100,
+    apDiff: Math.round((Math.abs(glAp) - apSub) * 100) / 100
+  };
+}
+
 function recordCashFromInvoicePayment(inv, payment) {
   ensureBooksDb();
   const key = 'pay:' + (payment.id || (payment.date + ':' + payment.amount));
@@ -21413,15 +21622,16 @@ function recordCashFromInvoicePayment(inv, payment) {
   }
   // Payment clears AR into selected cash / cash-equivalent
   const amt = toRep(payment.amount, inv.currency);
+  const party = partyFromInvoice(inv);
   postJournal({
     date: payment.date || today,
-    memo: 'Payment · ' + (inv.number || 'invoice'),
+    memo: 'Payment · ' + (inv.number || 'invoice') + (party.partyName ? ' · ' + party.partyName : ''),
     source: 'invoice_payment',
     sourceKey: 'j:' + key,
     currency: db.profile.reporting || 'USD',
     lines: [
       { accountId: depositId, debit: amt, credit: 0 },
-      { accountId: '1100', debit: 0, credit: amt }
+      withPartyOnArApLine({ accountId: AR_CONTROL_ID, debit: 0, credit: amt }, party)
     ]
   });
 }
@@ -21438,8 +21648,9 @@ function accrueInvoiceIfNeeded(inv) {
   const totalRep = toRep(invTotal, inv.currency);
   const taxRep = toRep(taxAmt, inv.currency);
   const revRep = toRep(subAmt, inv.currency);
+  const party = partyFromInvoice(inv);
   const lines = [
-    { accountId: '1100', debit: totalRep, credit: 0 },
+    withPartyOnArApLine({ accountId: AR_CONTROL_ID, debit: totalRep, credit: 0 }, party),
     { accountId: '4000', debit: 0, credit: revRep }
   ];
   if (taxRep > 0.001) {
@@ -21450,7 +21661,8 @@ function accrueInvoiceIfNeeded(inv) {
   }
   postJournal({
     date: inv.issue || today,
-    memo: 'Invoice ' + (inv.number || '') + ' · accrued revenue' + (taxRep > 0.001 ? ' + tax' : ''),
+    memo: 'Invoice ' + (inv.number || '') + ' · accrued revenue' + (taxRep > 0.001 ? ' + tax' : '') +
+      (party.partyName ? ' · ' + party.partyName : ''),
     source: 'invoice_accrual',
     sourceKey: 'j:' + key,
     currency: db.profile.reporting || 'USD',
@@ -23362,10 +23574,11 @@ function accrueSupplierBill(bill) {
     lines.push({ accountId: expenseAccount, debit: netRep, credit: 0 });
   }
   if (taxRep > 0.001) lines.push({ accountId: '1200', debit: taxRep, credit: 0 });
-  lines.push({ accountId: '2000', debit: 0, credit: totalRep });
+  const party = partyFromBill(bill);
+  lines.push(withPartyOnArApLine({ accountId: AP_CONTROL_ID, debit: 0, credit: totalRep }, party));
   postJournal({
     date: bill.date || today,
-    memo: 'Bill · ' + (bill.supplier || 'Supplier') + (bill.note ? ' · ' + bill.note : ''),
+    memo: 'Bill · ' + (party.partyName || bill.supplier || 'Supplier') + (bill.note ? ' · ' + bill.note : ''),
     source: 'bill_accrual',
     sourceKey: 'j:' + key,
     lines,
@@ -23410,13 +23623,14 @@ function paySupplierBill(billId, opts) {
     renderBooksPayables();
     return;
   }
+  const party = partyFromBill(bill);
   postJournal({
     date: payDate,
-    memo: 'Pay bill · ' + (bill.supplier || 'Supplier') + (bill.note ? ' · ' + bill.note : ''),
+    memo: 'Pay bill · ' + (party.partyName || bill.supplier || 'Supplier') + (bill.note ? ' · ' + bill.note : ''),
     source: 'bill_payment',
     sourceKey: 'j:' + key,
     lines: [
-      { accountId: '2000', debit: amt, credit: 0 },
+      withPartyOnArApLine({ accountId: AP_CONTROL_ID, debit: amt, credit: 0 }, party),
       { accountId: bankId, debit: 0, credit: amt }
     ]
   });
@@ -24685,6 +24899,42 @@ function cashEquivalentsTotal(bal) {
   return n;
 }
 
+function renderArApSubledgers() {
+  const rep = (db.profile && db.profile.reporting) || 'NGN';
+  const arEl = document.getElementById('booksArSubledger');
+  const apEl = document.getElementById('booksApSubledger');
+  const fmt = (n) => (typeof money === 'function' ? money(n, rep) : String(n));
+  const rowHtml = (rows, emptyMsg) => {
+    if (!rows.length) {
+      return '<p class="section-sub" style="margin:0">' + emptyMsg + '</p>';
+    }
+    return '<div style="display:flex;flex-direction:column;gap:6px">' + rows.slice(0, 12).map(r =>
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line)">' +
+      '<span style="font-size:13px;font-weight:600">' + String(r.partyName || 'Unassigned').replace(/</g, '') + '</span>' +
+      '<span style="font-size:13px;font-variant-numeric:tabular-nums;font-weight:700">' + fmt(r.balance) + '</span></div>'
+    ).join('') +
+      (rows.length > 12 ? '<p class="mini" style="margin:6px 0 0">+' + (rows.length - 12) + ' more</p>' : '') +
+      '</div>';
+  };
+  let checkHint = '';
+  try {
+    const c = arApControlCheck();
+    if (Math.abs(c.arDiff) > 1 || Math.abs(c.apDiff) > 1) {
+      checkHint = '<p class="mini" style="margin:8px 0 0;color:var(--muted)">Control check: AR sub ' +
+        fmt(c.subAr) + ' vs GL ' + fmt(c.glAr) +
+        (Math.abs(c.arDiff) > 1 ? ' · gap ' + fmt(c.arDiff) + ' (untagged lines)' : '') +
+        ' · AP sub ' + fmt(c.subAp) + ' vs GL ' + fmt(c.glAp) +
+        (Math.abs(c.apDiff) > 1 ? ' · gap ' + fmt(c.apDiff) : '') + '</p>';
+    }
+  } catch (_) {}
+  if (arEl) {
+    arEl.innerHTML = rowHtml(arSubledgerBalances(), 'No tagged customer AR yet — send an invoice to build the subledger.') + checkHint;
+  }
+  if (apEl) {
+    apEl.innerHTML = rowHtml(apSubledgerBalances(), 'No tagged supplier AP yet — post a supplier bill to build the subledger.');
+  }
+}
+
 function booksView() {
   ensureBooksDb();
   try { restoreBooksPeriodPreference(); } catch {}
@@ -24708,6 +24958,7 @@ function booksView() {
     }
   } catch {}
   syncAllInvoiceAccruals();
+  try { backfillArApPartyTags(); } catch (e) { console.warn('ar/ap party backfill', e); }
   try { processDueRecurringJournals(); } catch (e) { console.warn('rj due', e); }
   try { save(); } catch {}
 
@@ -24761,6 +25012,8 @@ function booksView() {
   const elTax = document.getElementById('booksTaxControl');
   if (elAP) elAP.textContent = money(apBal);
   if (elTax) elTax.textContent = money(taxOut - taxIn);
+
+  try { renderArApSubledgers(); } catch (e) { console.warn('subledger', e); }
 
   // ——— Expense breakdown (full COA expense + non-expense cash outs) ———
   const byCat = document.getElementById('booksByCategory');
@@ -25459,17 +25712,14 @@ function updateOpeningHint() {
   let msg = 'Assets ' + money(assets) + ' · Liabilities ' + money(liab) + ' · Equity entered ' + money(equity);
   if (plugAbs) {
     msg += ' · Retained earnings (3200) plug ' + money(plug) + ' so Assets = Liabilities + Equity';
+    msg += ' · Normal when Capital/Reserves only hold formal capital and cumulative profit sits in RE';
   } else {
     msg += ' · Balanced (A = L + E)';
   }
-  // Flag unlikely plugs (e.g. P&L accidentally still on BS)
-  const scale = Math.max(Math.abs(assets), Math.abs(liab + equity), 1);
-  if (plugAbs && Math.abs(plug) > scale * 0.5 && scale > 1000) {
-    msg += ' · Check COA types: large plug often means revenue/expense accounts are still typed as equity/liability';
-  }
   hint.textContent = msg;
-  const danger = plugAbs && Math.abs(plug) > scale * 0.5 && scale > 1000;
-  hint.style.color = (assets + liab + equity) === 0 ? 'var(--muted)' : (danger ? 'var(--red-text)' : (plugAbs ? 'var(--muted)' : 'var(--green-text)'));
+  hint.style.color = (Math.abs(assets) + Math.abs(liab) + Math.abs(equity)) < 0.01
+    ? 'var(--muted)'
+    : (plugAbs ? 'var(--muted)' : 'var(--green-text)');
 }
 
 
@@ -25581,6 +25831,31 @@ function importOpeningBalancesCsv(file) {
   reader.readAsText(file);
 }
 
+/** Ensure system RE account 3200 exists and is not hidden (required for opening plug). */
+function ensureRetainedEarningsAccount() {
+  ensureBooksDb();
+  if (!db.coaOverrides) db.coaOverrides = {};
+  // Unhide if user hid 3200
+  if (db.coaOverrides['3200'] && db.coaOverrides['3200'].hidden) {
+    delete db.coaOverrides['3200'].hidden;
+  }
+  // Always present in base COA; if somehow stripped, add via coaExtra
+  const all = typeof getCoaAll === 'function' ? getCoaAll() : getCoa();
+  if (!all.some(a => String(a.id) === '3200')) {
+    if (!Array.isArray(db.coaExtra)) db.coaExtra = [];
+    if (!db.coaExtra.some(a => String(a.id) === '3200')) {
+      db.coaExtra.push({
+        id: '3200',
+        name: 'Retained earnings',
+        type: 'equity',
+        statement: 'bs',
+        fsLine: 'equity',
+        cfSection: 'operating'
+      });
+    }
+  }
+}
+
 function postOpeningBalances() {
   ensureBooksDb();
   const v = validateOpeningBalancesForm();
@@ -25588,66 +25863,133 @@ function postOpeningBalances() {
     toast('Opening balances invalid: ' + (v.errors[0] || 'check form'));
     return;
   }
-  const runPost = () => {
-    const date = document.getElementById('obDate')?.value || today;
+
+  const buildLines = () => {
     const lines = [];
     let assetNet = 0, creditNet = 0;
     document.querySelectorAll('#obLines [data-ob-id]').forEach(row => {
       const id = row.getAttribute('data-ob-id');
-      const amt = Number(row.querySelector('.ob-amt')?.value || 0);
+      let amt = Number(row.querySelector('.ob-amt')?.value || 0);
+      amt = Math.round(amt * 100) / 100;
       if (!(Math.abs(amt) > 0.0001)) return;
       const type = row.querySelector('.ob-amt')?.dataset.obType;
-      // Positive asset = debit; negative asset (contra) = credit
-      // Positive liability/equity = credit; negative = debit
       if (type === 'asset') {
         if (amt >= 0) lines.push({ accountId: id, debit: amt, credit: 0 });
-        else lines.push({ accountId: id, debit: 0, credit: -amt });
+        else lines.push({ accountId: id, debit: 0, credit: Math.round((-amt) * 100) / 100 });
         assetNet += amt;
       } else {
         if (amt >= 0) lines.push({ accountId: id, debit: 0, credit: amt });
-        else lines.push({ accountId: id, debit: -amt, credit: 0 });
+        else lines.push({ accountId: id, debit: Math.round((-amt) * 100) / 100, credit: 0 });
         creditNet += amt;
       }
     });
+    assetNet = Math.round(assetNet * 100) / 100;
+    creditNet = Math.round(creditNet * 100) / 100;
     const plug = Math.round((assetNet - creditNet) * 100) / 100;
-    // Assets − (Liabilities + Equity entered) → Retained earnings (3200)
     if (Math.abs(plug) > 0.02) {
       if (plug > 0) lines.push({ accountId: '3200', debit: 0, credit: plug });
-      else lines.push({ accountId: '3200', debit: -plug, credit: 0 });
+      else lines.push({ accountId: '3200', debit: Math.round((-plug) * 100) / 100, credit: 0 });
     }
-    if (lines.length < 2) {
-      toast('Enter at least two account balances');
-      return;
-    }
-    const entry = postJournal({
-      date,
-      memo: 'Opening balances as at ' + date,
-      source: 'opening_balance',
-      sourceKey: 'j:opening:' + date + ':' + crypto.randomUUID(),
-      lines
-    });
-    if (!entry) { toast('Could not post opening balances'); return; }
-    db.booksSettings.openingDate = date;
-    db.booksSettings.openingPostedAt = new Date().toISOString();
-    save();
-    closeOpeningModal();
-    toast('Opening balances posted');
-    booksTab = 'balance';
-    booksView();
-    track('opening_balances_posted', { lines: lines.length });
+    return { lines, plug, assetNet, creditNet };
   };
+
+  const runPost = (opts) => {
+    opts = opts || {};
+    try {
+      ensureRetainedEarningsAccount();
+      const dateRaw = document.getElementById('obDate')?.value || '';
+      const date = String(dateRaw || (typeof today === 'function' ? today() : today)).slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        toast('Pick a valid as-at date');
+        return;
+      }
+      const built = buildLines();
+      const lines = built.lines;
+      if (lines.length < 2) {
+        toast('Enter at least two account balances');
+        return;
+      }
+
+      // Pre-flight: every account must resolve
+      const missing = lines
+        .map(l => l.accountId)
+        .filter(id => {
+          try {
+            return !getCoaAll().some(a => String(a.id) === String(id));
+          } catch (_) {
+            return !getCoa().some(a => String(a.id) === String(id));
+          }
+        });
+      if (missing.length) {
+        toast('Missing COA account(s): ' + [...new Set(missing)].join(', ') + ' — unhide or add under Chart of accounts');
+        return;
+      }
+
+      const lockCheck = assertBooksDateOpen(date);
+      const skipLock = !!opts.skipPeriodLock;
+      if (!lockCheck.ok && !skipLock) {
+        confirmAction(
+          'Period locked',
+          (lockCheck.message || 'This date is in a locked period.') +
+            '\n\nOpening balances are often posted on a historical date. Post into the locked period anyway?',
+          () => runPost({ skipPeriodLock: true }),
+          { okLabel: 'Post in locked period' }
+        );
+        return;
+      }
+
+      const entry = postJournal({
+        date,
+        memo: 'Opening balances as at ' + date,
+        source: 'opening_balance',
+        sourceKey: 'j:opening:' + date + ':' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
+        lines,
+        skipPeriodLock: skipLock
+      });
+      if (!entry) {
+        // Diagnose
+        const debits = lines.reduce((n, l) => n + (Number(l.debit) || 0), 0);
+        const credits = lines.reduce((n, l) => n + (Number(l.credit) || 0), 0);
+        const diff = Math.round((debits - credits) * 100) / 100;
+        if (Math.abs(diff) > 0.02) {
+          toast('Could not post: journal unbalanced (Dr ' + debits.toFixed(2) + ' vs Cr ' + credits.toFixed(2) + ')');
+        } else if (!lockCheck.ok && !skipLock) {
+          toast(lockCheck.message || 'Period locked');
+        } else {
+          toast('Could not post opening balances — check console for details, or confirm account 3200 exists and is not hidden');
+        }
+        return;
+      }
+      db.booksSettings.openingDate = date;
+      db.booksSettings.openingPostedAt = new Date().toISOString();
+      save();
+      closeOpeningModal();
+      toast('Opening balances posted');
+      booksTab = 'balance';
+      try { booksView(); } catch (_) {}
+      try { track('opening_balances_posted', { lines: lines.length }); } catch (_) {}
+    } catch (err) {
+      console.error('postOpeningBalances', err);
+      toast(err && err.message ? err.message : 'Could not post opening balances');
+    }
+  };
+
   const afterWarnings = () => {
-    if (db.journals.some(j => j.source === 'opening_balance')) {
-      confirmAction(
-        'Opening balances already posted',
-        'Opening balances were already posted. Post another opening journal anyway?',
-        runPost,
-        { okLabel: 'Post another' }
-      );
+    if ((db.journals || []).some(j => j.source === 'opening_balance' && !j.reversed)) {
+      // Defer so confirm modal from warnings can close cleanly first
+      setTimeout(() => {
+        confirmAction(
+          'Opening balances already posted',
+          'Opening balances were already posted. Post another opening journal anyway?',
+          () => runPost({}),
+          { okLabel: 'Post another' }
+        );
+      }, 50);
       return;
     }
-    runPost();
+    runPost({});
   };
+
   if (v.warnings.length) {
     confirmAction(
       'Review warnings',
@@ -32704,6 +33046,8 @@ function addPaymentToEdit(amount, date, note, method) {
   if (ok) ok.onclick = async () => {
     const action = pendingConfirm;
     if (!action) return close();
+    // Clear before await so a nested confirmAction can set a new pendingConfirm
+    pendingConfirm = null;
     ok.disabled = true;
     try {
       await action();
@@ -32712,7 +33056,8 @@ function addPaymentToEdit(amount, date, note, method) {
       toast(error?.message || 'Action failed. Please try again.');
     } finally {
       ok.disabled = false;
-      close();
+      // Only dismiss if no nested confirm was opened
+      if (!pendingConfirm && modal) modal.classList.remove('show');
     }
   };
 
