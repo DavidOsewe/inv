@@ -8796,9 +8796,11 @@ function applyAppInstallGates() {
   try {
     const active = document.querySelector('.view.active');
     const viewId = active && active.id;
-    if (viewId && viewId !== 'dashboard') {
+    if (viewId && viewId !== 'dashboard' && viewId !== 'editor') {
       const appId = VIEW_TO_APP[viewId] || viewId;
-      if (appId && typeof isAppInstalled === 'function' && !isAppInstalled(appId)) {
+      const app = typeof appRegistryEntry === 'function' ? appRegistryEntry(appId) : null;
+      // Only bounce when the id is a real registry app and it is not installed
+      if (app && !app.core && typeof isAppInstalled === 'function' && !isAppInstalled(appId)) {
         if (typeof switchTo === 'function') switchTo('dashboard');
       }
     }
@@ -8825,11 +8827,19 @@ const VIEW_TO_APP = {
 
 function requireAppInstalled(viewOrAppId, opts) {
   opts = opts || {};
-  const appId = VIEW_TO_APP[viewOrAppId] || viewOrAppId;
-  if (!appId || typeof isAppInstalled !== 'function') return true;
-  if (isAppInstalled(appId)) return true;
+  if (!viewOrAppId || viewOrAppId === 'dashboard') return true;
+  // Map sub-views (editor, etc.) → parent installable app
+  const appId = (VIEW_TO_APP && VIEW_TO_APP[viewOrAppId]) || viewOrAppId;
+  if (typeof isAppInstalled !== 'function') return true;
+  // Not in the registry = internal SPA screen, not an installable module
   const app = typeof appRegistryEntry === 'function' ? appRegistryEntry(appId) : null;
-  const name = (app && app.name) || appId;
+  if (!app) return true;
+  if (app.core || app.defaultInstalled) {
+    // Core OS apps always available (also covers stale installedApps maps)
+    if (app.core) return true;
+  }
+  if (isAppInstalled(appId)) return true;
+  const name = app.name || appId;
   if (!opts.silent) {
     try { toast(name + ' is not installed. Open Manage apps on Home to add it.'); } catch (_) {}
   }
@@ -9903,9 +9913,14 @@ function restoreNavOnBoot() {
 }
 
 function switchTo(v) {
-  // Block navigation into apps the org has not installed
-  if (v && v !== 'dashboard' && typeof requireAppInstalled === 'function') {
+  // Block navigation into apps the org has not installed.
+  // Internal screens (editor, etc.) map via VIEW_TO_APP; unknown ids are not gated.
+  if (v && v !== 'dashboard' && v !== 'editor' && typeof requireAppInstalled === 'function') {
     if (!requireAppInstalled(v)) return;
+  }
+  // Editor is always part of Invoices (core) — only gate the parent app
+  if (v === 'editor' && typeof requireAppInstalled === 'function') {
+    if (!requireAppInstalled('invoices')) return;
   }
   try { closeMoreSheet(); } catch (_) {}
   // Legacy inventory routes → spine
