@@ -19561,6 +19561,7 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
         location_name: outletName
       });
     }
+    const posRevId = (typeof getRevenueAccountId === 'function') ? getRevenueAccountId() : '4000';
     const rev = postJournal({
       date,
       memo: 'POS sale ' + saleLabel,
@@ -19569,7 +19570,7 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
       currency,
       lines: [
         { accountId: debitAcct, debit: total, credit: 0 },
-        { accountId: '4000', debit: 0, credit: total }
+        { accountId: posRevId, debit: 0, credit: total }
       ]
     });
     if (rev) {
@@ -19761,6 +19762,7 @@ function backfillPosSalesToBooks() {
         location_name: outletName || null
       });
     }
+    const posRevId2 = (typeof getRevenueAccountId === 'function') ? getRevenueAccountId() : '4000';
     const rev = postJournal({
       date,
       memo: 'POS sale ' + saleLabel,
@@ -19769,7 +19771,7 @@ function backfillPosSalesToBooks() {
       currency,
       lines: [
         { accountId: '1000', debit: total, credit: 0 },
-        { accountId: '4000', debit: 0, credit: total }
+        { accountId: posRevId2, debit: 0, credit: total }
       ]
     });
     if (rev) {
@@ -21433,9 +21435,89 @@ function journalActivity(journalId) {
 }
 
 
-/** AR / AP control accounts (GL). Party detail lives on journal lines. */
+/** Default system codes — only used when no better role match exists on the COA. */
 const AR_CONTROL_ID = '1100';
 const AP_CONTROL_ID = '2000';
+const REVENUE_CONTROL_ID = '4000';
+const OUTPUT_TAX_ID = '2100';
+const INPUT_TAX_ID = '1200';
+
+/**
+ * Resolve GL control accounts by role (fsLine / type / name), not by hardcoded ids.
+ * Prevents invoice accruals hitting renamed system codes (e.g. 1100 → "IT equipment").
+ */
+function resolveBooksControlAccount(role) {
+  ensureBooksDb();
+  if (!db.booksSettings) db.booksSettings = {};
+  if (!db.booksSettings.controlAccounts) db.booksSettings.controlAccounts = {};
+  const pinned = db.booksSettings.controlAccounts[role];
+  const all = (typeof getCoaAll === 'function' ? getCoaAll() : getCoa()) || [];
+  const visible = (typeof getCoa === 'function' ? getCoa() : all) || [];
+  const pool = visible.length ? visible : all;
+
+  if (pinned && pool.some(a => String(a.id) === String(pinned))) return String(pinned);
+
+  const nameOf = (a) => String(a.name || '').toLowerCase();
+  const isBadRevenueName = (a) => /depreciat|expense|cogs|cost of|salary|wage|rent|utility|drawings|equity|liability|payable|equipment|accumulat|inventory|cash|bank|loan/.test(nameOf(a));
+  const isGoodRevenueName = (a) => /revenue|sales|income|turnover|fee income|service/.test(nameOf(a));
+  const isGoodArName = (a) => /receivable|debtor|customer.*balance|trade.?receiv/.test(nameOf(a));
+  const isGoodApName = (a) => /payable|creditor|supplier.*balance|trade.?pay/.test(nameOf(a));
+
+  let hit = null;
+  if (role === 'ar') {
+    hit = pool.find(a => a.fsLine === 'receivables')
+      || pool.find(a => isGoodArName(a) && (a.type === 'asset' || a.statement === 'bs'))
+      || pool.find(a => String(a.id) === AR_CONTROL_ID && a.fsLine === 'receivables');
+  } else if (role === 'ap') {
+    hit = pool.find(a => a.fsLine === 'payables')
+      || pool.find(a => isGoodApName(a) && (a.type === 'liability' || a.statement === 'bs'))
+      || pool.find(a => String(a.id) === AP_CONTROL_ID && a.fsLine === 'payables');
+  } else if (role === 'revenue') {
+    hit = pool.find(a => (a.type === 'income' || a.fsLine === 'revenue') && isGoodRevenueName(a) && !isBadRevenueName(a))
+      || pool.find(a => a.fsLine === 'revenue' && a.type === 'income' && !isBadRevenueName(a))
+      || pool.find(a => a.type === 'income' && !isBadRevenueName(a))
+      || pool.find(a => String(a.id) === REVENUE_CONTROL_ID && a.type === 'income');
+  } else if (role === 'output_tax') {
+    hit = pool.find(a => a.fsLine === 'tax_payable')
+      || pool.find(a => /output.?vat|vat payable|tax payable|sales tax/.test(nameOf(a)))
+      || pool.find(a => String(a.id) === OUTPUT_TAX_ID);
+  } else if (role === 'input_tax') {
+    hit = pool.find(a => /input.?vat|tax recoverable|vat receivable/.test(nameOf(a)))
+      || pool.find(a => String(a.id) === INPUT_TAX_ID);
+  }
+
+  if (hit) {
+    db.booksSettings.controlAccounts[role] = String(hit.id);
+    return String(hit.id);
+  }
+
+  // No suitable account — ensure a dedicated control exists (coaExtra) so posts never hit wrong heads
+  const specs = {
+    ar: { id: '1100-AR', name: 'Accounts receivable', type: 'asset', statement: 'bs', fsLine: 'receivables', cfSection: 'operating' },
+    ap: { id: '2000-AP', name: 'Accounts payable', type: 'liability', statement: 'bs', fsLine: 'payables', cfSection: 'operating' },
+    revenue: { id: '4000-REV', name: 'Sales revenue', type: 'income', statement: 'pl', fsLine: 'revenue', cfSection: 'operating' },
+    output_tax: { id: '2100-TAX', name: 'Output VAT / tax payable', type: 'liability', statement: 'bs', fsLine: 'tax_payable', cfSection: 'operating' },
+    input_tax: { id: '1200-TAX', name: 'Input VAT / tax recoverable', type: 'asset', statement: 'bs', fsLine: 'other_current_assets', cfSection: 'operating' }
+  };
+  const spec = specs[role];
+  if (spec) {
+    if (!Array.isArray(db.coaExtra)) db.coaExtra = [];
+    if (!db.coaExtra.some(a => String(a.id) === spec.id) && !all.some(a => String(a.id) === spec.id)) {
+      db.coaExtra.push({ ...spec });
+      try { save(); } catch (_) {}
+    }
+    db.booksSettings.controlAccounts[role] = spec.id;
+    return spec.id;
+  }
+  // Last-resort defaults
+  const fallback = { ar: AR_CONTROL_ID, ap: AP_CONTROL_ID, revenue: REVENUE_CONTROL_ID, output_tax: OUTPUT_TAX_ID, input_tax: INPUT_TAX_ID };
+  return fallback[role] || AR_CONTROL_ID;
+}
+
+function getArControlId() { return resolveBooksControlAccount('ar'); }
+function getApControlId() { return resolveBooksControlAccount('ap'); }
+function getRevenueAccountId() { return resolveBooksControlAccount('revenue'); }
+function getOutputTaxAccountId() { return resolveBooksControlAccount('output_tax'); }
 
 function partyFromInvoice(inv) {
   if (!inv) return { partyType: 'client', partyId: '', partyName: '' };
@@ -21469,7 +21551,10 @@ function partyFromBill(bill) {
 function withPartyOnArApLine(line, party) {
   if (!line || !party) return line;
   const id = String(line.accountId || '');
-  if (id !== AR_CONTROL_ID && id !== AP_CONTROL_ID) return line;
+  let arId = AR_CONTROL_ID, apId = AP_CONTROL_ID;
+  try { arId = getArControlId(); } catch (_) {}
+  try { apId = getApControlId(); } catch (_) {}
+  if (id !== String(arId) && id !== String(apId) && id !== AR_CONTROL_ID && id !== AP_CONTROL_ID) return line;
   return {
     ...line,
     partyType: party.partyType || line.partyType,
@@ -21574,11 +21659,13 @@ function partyControlBalances(controlId, partyType) {
 }
 
 function arSubledgerBalances() {
-  return partyControlBalances(AR_CONTROL_ID, 'client');
+  const id = (typeof getArControlId === 'function') ? getArControlId() : AR_CONTROL_ID;
+  return partyControlBalances(id, 'client');
 }
 
 function apSubledgerBalances() {
-  return partyControlBalances(AP_CONTROL_ID, 'supplier');
+  const id = (typeof getApControlId === 'function') ? getApControlId() : AP_CONTROL_ID;
+  return partyControlBalances(id, 'supplier');
 }
 
 function partyArBalance(partyId) {
@@ -21640,6 +21727,7 @@ function recordCashFromInvoicePayment(inv, payment) {
   // Payment clears AR into selected cash / cash-equivalent
   const amt = toRep(payment.amount, inv.currency);
   const party = partyFromInvoice(inv);
+  const arId = getArControlId();
   postJournal({
     date: payment.date || today,
     memo: 'Payment · ' + (inv.number || 'invoice') + (party.partyName ? ' · ' + party.partyName : ''),
@@ -21648,7 +21736,7 @@ function recordCashFromInvoicePayment(inv, payment) {
     currency: db.profile.reporting || 'USD',
     lines: [
       { accountId: depositId, debit: amt, credit: 0 },
-      withPartyOnArApLine({ accountId: AR_CONTROL_ID, debit: 0, credit: amt }, party)
+      withPartyOnArApLine({ accountId: arId, debit: 0, credit: amt }, party)
     ]
   });
 }
@@ -21666,12 +21754,15 @@ function accrueInvoiceIfNeeded(inv) {
   const taxRep = toRep(taxAmt, inv.currency);
   const revRep = toRep(subAmt, inv.currency);
   const party = partyFromInvoice(inv);
+  const arId = getArControlId();
+  const revId = getRevenueAccountId();
+  const taxId = getOutputTaxAccountId();
   const lines = [
-    withPartyOnArApLine({ accountId: AR_CONTROL_ID, debit: totalRep, credit: 0 }, party),
-    { accountId: '4000', debit: 0, credit: revRep }
+    withPartyOnArApLine({ accountId: arId, debit: totalRep, credit: 0 }, party),
+    { accountId: revId, debit: 0, credit: revRep }
   ];
   if (taxRep > 0.001) {
-    lines.push({ accountId: '2100', debit: 0, credit: taxRep });
+    lines.push({ accountId: taxId, debit: 0, credit: taxRep });
   } else {
     // no tax line — revenue takes full credit
     lines[1].credit = totalRep;
@@ -21685,6 +21776,50 @@ function accrueInvoiceIfNeeded(inv) {
     currency: db.profile.reporting || 'USD',
     lines
   });
+}
+
+/**
+ * Repair invoice accruals that posted to wrong heads (renamed 1100/4000 etc.).
+ * Reverses non-matching invoice_accrual journals and re-posts via accrueInvoiceIfNeeded.
+ */
+function repairInvoiceAccrualAccounts() {
+  ensureBooksDb();
+  const arId = getArControlId();
+  const revId = getRevenueAccountId();
+  let fixed = 0;
+  const journals = (db.journals || []).slice();
+  journals.forEach(j => {
+    if (!j || j.reversed || j.source !== 'invoice_accrual') return;
+    const lines = j.lines || [];
+    const hasAr = lines.some(l => String(l.accountId) === String(arId) && (Number(l.debit) || 0) > 0);
+    const hasRev = lines.some(l => String(l.accountId) === String(revId) && (Number(l.credit) || 0) > 0);
+    if (hasAr && hasRev) return;
+    // Wrong accounts — reverse and clear sourceKey so re-accrual can post
+    try {
+      if (typeof reverseJournal === 'function') {
+        reverseJournal(j.id, 'Repair: invoice accrual used wrong GL accounts', j.date);
+      } else {
+        j.reversed = true;
+      }
+      // Allow re-post under same logical invoice
+      const invKey = String(j.sourceKey || '').replace(/^j:/, '');
+      j.sourceKey = (j.sourceKey || '') + ':repaired';
+      fixed++;
+      // Re-accrue
+      const invId = invKey.replace(/^inv:/, '');
+      const inv = (db.invoices || []).find(i => i.id === invId);
+      if (inv) {
+        try { accrueInvoiceIfNeeded(inv); } catch (e) { console.warn('re-accrue', e); }
+      }
+    } catch (e) {
+      console.warn('repair accrual', e);
+    }
+  });
+  if (fixed) {
+    try { save(); } catch (_) {}
+    try { toast('Repaired ' + fixed + ' invoice accrual' + (fixed === 1 ? '' : 's') + ' → AR / revenue'); } catch (_) {}
+  }
+  return fixed;
 }
 
 function syncAllInvoiceAccruals() {
@@ -23590,9 +23725,13 @@ function accrueSupplierBill(bill) {
   } else {
     lines.push({ accountId: expenseAccount, debit: netRep, credit: 0 });
   }
-  if (taxRep > 0.001) lines.push({ accountId: '1200', debit: taxRep, credit: 0 });
+  if (taxRep > 0.001) {
+    const inTax = (typeof resolveBooksControlAccount === 'function') ? resolveBooksControlAccount('input_tax') : '1200';
+    lines.push({ accountId: inTax, debit: taxRep, credit: 0 });
+  }
   const party = partyFromBill(bill);
-  lines.push(withPartyOnArApLine({ accountId: AP_CONTROL_ID, debit: 0, credit: totalRep }, party));
+  const apId = (typeof getApControlId === 'function') ? getApControlId() : AP_CONTROL_ID;
+  lines.push(withPartyOnArApLine({ accountId: apId, debit: 0, credit: totalRep }, party));
   postJournal({
     date: bill.date || today,
     memo: 'Bill · ' + (party.partyName || bill.supplier || 'Supplier') + (bill.note ? ' · ' + bill.note : ''),
@@ -23641,13 +23780,14 @@ function paySupplierBill(billId, opts) {
     return;
   }
   const party = partyFromBill(bill);
+  const apPayId = (typeof getApControlId === 'function') ? getApControlId() : AP_CONTROL_ID;
   postJournal({
     date: payDate,
     memo: 'Pay bill · ' + (party.partyName || bill.supplier || 'Supplier') + (bill.note ? ' · ' + bill.note : ''),
     source: 'bill_payment',
     sourceKey: 'j:' + key,
     lines: [
-      withPartyOnArApLine({ accountId: AP_CONTROL_ID, debit: amt, credit: 0 }, party),
+      withPartyOnArApLine({ accountId: apPayId, debit: amt, credit: 0 }, party),
       { accountId: bankId, debit: 0, credit: amt }
     ]
   });
@@ -24976,6 +25116,15 @@ function booksView() {
   } catch {}
   syncAllInvoiceAccruals();
   try { backfillArApPartyTags(); } catch (e) { console.warn('ar/ap party backfill', e); }
+  // One-shot repair of accruals that hit renamed system codes (e.g. 1100 equipment / 4000 depreciation)
+  try {
+    if (!db.booksSettings) db.booksSettings = {};
+    if (!db.booksSettings._repairedInvoiceAccrualsV1) {
+      const n = repairInvoiceAccrualAccounts();
+      db.booksSettings._repairedInvoiceAccrualsV1 = true;
+      if (n) try { save(); } catch (_) {}
+    }
+  } catch (e) { console.warn('invoice accrual repair', e); }
   try { processDueRecurringJournals(); } catch (e) { console.warn('rj due', e); }
   try { save(); } catch {}
 
@@ -24999,7 +25148,12 @@ function booksView() {
   const expenseAccounts = coaAll.filter(a => isPlExpenseAccount(a));
   const expenses = expenseAccounts.reduce((n, a) => n + expensePeriodAmount(a.id, act), 0);
   const bal = accountBalances(null);
-  const ar = bal['1100'] || 0;
+  let arCtrl = '1100', apCtrl = '2000', taxOutId = '2100', taxInId = '1200';
+  try { arCtrl = getArControlId(); } catch (_) {}
+  try { apCtrl = getApControlId(); } catch (_) {}
+  try { taxOutId = getOutputTaxAccountId(); } catch (_) {}
+  try { taxInId = resolveBooksControlAccount('input_tax'); } catch (_) {}
+  const ar = bal[arCtrl] || 0;
 
   const elRev = document.getElementById('booksRevenue');
   const elExp = document.getElementById('booksExpenses');
@@ -25022,9 +25176,9 @@ function booksView() {
     elCash.style.color = cashEq < 0 ? 'var(--red-text)' : '';
   }
   // accountBalances: debit - credit, so AP credit balance is negative; liability display = -balance
-  const apBal = Math.max(0, -(bal['2000'] || 0));
-  const taxOut = Math.max(0, -(bal['2100'] || 0));
-  const taxIn = Math.max(0, bal['1200'] || 0);
+  const apBal = Math.max(0, -(bal[apCtrl] || 0));
+  const taxOut = Math.max(0, -(bal[taxOutId] || 0));
+  const taxIn = Math.max(0, bal[taxInId] || 0);
   const elAP = document.getElementById('booksAP');
   const elTax = document.getElementById('booksTaxControl');
   if (elAP) elAP.textContent = money(apBal);
