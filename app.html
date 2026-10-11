@@ -4290,10 +4290,12 @@ body:has(.modalback.show) .notif-panel {
         <button type="button" class="inv-tab primary" data-appr-tab="mine" aria-selected="true">My requests</button>
         <button type="button" class="inv-tab" data-appr-tab="action" aria-selected="false">Needs action <span class="nav-badge" id="approvalsActionBadge" hidden></span></button>
         <button type="button" class="inv-tab" data-appr-tab="all" aria-selected="false">In progress</button>
+        <button type="button" class="inv-tab" data-appr-tab="history" aria-selected="false">History</button>
       </div>
       <div id="approvalsPanelMine" class="appr-panel"></div>
       <div id="approvalsPanelAction" class="appr-panel" hidden></div>
       <div id="approvalsPanelAll" class="appr-panel" hidden></div>
+      <div id="approvalsPanelHistory" class="appr-panel" hidden></div>
     </section>
 
     <section class="view" id="pulse">
@@ -13752,12 +13754,73 @@ function listMyExpenseRequests() {
   return mine.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 12);
 }
 
+/** Completed / decided approval items for History tab (org-wide + mine). */
+function listApprovalHistoryItems() {
+  const out = [];
+  const push = (kind, e, title) => {
+    const st = e.status || '';
+    if (!(st === 'open' || st === 'posted' || st === 'paid' || st === 'rejected' || st === 'approved')) return;
+    // Skip pure drafts never submitted
+    if (!e.requested_at && !e.approved_at && !e.rejected_at && !e.approval_chain && st !== 'paid') {
+      if (st === 'open' && kind === 'cash' && e.source && e.source !== 'manual') return;
+    }
+    out.push({
+      kind,
+      id: e.id,
+      status: st === 'paid' ? 'paid' : st,
+      title: title || kind,
+      amount: e.amount,
+      currency: e.currency,
+      entity: e,
+      isMine: typeof isSelfExpenseRequest === 'function' && isSelfExpenseRequest(e),
+      at: e.approved_at || e.rejected_at || e.paidAt || e.posted_at || e.requested_at || e.date || ''
+    });
+  };
+  try {
+    (db.bills || []).forEach(b => push('bill', b, b.supplier || 'Expense bill'));
+  } catch (_) {}
+  try {
+    (db.cashEntries || []).forEach(c => {
+      if (c.type !== 'out') return;
+      push('cash', c, c.note || 'Cash expense');
+    });
+  } catch (_) {}
+  try {
+    (db.purchases || []).forEach(p => {
+      if (p.status === 'pending_approval' || p.status === 'draft') return;
+      if (p.approval_chain || p.approved_at || p.status === 'ordered' || p.status === 'received' || p.status === 'rejected') {
+        push('purchase', p, p.purchase_number || 'Purchase order');
+      }
+    });
+  } catch (_) {}
+  try {
+    (db.transfers || []).forEach(t => {
+      if (t.status === 'pending_approval') return;
+      if (t.approved_at || t.status === 'in_transit' || t.status === 'received' || t.status === 'cancelled' || t.status === 'rejected') {
+        out.push({
+          kind: 'transfer',
+          id: t.id,
+          status: t.status,
+          title: t.transfer_number || 'Stock transfer',
+          amount: null,
+          currency: null,
+          entity: t,
+          isMine: false,
+          at: t.approved_at || t.received_at || t.created_at || ''
+        });
+      }
+    });
+  } catch (_) {}
+  return out.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 80);
+}
+
 function apprStatusBadge(st) {
   if (st === 'pending_approval' || st === 'pending_review') {
     return '<span class="appr-badge pending">Pending</span>';
   }
   if (st === 'rejected') return '<span class="appr-badge rejected">Rejected</span>';
-  if (st === 'open' || st === 'posted') return '<span class="appr-badge posted">Posted</span>';
+  if (st === 'paid') return '<span class="appr-badge posted">Paid</span>';
+  if (st === 'open' || st === 'posted' || st === 'approved') return '<span class="appr-badge posted">Posted</span>';
   return '<span class="appr-badge other">' + String(st || '—').replace(/</g, '') + '</span>';
 }
 
@@ -13894,7 +13957,7 @@ function setApprovalsTab(tab) {
     btn.classList.toggle('primary', on);
     btn.setAttribute('aria-selected', on ? 'true' : 'false');
   });
-  ['mine', 'action', 'all'].forEach(t => {
+  ['mine', 'action', 'all', 'history'].forEach(t => {
     const el = document.getElementById('approvalsPanel' + t.charAt(0).toUpperCase() + t.slice(1));
     if (el) el.hidden = t !== _apprTab;
   });
@@ -14009,6 +14072,34 @@ function renderApprovalsWorkspace() {
           '<button type="button" class="button small" data-appr-open="' + it.kind + ':' + it.id + '">View details</button>' +
           '</div></div>';
       }).join('');
+    }
+  }
+
+  const histEl = document.getElementById('approvalsPanelHistory');
+  if (histEl) {
+    const hist = typeof listApprovalHistoryItems === 'function' ? listApprovalHistoryItems() : [];
+    if (!hist.length) {
+      histEl.innerHTML = '<div class="empty" style="padding:24px">' +
+        '<h3 style="margin:0 0 6px">No approval history yet</h3>' +
+        '<p class="section-sub">Approved, posted, paid, and rejected requests appear here for audit.</p></div>';
+    } else {
+      histEl.innerHTML =
+        '<p class="section-sub" style="margin:0 0 12px">Past decisions — open any row for chain, receipts, and status.</p>' +
+        hist.map(it => {
+          const when = it.at ? String(it.at).slice(0, 16).replace('T', ' ') : '';
+          return '<div class="appr-card">' +
+            '<div class="appr-card-head"><div><div class="appr-card-title">' + String(it.title || it.kind).replace(/</g, '') + '</div>' +
+            '<div class="appr-card-meta">' + String(it.kind).toUpperCase() +
+            (it.amount != null ? (' · ' + (typeof money === 'function' ? money(it.amount, it.currency) : it.amount)) : '') +
+            (when ? (' · ' + when) : '') +
+            (it.isMine ? ' · you' : '') +
+            (apprEntityDocs(it.entity).length ? (' · 📎 ' + apprEntityDocs(it.entity).length) : '') +
+            '</div></div>' + apprStatusBadge(it.status) + '</div>' +
+            (it.entity ? expenseChainProgressHtml(it.entity) : '') +
+            '<div class="appr-actions">' +
+            '<button type="button" class="button small" data-appr-open="' + it.kind + ':' + it.id + '">View details</button>' +
+            '</div></div>';
+        }).join('');
     }
   }
 
@@ -21642,7 +21733,8 @@ function reverseJournal(journalId, reason, dateOpt) {
     source: 'reversal',
     sourceKey: 'j:rev:' + j.id,
     lines,
-    reverseOf: j.id
+    reverseOf: j.id,
+    documents: Array.isArray(j.documents) ? j.documents : []
   });
   if (!rev) {
     if (!assertBooksDateOpen(revDate).ok) return null;
@@ -22416,12 +22508,15 @@ function recordCashFromInvoicePayment(inv, payment) {
   const amt = toRep(payment.amount, inv.currency);
   const party = partyFromInvoice(inv);
   const arId = getArControlId();
+  const invDocs = Array.isArray(inv.documents) ? inv.documents
+    : (Array.isArray(inv.attachments) ? inv.attachments : []);
   postJournal({
     date: payment.date || today,
     memo: 'Payment · ' + (inv.number || 'invoice') + (party.partyName ? ' · ' + party.partyName : ''),
     source: 'invoice_payment',
     sourceKey: 'j:' + key,
     currency: db.profile.reporting || 'USD',
+    documents: invDocs,
     lines: [
       { accountId: depositId, debit: amt, credit: 0 },
       withPartyOnArApLine({ accountId: arId, debit: 0, credit: amt }, party)
@@ -23681,10 +23776,8 @@ function resolveSupportingDocs(evOrEntity) {
     || tryDocs(evOrEntity.meta && evOrEntity.meta.documents)
     || tryDocs(evOrEntity.after && evOrEntity.after.documents)
     || tryDocs(evOrEntity.before && evOrEntity.before.documents);
-  // Prefer copies that still have dataUrl when merging from entity
   const preferOpenable = (list) => {
     if (!list || !list.length) return null;
-    if (list.some(d => d && d.dataUrl)) return list;
     return list;
   };
   if (docs) docs = preferOpenable(docs);
@@ -23692,25 +23785,72 @@ function resolveSupportingDocs(evOrEntity) {
   const id = evOrEntity.entityId;
   try {
     ensureBooksDb();
-    if (type === 'journal' || (evOrEntity.lines && evOrEntity.sourceKey)) {
+    if (type === 'journal' || (evOrEntity.lines && (evOrEntity.sourceKey || evOrEntity.id))) {
       const j = type === 'journal'
         ? (db.journals || []).find(x => x.id === id)
         : (evOrEntity.id ? (db.journals || []).find(x => x.id === evOrEntity.id) : null) || evOrEntity;
       const jDocs = tryDocs(j && j.documents);
-      if (jDocs && jDocs.some(d => d.dataUrl)) return jDocs;
-      // Follow sourceKey → bill / cash
+      if (jDocs && jDocs.some(d => d && d.dataUrl)) return jDocs;
+      // Follow sourceKey → parent bill / cash / invoice (accrual, payment, reversal)
       const sk = j && j.sourceKey ? String(j.sourceKey) : '';
-      if (sk.indexOf('bill:') >= 0) {
-        const billId = sk.replace(/^j:bill:/, '').replace(/^bill:/, '');
+      // bill accrual j:bill:ID · bill payment j:billpay:ID
+      if (sk.indexOf('bill:') >= 0 || sk.indexOf('billpay:') >= 0) {
+        const billId = sk
+          .replace(/^j:billpay:/, '')
+          .replace(/^j:bill:/, '')
+          .replace(/^billpay:/, '')
+          .replace(/^bill:/, '');
         const b = (db.bills || []).find(x => x.id === billId);
         const bDocs = tryDocs(b && b.documents);
-        if (bDocs) return bDocs;
+        if (bDocs) {
+          // Back-fill journal so both GL legs keep docs on the entry itself
+          if (j && !(j.documents && j.documents.length)) {
+            j.documents = bDocs;
+            try { save(); } catch (_) {}
+          }
+          return bDocs;
+        }
       }
       if (sk.indexOf('cash:') >= 0) {
         const cashId = sk.replace(/^j:cash:/, '').replace(/^cash:/, '');
         const c = (db.cashEntries || []).find(x => x.id === cashId);
         const cDocs = tryDocs(c && c.documents);
-        if (cDocs) return cDocs;
+        if (cDocs) {
+          if (j && !(j.documents && j.documents.length)) {
+            j.documents = cDocs;
+            try { save(); } catch (_) {}
+          }
+          return cDocs;
+        }
+      }
+      // invoice payment j:pay:… · accrual j:inv:ID
+      if (sk.indexOf('inv:') >= 0 || sk.indexOf('pay:') >= 0) {
+        let invId = '';
+        if (sk.indexOf('inv:') >= 0) {
+          invId = sk.replace(/^j:inv:/, '').replace(/^inv:/, '');
+        } else {
+          // payment key is pay:paymentId — resolve via cash entry or journal memo
+          const payKey = sk.replace(/^j:/, '');
+          const ce = (db.cashEntries || []).find(e => e.sourceKey === payKey);
+          if (ce && ce.invoiceId) invId = ce.invoiceId;
+        }
+        if (invId) {
+          const inv = (db.invoices || []).find(x => x.id === invId);
+          const iDocs = tryDocs(inv && (inv.documents || inv.attachments));
+          if (iDocs) {
+            if (j && !(j.documents && j.documents.length)) {
+              j.documents = iDocs;
+              try { save(); } catch (_) {}
+            }
+            return iDocs;
+          }
+        }
+      }
+      // Reversal → original journal docs
+      if (j && j.reverseOf) {
+        const orig = (db.journals || []).find(x => x.id === j.reverseOf);
+        const oDocs = tryDocs(orig && orig.documents);
+        if (oDocs) return oDocs;
       }
       if (jDocs) return jDocs;
     }
@@ -24627,11 +24767,14 @@ function paySupplierBill(billId, opts) {
   }
   const party = partyFromBill(bill);
   const apPayId = (typeof getApControlId === 'function') ? getApControlId() : AP_CONTROL_ID;
+  // Carry the same supporting docs as the accrual journal (both GL legs / payment entry)
+  const payDocs = Array.isArray(bill.documents) ? bill.documents : [];
   postJournal({
     date: payDate,
     memo: 'Pay bill · ' + (party.partyName || bill.supplier || 'Supplier') + (bill.note ? ' · ' + bill.note : ''),
     source: 'bill_payment',
     sourceKey: 'j:' + key,
+    documents: payDocs,
     lines: [
       withPartyOnArApLine({ accountId: apPayId, debit: amt, credit: 0 }, party),
       { accountId: bankId, debit: 0, credit: amt }
