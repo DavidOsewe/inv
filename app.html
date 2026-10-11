@@ -22098,12 +22098,45 @@ function tagArApJournalLine(journalId, lineIndex, party) {
 }
 
 /** Phase 4 — CSV statement for one customer or supplier. */
+/**
+ * Chronological statement lines with running balance.
+ * AR (client): +debit −credit. AP (supplier): +credit −debit (amount you owe).
+ */
+function partyStatementRowsWithRunning(partyType, journals) {
+  const list = (journals || []).slice().sort((a, b) => {
+    const d = String(a.date || '').localeCompare(String(b.date || ''));
+    if (d) return d;
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  });
+  let run = 0;
+  const isAp = partyType === 'supplier';
+  return list.map(j => {
+    const deb = Number(j.debit) || 0;
+    const cre = Number(j.credit) || 0;
+    if (isAp) run += cre - deb;
+    else run += deb - cre;
+    run = Math.round(run * 100) / 100;
+    return {
+      id: j.id,
+      date: j.date,
+      memo: j.memo,
+      source: j.source,
+      debit: deb,
+      credit: cre,
+      balance: run
+    };
+  });
+}
+
 function exportPartyStatementCsv(partyType, partyId, partyName) {
   const act = partySubledgerActivity(partyType, partyId, partyName);
+  const rows = partyStatementRowsWithRunning(partyType, act.journals || []);
   const rep = (db.profile && db.profile.reporting) || 'NGN';
-  const bal = partyType === 'supplier'
-    ? (partyId ? partyApBalance(partyId) : 0)
-    : (partyId ? partyArBalance(partyId) : 0);
+  const bal = rows.length ? rows[rows.length - 1].balance : (
+    partyType === 'supplier'
+      ? (partyId ? partyApBalance(partyId) : 0)
+      : (partyId ? partyArBalance(partyId) : 0)
+  );
   const biz = (db.profile && (db.profile.businessName || db.profile.name)) || 'invoicedey';
   const esc = (s) => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
   const lines = [
@@ -22115,15 +22148,16 @@ function exportPartyStatementCsv(partyType, partyId, partyName) {
     'Currency,' + rep,
     'As of,' + (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10)),
     '',
-    'Date,Memo,Source,Debit,Credit'
+    'Date,Memo,Source,Debit,Credit,Balance'
   ];
-  act.journals.forEach(j => {
+  rows.forEach(j => {
     lines.push([
       j.date || '',
       esc(j.memo || ''),
       esc(j.source || ''),
       j.debit || 0,
-      j.credit || 0
+      j.credit || 0,
+      j.balance
     ].join(','));
   });
   if (act.openDocs.length) {
@@ -22176,24 +22210,19 @@ async function loadJsPdfCtor() {
 async function exportPartyStatementPdf(partyType, partyId, partyName) {
   try {
     const act = partySubledgerActivity(partyType, partyId, partyName) || { journals: [], openDocs: [], controlId: '' };
-    const journals = Array.isArray(act.journals) ? act.journals : [];
+    const rows = partyStatementRowsWithRunning(partyType, act.journals || []);
     const openDocs = Array.isArray(act.openDocs) ? act.openDocs : [];
     const rep = (db.profile && db.profile.reporting) || 'NGN';
     const fmt = (n) => {
       try { return typeof money === 'function' ? money(Number(n) || 0, rep) : String(Number(n) || 0); }
       catch (_) { return String(Number(n) || 0); }
     };
-    let bal = 0;
-    try {
-      bal = partyType === 'supplier'
-        ? (partyId ? partyApBalance(partyId) : 0)
-        : (partyId ? partyArBalance(partyId) : 0);
-    } catch (_) { bal = 0; }
-    if (!(Math.abs(bal) > 0.001) && partyName) {
+    let bal = rows.length ? rows[rows.length - 1].balance : 0;
+    if (!(Math.abs(bal) > 0.001)) {
       try {
-        const rows = partyType === 'supplier' ? apSubledgerBalances() : arSubledgerBalances();
-        const hit = rows.find(r => String(r.partyName || '').toLowerCase() === String(partyName).toLowerCase());
-        if (hit) bal = hit.balance;
+        bal = partyType === 'supplier'
+          ? (partyId ? partyApBalance(partyId) : 0)
+          : (partyId ? partyArBalance(partyId) : 0);
       } catch (_) {}
     }
     const biz = String((db.profile && (db.profile.businessName || db.profile.name)) || 'invoicedey');
@@ -22235,35 +22264,38 @@ async function exportPartyStatementPdf(partyType, partyId, partyName) {
     y += 7;
     put(displayName, 12, 'bold');
     y += 6;
-    put('As of ' + asOf + ' · Control ' + (act.controlId || '') + ' · ' + journals.length + ' movement(s)', 9, 'normal', [85, 85, 85]);
+    put('As of ' + asOf + ' · Control ' + (act.controlId || '') + ' · ' + rows.length + ' movement(s)', 9, 'normal', [85, 85, 85]);
     y += 6;
     put(balLabel + ' ' + fmt(bal), 13, 'bold');
     y += 8;
 
+    // Date | Memo | Debit | Credit | Balance
     const colDate = left;
-    const colMemo = left + 28;
-    const colDeb = right - 52;
-    const colCre = right - 26;
+    const colMemo = left + 24;
+    const colDeb = right - 78;
+    const colCre = right - 52;
+    const colBal = right - 4;
     put('Date', 9, 'bold', null, colDate);
     put('Memo', 9, 'bold', null, colMemo);
     put('Debit', 9, 'bold', null, colDeb, 'right');
     put('Credit', 9, 'bold', null, colCre, 'right');
+    put('Balance', 9, 'bold', null, colBal, 'right');
     y += 2;
     doc.setDrawColor(17, 17, 17);
     doc.setLineWidth(0.3);
     doc.line(left, y, right, y);
     y += 5;
 
-    if (!journals.length) {
+    if (!rows.length) {
       put('No ledger movements tagged for this party yet.', 9, 'normal', [80, 80, 80]);
       y += 6;
     } else {
-      journals.forEach(j => {
+      rows.forEach(j => {
         ensureSpace(8);
         const deb = Number(j.debit) || 0;
         const cre = Number(j.credit) || 0;
         const memoRaw = String(j.memo || j.source || '—');
-        const memoLines = doc.splitTextToSize(memoRaw, Math.max(20, colDeb - colMemo - 4));
+        const memoLines = doc.splitTextToSize(memoRaw, Math.max(18, colDeb - colMemo - 4));
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(9);
         doc.setTextColor(17, 17, 17);
@@ -22271,6 +22303,7 @@ async function exportPartyStatementPdf(partyType, partyId, partyName) {
         doc.text(memoLines[0] || '—', colMemo, y);
         if (deb > 0.001) doc.text(fmt(deb), colDeb, y, { align: 'right' });
         if (cre > 0.001) doc.text(fmt(cre), colCre, y, { align: 'right' });
+        doc.text(fmt(j.balance), colBal, y, { align: 'right' });
         y += 5;
         for (let i = 1; i < memoLines.length; i++) {
           ensureSpace(6);
@@ -26104,20 +26137,26 @@ function openPartyLedgerModal(opts) {
   }
 
   html += '<h3 style="font-size:13px;margin:0 0 8px">Ledger movements</h3>';
-  if (!act.journals.length) {
+  const runRows = typeof partyStatementRowsWithRunning === 'function'
+    ? partyStatementRowsWithRunning(partyType, act.journals || [])
+    : (act.journals || []);
+  if (!runRows.length) {
     html += '<p class="section-sub" style="margin:0">No tagged journal lines yet on the control account.</p>';
   } else {
     html += '<div style="overflow:auto"><table class="table" style="font-size:12px"><thead><tr>' +
-      '<th>Date</th><th>Memo</th><th class="right">Debit</th><th class="right">Credit</th></tr></thead><tbody>';
-    act.journals.slice(0, 40).forEach(j => {
+      '<th>Date</th><th>Memo</th><th class="right">Debit</th><th class="right">Credit</th><th class="right">Balance</th></tr></thead><tbody>';
+    // Show newest last for running balance readability? Show chronological (oldest first) to match PDF
+    const show = runRows.slice(-40);
+    show.forEach(j => {
       html += '<tr><td>' + (j.date || '—') + '</td><td>' + String(j.memo || '').replace(/</g, '') +
         (j.source ? ' <span class="mini" style="color:var(--muted)">' + j.source + '</span>' : '') +
         '</td><td class="right">' + (j.debit > 0.001 ? fmt(j.debit) : '—') +
-        '</td><td class="right">' + (j.credit > 0.001 ? fmt(j.credit) : '—') + '</td></tr>';
+        '</td><td class="right">' + (j.credit > 0.001 ? fmt(j.credit) : '—') +
+        '</td><td class="right"><b>' + fmt(j.balance) + '</b></td></tr>';
     });
     html += '</tbody></table></div>';
-    if (act.journals.length > 40) {
-      html += '<p class="mini" style="margin:8px 0 0">Showing latest 40 of ' + act.journals.length + '</p>';
+    if (runRows.length > 40) {
+      html += '<p class="mini" style="margin:8px 0 0">Showing latest 40 of ' + runRows.length + ' (oldest → newest)</p>';
     }
   }
   body.innerHTML = html;
