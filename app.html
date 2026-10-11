@@ -1023,6 +1023,40 @@ input:focus:not(:focus-visible) {
 .appr-badge.rejected { background: #fee2e2; color: #991b1b; }
 .appr-badge.posted { background: #dcfce7; color: #166534; }
 .appr-badge.other { background: var(--panel-2); color: var(--muted); }
+/* Profile → Approvals switches (clear outline, not a stretched bar) */
+.appr-switch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 420px;
+}
+.appr-switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2, #f8fafc);
+  cursor: pointer;
+}
+.appr-switch-row:hover { border-color: #93c5fd; background: #eff6ff; }
+.appr-switch-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  flex-shrink: 0;
+  accent-color: #2563eb;
+}
+.appr-switch-label {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text, #111);
+}
+#approvalsTabBar [data-profile-appr-tab] {
+  cursor: pointer;
+}
 .appr-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 
 /* Notification bell + panel */
@@ -5663,35 +5697,37 @@ body:has(.modalback.show) .notif-panel {
             Optional fast lane skips the queue for small safe bills.
           </p>
           <div id="approvalsTabBar" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px">
-            <button type="button" class="button small primary" data-appr-tab="switches">1 · Switches</button>
-            <button type="button" class="button small" data-appr-tab="ladder">2 · Ladder</button>
-            <button type="button" class="button small" data-appr-tab="fastlane">3 · Fast lane</button>
-            <button type="button" class="button small" data-appr-tab="teamhint">Team · Reports to</button>
+            <button type="button" class="button small primary" data-profile-appr-tab="switches">1 · Switches</button>
+            <button type="button" class="button small" data-profile-appr-tab="ladder">2 · Ladder</button>
+            <button type="button" class="button small" data-profile-appr-tab="fastlane">3 · Fast lane</button>
+            <button type="button" class="button small" data-profile-appr-tab="teamhint">Team · Reports to</button>
           </div>
 
           <!-- Tab 1: master switches -->
-          <div data-appr-panel="switches">
+          <div data-profile-appr-panel="switches" class="appr-switch-panel">
             <p class="section-sub" style="margin:0 0 10px">Turn on what needs a human sign-off before it takes effect.</p>
-            <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
-              <input type="checkbox" data-p="requireTransferApproval" id="requireTransferApproval">
-              <span>Stock transfers</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
-              <input type="checkbox" data-p="requirePurchaseApproval" id="requirePurchaseApproval">
-              <span>Purchase orders</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
-              <input type="checkbox" data-p="requireExpenseApproval" id="requireExpenseApproval">
-              <span>Expenses &amp; supplier bills <b>(ladder applies here)</b></span>
-            </label>
-            <label style="display:flex;align-items:center;gap:10px;margin:8px 0;cursor:pointer">
-              <input type="checkbox" data-p="lowStockAlertsEnabled" id="lowStockAlertsEnabled">
-              <span>Low-stock alerts (toast + badge)</span>
-            </label>
+            <div class="appr-switch-list">
+              <label class="appr-switch-row">
+                <input type="checkbox" data-p="requireTransferApproval" id="requireTransferApproval">
+                <span class="appr-switch-label">Stock transfers</span>
+              </label>
+              <label class="appr-switch-row">
+                <input type="checkbox" data-p="requirePurchaseApproval" id="requirePurchaseApproval">
+                <span class="appr-switch-label">Purchase orders</span>
+              </label>
+              <label class="appr-switch-row">
+                <input type="checkbox" data-p="requireExpenseApproval" id="requireExpenseApproval">
+                <span class="appr-switch-label">Expenses &amp; supplier bills <b>(ladder applies here)</b></span>
+              </label>
+              <label class="appr-switch-row">
+                <input type="checkbox" data-p="lowStockAlertsEnabled" id="lowStockAlertsEnabled">
+                <span class="appr-switch-label">Low-stock alerts (toast + badge)</span>
+              </label>
+            </div>
           </div>
 
           <!-- Tab 2: pyramid + matrix -->
-          <div data-appr-panel="ladder" id="expenseApprovalRolesBox" style="display:none;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
+          <div data-profile-appr-panel="ladder" id="expenseApprovalRolesBox" style="display:none;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
             <div style="font-size:12px;font-weight:700;margin-bottom:6px">Expense ladder</div>
             <p class="section-sub" style="margin:0 0 12px">
               <b>Step A</b> — line manager (if Pyramid is on and Team has Reports to).<br>
@@ -5730,7 +5766,7 @@ body:has(.modalback.show) .notif-panel {
           </div>
 
           <!-- Tab 3: fast lane -->
-          <div data-appr-panel="fastlane" style="display:none;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
+          <div data-profile-appr-panel="fastlane" style="display:none;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
             <div style="font-size:12px;font-weight:700;margin-bottom:6px">Fast lane (optional)</div>
             <p class="section-sub" style="margin:0 0 10px">
               Leave max at <b>0</b> until the ladder feels natural. Then allow tiny routine bills to post without the queue.
@@ -5757,7 +5793,7 @@ body:has(.modalback.show) .notif-panel {
           </div>
 
           <!-- Tab 4: team reports-to hint + jump -->
-          <div data-appr-panel="teamhint" style="display:none;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
+          <div data-profile-appr-panel="teamhint" style="display:none;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
             <div style="font-size:12px;font-weight:700;margin-bottom:6px">Team · Reports to</div>
             <p class="section-sub" style="margin:0 0 10px">
               Pyramid needs a line manager on each staff member. Team lives under the left sidebar item <b>Plan</b> (not Profile) — scroll down past Feature access to the <b>Team</b> card.
@@ -13129,38 +13165,41 @@ function syncExpenseApprovalRolesVisibility() {
 }
 
 let _approvalsTab = 'switches';
-function setApprovalsTab(tab) {
+/** Profile → Approvals config tabs (must not share name with workspace setApprovalsTab). */
+function setProfileApprovalsTab(tab) {
   const allowed = ['switches', 'ladder', 'fastlane', 'teamhint'];
   _approvalsTab = allowed.includes(tab) ? tab : 'switches';
-  const expenseOn = !!(document.getElementById('requireExpenseApproval')?.checked
-    || (db.profile && db.profile.requireExpenseApproval));
-  document.querySelectorAll('[data-appr-tab]').forEach(btn => {
-    const t = btn.getAttribute('data-appr-tab');
-    const isOn = t === _approvalsTab;
-    btn.classList.toggle('primary', isOn);
-  });
-  document.querySelectorAll('[data-appr-panel]').forEach(panel => {
-    const t = panel.getAttribute('data-appr-panel');
-    let show = t === _approvalsTab;
-    // Ladder tab still accessible so users can configure before enabling expenses;
-    // show a soft note via existing copy. Always allow viewing.
-    panel.style.display = show ? '' : 'none';
+  const bar = document.getElementById('approvalsTabBar');
+  if (bar) {
+    bar.querySelectorAll('[data-profile-appr-tab]').forEach(btn => {
+      const on = btn.getAttribute('data-profile-appr-tab') === _approvalsTab;
+      btn.classList.toggle('primary', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  }
+  document.querySelectorAll('[data-profile-appr-panel]').forEach(panel => {
+    const t = panel.getAttribute('data-profile-appr-panel');
+    panel.style.display = t === _approvalsTab ? '' : 'none';
   });
   if (_approvalsTab === 'ladder') {
     try { renderExpenseMatrixEditor(); } catch (_) {}
   }
-  void expenseOn;
 }
 
 function initApprovalsTabsOnce() {
   const bar = document.getElementById('approvalsTabBar');
-  if (!bar || bar.dataset.wired === '1') {
-    setApprovalsTab(_approvalsTab || 'switches');
+  if (!bar) return;
+  if (bar.dataset.wired === '1') {
+    setProfileApprovalsTab(_approvalsTab || 'switches');
     return;
   }
   bar.dataset.wired = '1';
-  bar.querySelectorAll('[data-appr-tab]').forEach(btn => {
-    btn.addEventListener('click', () => setApprovalsTab(btn.getAttribute('data-appr-tab')));
+  bar.querySelectorAll('[data-profile-appr-tab]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setProfileApprovalsTab(btn.getAttribute('data-profile-appr-tab'));
+    });
   });
   document.getElementById('apprJumpTeam')?.addEventListener('click', () => {
     try {
@@ -13182,7 +13221,7 @@ function initApprovalsTabsOnce() {
       }
     }, 120);
   });
-  setApprovalsTab('switches');
+  setProfileApprovalsTab('switches');
 }
 function refreshApprovalsUI() {
   try { renderDashboardApprovals(); } catch (_) {}
@@ -13569,11 +13608,12 @@ function expenseActorMeta() {
     return {
       userId: a.userId || (cloud && cloud.user && cloud.user.id) || null,
       email: a.email || (cloud && cloud.user && cloud.user.email) || null,
+      name: a.name || null,
       role: currentOrgRole() || null,
       at: new Date().toISOString()
     };
   } catch (_) {
-    return { userId: null, email: null, role: currentOrgRole() || null, at: new Date().toISOString() };
+    return { userId: null, email: null, name: null, role: currentOrgRole() || null, at: new Date().toISOString() };
   }
 }
 function expenseBlockSelfApprove() {
@@ -13897,7 +13937,9 @@ function apprChainDetailHtml(entity) {
   if ((!chain || !chain.length) && (entity.status === 'pending_approval' || entity.status === 'pending_review')) {
     try { attachExpenseApprovalChain(entity, entity.amount); chain = entity.approval_chain; } catch (_) {}
   }
-  const requester = entity.requested_by_email || entity.requested_by || 'Requester';
+  const requester = entity.requested_by_name
+    ? (entity.requested_by_name + (entity.requested_by_email ? ' · ' + entity.requested_by_email : ''))
+    : (entity.requested_by_email || entity.requested_by || 'Requester');
   let html = '<div style="font-size:12px;margin:8px 0 4px"><b>Requester</b> · ' +
     String(requester).replace(/</g, '') +
     (entity.requested_at ? (' · ' + String(entity.requested_at).replace('T', ' ').slice(0, 16)) : '') +
@@ -14143,8 +14185,13 @@ function renderApprovalsWorkspace() {
         '<h3 style="margin:0 0 6px">No approval history yet</h3>' +
         '<p class="section-sub">Approved, posted, paid, and rejected requests appear here for audit.</p></div>';
     } else {
+      const orgWide = typeof canSeeOrgApprovalHistory === 'function' && canSeeOrgApprovalHistory();
       histEl.innerHTML =
-        '<p class="section-sub" style="margin:0 0 12px">Past decisions — open any row for chain, receipts, and status.</p>' +
+        '<p class="section-sub" style="margin:0 0 12px">' +
+        (orgWide
+          ? 'Organisation history — all approved, posted, paid, and rejected requests.'
+          : 'Your history — requests you submitted or acted on as approver.') +
+        '</p>' +
         hist.map(it => {
           const when = it.at ? String(it.at).slice(0, 16).replace('T', ' ') : '';
           return '<div class="appr-card">' +
@@ -15985,7 +16032,7 @@ function openTransferDetailModal(transferId) {
     ? '<h3 style="font-size:13px;margin:16px 0 8px">Approval &amp; audit</h3>' + audits.map(e => {
         const ap = isApprovalAuditEvent(e);
         return `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--line)">
-          <div style="color:var(--muted)">${String(e.at || '').replace('T', ' ').slice(0, 16)} · ${String(e.actorEmail || 'local').replace(/</g,'')}${ap ? ' · approval' : ''}</div>
+          <div style="color:var(--muted)">${String(e.at || '').replace('T', ' ').slice(0, 16)} · ${(typeof actorLabel === 'function' ? actorLabel(e) : String(e.actorEmail || 'local').replace(/</g,''))}${ap ? ' · approval' : ''}</div>
           <b>${String(e.summary || e.action || '').replace(/</g,'')}</b>
           ${e.meta && e.meta.note ? '<div class="client-meta">Note: ' + String(e.meta.note).replace(/</g,'') + '</div>' : ''}
         </div>`;
@@ -16202,7 +16249,7 @@ function formatApprovalAuditRow(e) {
       </div>
       <span class="client-meta">${String(e.at || '').replace('T', ' ').slice(0, 16)}</span>
     </div>
-    <div class="client-meta">${String(e.actorEmail || 'local').replace(/</g, '')}${role} · ${kind}${e.entityId ? ' · ' + String(e.entityId).slice(0, 8) : ''}</div>
+    <div class="client-meta">${(typeof actorLabel === 'function' ? actorLabel(e) : String(e.actorEmail || 'local').replace(/</g, ''))}${role} · ${kind}${e.entityId ? ' · ' + String(e.entityId).slice(0, 8) : ''}</div>
   </div>`;
 }
 
@@ -16250,7 +16297,7 @@ function renderInventoryAuditList() {
         <b>${String(e.summary || e.action || '').replace(/</g, '')}${appr}</b>
         <span class="client-meta">${String(e.at || '').replace('T', ' ').slice(0, 16)}</span>
       </div>
-      <div class="client-meta">${String(e.actorEmail || 'local').replace(/</g, '')} · ${e.entityType || ''}${e.entityId ? ' · ' + String(e.entityId).slice(0, 8) : ''}</div>
+      <div class="client-meta">${(typeof actorLabel === 'function' ? actorLabel(e) : String(e.actorEmail || 'local').replace(/</g, ''))} · ${e.entityType || ''}${e.entityId ? ' · ' + String(e.entityId).slice(0, 8) : ''}</div>
     </div>`;
   }).join('');
   try { renderApprovalAuditList('approvalAuditList'); } catch (_) {}
@@ -21443,13 +21490,33 @@ function toRep(amount, currency) {
 /** Post a balanced journal. lines: [{accountId, debit, credit}] in reporting currency amounts. */
 function booksActor() {
   try {
+    const u = (typeof cloud !== 'undefined' && cloud.user) ? cloud.user : null;
+    const meta = (u && u.user_metadata) || {};
+    const name =
+      meta.full_name || meta.name || meta.display_name ||
+      (db && db.profile && (db.profile.ownerName || db.profile.contactName || db.profile.name)) ||
+      (u && u.email ? String(u.email).split('@')[0] : null) ||
+      null;
     return {
-      userId: (typeof cloud !== 'undefined' && cloud.user && cloud.user.id) || (typeof activeUserId !== 'undefined' ? activeUserId : null) || null,
-      email: (typeof cloud !== 'undefined' && cloud.user && (cloud.user.email || cloud.user.user_metadata?.email)) || null
+      userId: (u && u.id) || (typeof activeUserId !== 'undefined' ? activeUserId : null) || null,
+      email: (u && (u.email || meta.email)) || null,
+      name: name ? String(name).trim().slice(0, 80) : null
     };
   } catch {
-    return { userId: null, email: null };
+    return { userId: null, email: null, name: null };
   }
+}
+
+/** Display label for audit / approval UI: Name · email */
+function actorLabel(actorOrEvent) {
+  if (!actorOrEvent) return 'local';
+  const name = actorOrEvent.name || actorOrEvent.actorName ||
+    (actorOrEvent.meta && actorOrEvent.meta.actorName) || null;
+  const email = actorOrEvent.email || actorOrEvent.actorEmail || null;
+  if (name && email) return String(name).replace(/</g, '') + ' · ' + String(email).replace(/</g, '');
+  if (name) return String(name).replace(/</g, '');
+  if (email) return String(email).replace(/</g, '');
+  return 'local';
 }
 
 /** Append-only audit event (local + cloud sync). Never mutates past events. */
@@ -21461,13 +21528,14 @@ function appendBooksAudit(action, entityType, entityId, summary, before, after, 
     at: new Date().toISOString(),
     actorUserId: actor.userId,
     actorEmail: actor.email,
+    actorName: actor.name || null,
     action: action || 'unknown',
     entityType: entityType || 'unknown',
     entityId: entityId || null,
     summary: summary || action,
     before: before != null ? before : null,
     after: after != null ? after : null,
-    meta: meta || {}
+    meta: Object.assign({}, meta || {}, actor.name ? { actorName: actor.name } : {})
   };
   // Keep supporting docs on the audit event for the audit log UI
   try {
@@ -23812,7 +23880,7 @@ function openJournalActivityModal(journalId, opts) {
       const docs = resolveSupportingDocs(e);
       return '<div class="audit-event" data-j-audit-idx="' + idx + '" style="padding:10px 0;border-bottom:1px solid var(--line)">' +
         '<div style="font-size:12px;color:var(--muted)">' + String(e.at || '').replace('T', ' ').slice(0, 19) +
-        ' · ' + (e.actorEmail || e.actorUserId || 'system') + '</div>' +
+        ' · ' + (typeof actorLabel === 'function' ? actorLabel(e) : (e.actorEmail || e.actorUserId || 'system')) + '</div>' +
         '<div style="font-size:13px;font-weight:600">' + String(e.summary || e.action).replace(/</g, '') + '</div>' +
         '<div style="font-size:11px;color:var(--muted)">' + String(e.action || '').replace(/</g, '') +
         (e.entityType ? (' · ' + e.entityType) : '') +
@@ -24095,7 +24163,7 @@ function renderBooksAuditTrail() {
       '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;align-items:flex-start">' +
       '<div style="min-width:0;flex:1">' +
       '<div style="font-size:12px;color:var(--muted)">' + String(e.at || '').replace('T', ' ').slice(0, 19) +
-      ' · ' + (e.actorEmail || e.actorUserId || 'local / system') + '</div>' +
+      ' · ' + (typeof actorLabel === 'function' ? actorLabel(e) : (e.actorEmail || e.actorUserId || 'local / system')) + '</div>' +
       '<b style="font-size:13px">' + String(e.summary || e.action).replace(/</g, '') + '</b>' +
       '<div style="font-size:11px;color:var(--muted)">' + String(e.action || '').replace(/</g, '') +
       ' · ' + String(e.entityType || '').replace(/</g, '') +
@@ -24212,6 +24280,7 @@ function advanceExpenseBillLevel(billId, opts) {
     bill.status = 'open';
     bill.approved_by = actor.userId;
     bill.approved_by_email = actor.email;
+    if (actor.name) bill.approved_by_name = actor.name;
     bill.approved_at = actor.at;
     bill.posted_by = actor.userId;
     bill.posted_at = actor.at;
@@ -24617,6 +24686,7 @@ function advanceExpenseCashLevel(cashId, opts) {
     entry.status = 'posted';
     entry.approved_by = actor.userId;
     entry.approved_by_email = actor.email;
+    if (actor.name) entry.approved_by_name = actor.name;
     entry.approved_at = actor.at;
     entry.posted_by = actor.userId;
     entry.posted_at = actor.at;
@@ -32456,6 +32526,7 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
     auto_post_reasons: path.reasons || [],
     requested_by: actor.userId || null,
     requested_by_email: actor.email || null,
+    requested_by_name: actor.name || null,
     requested_at: actor.at || new Date().toISOString()
   };
   if (status === 'pending_approval' || status === 'pending_review') {
@@ -32618,6 +32689,7 @@ document.getElementById('cashSave')?.addEventListener('click', async () => {
     status,
     requested_by: actor.userId || null,
     requested_by_email: actor.email || null,
+    requested_by_name: actor.name || null,
     requested_at: actor.at || null
   };
   if (needsAppr && (status === 'pending_approval' || status === 'pending_review')) {
@@ -33449,7 +33521,7 @@ function saveProfileField(el) {
   if (key === 'requireExpenseApproval') {
     try { syncExpenseApprovalRolesVisibility(); } catch (_) {}
     try {
-      if (val && typeof setApprovalsTab === 'function') setApprovalsTab('ladder');
+      if (val && typeof setProfileApprovalsTab === 'function') setProfileApprovalsTab('ladder');
       toast(val
         ? 'Expense approval ON — open Ladder tab for pyramid + levels'
         : 'Expense approval OFF — bills post to ledger immediately');
