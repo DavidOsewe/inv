@@ -21826,7 +21826,12 @@ function resolveBooksControlAccount(role) {
   }
 
   if (hit) {
+    const prev = db.booksSettings.controlAccounts[role];
     db.booksSettings.controlAccounts[role] = String(hit.id);
+    if (prev !== String(hit.id)) {
+      try { save(); } catch (_) {}
+      try { queueBooksCloudSync(); } catch (_) {}
+    }
     return String(hit.id);
   }
 
@@ -25653,10 +25658,21 @@ function renderBooksCoa() {
     ensureBooksDb();
     if (!db.coaOverrides) db.coaOverrides = {};
     const extra = (db.coaExtra || []).find(x => x.id === id);
+    const before = extra
+      ? { name: extra.name, type: extra.type, statement: extra.statement, fsLine: extra.fsLine }
+      : { ...(db.coaOverrides[id] || {}) };
     if (extra) Object.assign(extra, patch);
     else db.coaOverrides[id] = { ...(db.coaOverrides[id] || {}), ...patch };
     try { persistDb(); } catch (_) {}
     try { save(); } catch (_) {}
+    try {
+      appendBooksAudit('coa.override', 'coa', id,
+        'COA ' + id + (patch.name ? (' → ' + patch.name) : (' · ' + Object.keys(patch).join(','))),
+        before,
+        { ...(extra || db.coaOverrides[id]) }
+      );
+    } catch (_) {}
+    try { queueBooksCloudSync(); } catch (_) {}
   };
 
   document.getElementById('coaShowHidden')?.addEventListener('change', (e) => {
@@ -28435,6 +28451,107 @@ async function pushJournalToCloudImmediate(j) {
   }
 }
 
+/**
+ * Push system COA renames + control account pins to org cloud row.
+ * Requires books_coa_settings table (books_coa_settings_v1.sql).
+ */
+async function pushCoaSettingsToCloud(organizationId) {
+  if (!cloud.client || !cloud.user) return;
+  ensureBooksDb();
+  organizationId = organizationId || (await ensureCloudOrganization());
+  if (!organizationId) return;
+  const overrides = db.coaOverrides && typeof db.coaOverrides === 'object' ? db.coaOverrides : {};
+  const controls = (db.booksSettings && db.booksSettings.controlAccounts) || {};
+  const settingsSlice = {
+    periodLockedThrough: (db.booksSettings && db.booksSettings.periodLockedThrough) || null,
+    partySubAccounts: !!(db.booksSettings && db.booksSettings.partySubAccounts),
+    invoiceFeed: db.booksSettings ? db.booksSettings.invoiceFeed !== false : true,
+    showHiddenCoa: !!(db.booksSettings && db.booksSettings.showHiddenCoa)
+  };
+  const payload = {
+    organization_id: organizationId,
+    coa_overrides: overrides,
+    control_accounts: controls,
+    books_settings: settingsSlice,
+    updated_at: new Date().toISOString(),
+    updated_by: cloud.user.id || null
+  };
+  const { error } = await cloud.client.from('books_coa_settings').upsert(payload, {
+    onConflict: 'organization_id'
+  });
+  if (error) throw error;
+}
+
+/**
+ * Pull COA overrides from cloud and merge into local db.
+ * Cloud wins on conflict for the same account code (org source of truth).
+ */
+async function pullCoaSettingsFromCloud(organizationId) {
+  if (!cloud.client || !cloud.user) return;
+  ensureBooksDb();
+  organizationId = organizationId || (await ensureCloudOrganization());
+  if (!organizationId) return;
+  const { data, error } = await cloud.client.from('books_coa_settings')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) {
+    if (/does not exist|schema cache/i.test(error.message || '')) return;
+    throw error;
+  }
+  if (!data) return;
+  let changed = false;
+  if (data.coa_overrides && typeof data.coa_overrides === 'object') {
+    if (!db.coaOverrides || typeof db.coaOverrides !== 'object') db.coaOverrides = {};
+    Object.keys(data.coa_overrides).forEach(code => {
+      const remote = data.coa_overrides[code];
+      if (!remote || typeof remote !== 'object') return;
+      const local = db.coaOverrides[code] || {};
+      // Merge field-by-field; remote non-empty values win
+      const next = { ...local };
+      ['name', 'type', 'statement', 'fsLine', 'cfSection', 'hidden'].forEach(k => {
+        if (remote[k] !== undefined && remote[k] !== null && remote[k] !== '') {
+          if (next[k] !== remote[k]) {
+            next[k] = remote[k];
+            changed = true;
+          }
+        }
+      });
+      db.coaOverrides[code] = next;
+    });
+  }
+  if (data.control_accounts && typeof data.control_accounts === 'object') {
+    if (!db.booksSettings) db.booksSettings = {};
+    if (!db.booksSettings.controlAccounts) db.booksSettings.controlAccounts = {};
+    Object.keys(data.control_accounts).forEach(role => {
+      const id = data.control_accounts[role];
+      if (id && db.booksSettings.controlAccounts[role] !== id) {
+        db.booksSettings.controlAccounts[role] = String(id);
+        changed = true;
+      }
+    });
+  }
+  if (data.books_settings && typeof data.books_settings === 'object') {
+    if (!db.booksSettings) db.booksSettings = {};
+    const bs = data.books_settings;
+    if (bs.periodLockedThrough != null && db.booksSettings.periodLockedThrough !== bs.periodLockedThrough) {
+      db.booksSettings.periodLockedThrough = bs.periodLockedThrough;
+      changed = true;
+    }
+    if (typeof bs.partySubAccounts === 'boolean' && db.booksSettings.partySubAccounts !== bs.partySubAccounts) {
+      db.booksSettings.partySubAccounts = bs.partySubAccounts;
+      changed = true;
+    }
+    if (typeof bs.invoiceFeed === 'boolean' && db.booksSettings.invoiceFeed !== bs.invoiceFeed) {
+      db.booksSettings.invoiceFeed = bs.invoiceFeed;
+      changed = true;
+    }
+  }
+  if (changed) {
+    try { save(); } catch (_) {}
+  }
+}
+
 async function pushBooksToCloud() {
   if (!cloud.client || !cloud.user) return;
   ensureBooksDb();
@@ -28581,6 +28698,14 @@ async function pushBooksToCloud() {
       onConflict: 'organization_id,code'
     });
     if (error) console.warn('books_coa_extra', error.message);
+  }
+  // COA overrides + control pins (system account renames — must sync or they snap to defaults)
+  try {
+    await pushCoaSettingsToCloud(organizationId);
+  } catch (e) {
+    if (!/does not exist|schema cache/i.test(String(e.message || e))) {
+      console.warn('coa settings push', e.message || e);
+    }
   }
   // Recurring journals
   for (const sch of db.recurringJournals || []) {
@@ -28801,6 +28926,13 @@ async function pullBooksFromCloud() {
     if (db.coaExtra.some(a => a.id === row.code)) return;
     db.coaExtra.push({ id: row.code, name: row.name, type: row.account_type || 'asset' });
   });
+  try {
+    await pullCoaSettingsFromCloud(organizationId);
+  } catch (e) {
+    if (!/does not exist|schema cache/i.test(String(e.message || e))) {
+      console.warn('coa settings pull', e.message || e);
+    }
+  }
   const { data: rjs } = await cloud.client.from('books_recurring_journals').select('*').eq('organization_id', organizationId);
   (rjs || []).forEach(row => {
     if (row.local_id && db.recurringJournals.some(s => s.id === row.local_id)) return;
