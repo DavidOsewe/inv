@@ -22144,16 +22144,37 @@ function exportPartyStatementCsv(partyType, partyId, partyName) {
   toast('Statement CSV downloaded');
 }
 
-/** Phase 4 — statement PDF (direct download; print is fallback only). */
-async function exportPartyStatementPdf(partyType, partyId, partyName) {
-  const cleanupHosts = () => {
-    ['partyStatementPdfHost', 'partyStatementPrintFrame'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) try { el.remove(); } catch (_) {}
-    });
-  };
+/** Load jsPDF constructor (text PDFs — no html2canvas). */
+async function loadJsPdfCtor() {
+  if (window.jspdf && window.jspdf.jsPDF) return window.jspdf.jsPDF;
+  if (typeof window.jsPDF === 'function') return window.jsPDF;
   try {
-    cleanupHosts();
+    if (typeof loadHtml2Pdf === 'function') {
+      await loadHtml2Pdf();
+      if (window.jspdf && window.jspdf.jsPDF) return window.jspdf.jsPDF;
+      if (typeof window.jsPDF === 'function') return window.jsPDF;
+    }
+  } catch (_) {}
+  await new Promise((resolve, reject) => {
+    if (window.jspdf && window.jspdf.jsPDF) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+    s.setAttribute('data-jspdf', '1');
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Could not load jsPDF'));
+    document.head.appendChild(s);
+  });
+  if (window.jspdf && window.jspdf.jsPDF) return window.jspdf.jsPDF;
+  if (typeof window.jsPDF === 'function') return window.jsPDF;
+  throw new Error('jsPDF not available');
+}
+
+/**
+ * Phase 4 — party statement PDF via pure text drawing (same data as CSV).
+ * Avoids html2canvas blank pages under dark theme / modals.
+ */
+async function exportPartyStatementPdf(partyType, partyId, partyName) {
+  try {
     const act = partySubledgerActivity(partyType, partyId, partyName) || { journals: [], openDocs: [], controlId: '' };
     const journals = Array.isArray(act.journals) ? act.journals : [];
     const openDocs = Array.isArray(act.openDocs) ? act.openDocs : [];
@@ -22168,7 +22189,6 @@ async function exportPartyStatementPdf(partyType, partyId, partyName) {
         ? (partyId ? partyApBalance(partyId) : 0)
         : (partyId ? partyArBalance(partyId) : 0);
     } catch (_) { bal = 0; }
-    // Name-only match fallback
     if (!(Math.abs(bal) > 0.001) && partyName) {
       try {
         const rows = partyType === 'supplier' ? apSubledgerBalances() : arSubledgerBalances();
@@ -22176,140 +22196,125 @@ async function exportPartyStatementPdf(partyType, partyId, partyName) {
         if (hit) bal = hit.balance;
       } catch (_) {}
     }
-    const biz = (db.profile && (db.profile.businessName || db.profile.name)) || 'invoicedey';
-    // Skip logo in PDF — data-URL logos often blank html2canvas captures
+    const biz = String((db.profile && (db.profile.businessName || db.profile.name)) || 'invoicedey');
     const asOf = typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10);
     const title = partyType === 'supplier' ? 'Accounts payable statement' : 'Accounts receivable statement';
     const balLabel = partyType === 'supplier' ? 'You owe' : 'Balance due';
-    const displayName = String(partyName || partyId || 'Party').replace(/</g, '');
+    const displayName = String(partyName || partyId || 'Party');
     const safeName = displayName.replace(/[^\w.-]+/g, '_').slice(0, 40) || 'party';
     const filename = 'invoicedey-' + (partyType === 'supplier' ? 'ap' : 'ar') + '-' + safeName + '.pdf';
 
-    let rowsHtml = '';
+    toast('Generating PDF…');
+    const JsPDF = await loadJsPdfCtor();
+    const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const left = 14;
+    const right = pageW - 14;
+    let y = 16;
+
+    const ensureSpace = (need) => {
+      if (y + need > pageH - 14) {
+        doc.addPage();
+        y = 16;
+      }
+    };
+    const put = (txt, size, style, color, x, align) => {
+      ensureSpace((size || 10) * 0.5 + 2);
+      doc.setFont('helvetica', style || 'normal');
+      doc.setFontSize(size || 10);
+      if (color) doc.setTextColor(color[0], color[1], color[2]);
+      else doc.setTextColor(17, 17, 17);
+      const opts = align ? { align: align } : undefined;
+      doc.text(String(txt == null ? '' : txt), x == null ? left : x, y, opts);
+    };
+
+    put(biz + ' · ' + rep, 9, 'normal', [85, 85, 85]);
+    y += 5;
+    put(title, 14, 'bold');
+    y += 7;
+    put(displayName, 12, 'bold');
+    y += 6;
+    put('As of ' + asOf + ' · Control ' + (act.controlId || '') + ' · ' + journals.length + ' movement(s)', 9, 'normal', [85, 85, 85]);
+    y += 6;
+    put(balLabel + ' ' + fmt(bal), 13, 'bold');
+    y += 8;
+
+    const colDate = left;
+    const colMemo = left + 28;
+    const colDeb = right - 52;
+    const colCre = right - 26;
+    put('Date', 9, 'bold', null, colDate);
+    put('Memo', 9, 'bold', null, colMemo);
+    put('Debit', 9, 'bold', null, colDeb, 'right');
+    put('Credit', 9, 'bold', null, colCre, 'right');
+    y += 2;
+    doc.setDrawColor(17, 17, 17);
+    doc.setLineWidth(0.3);
+    doc.line(left, y, right, y);
+    y += 5;
+
     if (!journals.length) {
-      rowsHtml = '<tr><td colspan="4" style="padding:12px;color:#444">No ledger movements tagged for this party yet.</td></tr>';
+      put('No ledger movements tagged for this party yet.', 9, 'normal', [80, 80, 80]);
+      y += 6;
     } else {
       journals.forEach(j => {
+        ensureSpace(8);
         const deb = Number(j.debit) || 0;
         const cre = Number(j.credit) || 0;
-        rowsHtml += '<tr>' +
-          '<td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#111">' + String(j.date || '—').replace(/</g, '') + '</td>' +
-          '<td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#111">' + String(j.memo || j.source || '—').replace(/</g, '') + '</td>' +
-          '<td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:right;color:#111">' + (deb > 0.001 ? fmt(deb) : '') + '</td>' +
-          '<td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:right;color:#111">' + (cre > 0.001 ? fmt(cre) : '') + '</td>' +
-          '</tr>';
+        const memoRaw = String(j.memo || j.source || '—');
+        const memoLines = doc.splitTextToSize(memoRaw, Math.max(20, colDeb - colMemo - 4));
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.setTextColor(17, 17, 17);
+        doc.text(String(j.date || '—'), colDate, y);
+        doc.text(memoLines[0] || '—', colMemo, y);
+        if (deb > 0.001) doc.text(fmt(deb), colDeb, y, { align: 'right' });
+        if (cre > 0.001) doc.text(fmt(cre), colCre, y, { align: 'right' });
+        y += 5;
+        for (let i = 1; i < memoLines.length; i++) {
+          ensureSpace(6);
+          doc.text(memoLines[i], colMemo, y);
+          y += 4.5;
+        }
       });
     }
 
-    let openDocsHtml = '';
     if (openDocs.length) {
-      openDocsHtml = '<div style="margin-top:20px;font-size:13px;font-weight:700;color:#111">Open ' +
-        (partyType === 'supplier' ? 'bills' : 'invoices') + '</div>' +
-        '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px"><thead><tr>' +
-        '<th style="text-align:left;border-bottom:2px solid #111;padding:6px 8px;color:#111">Ref</th>' +
-        '<th style="text-align:left;border-bottom:2px solid #111;padding:6px 8px;color:#111">Date</th>' +
-        '<th style="text-align:right;border-bottom:2px solid #111;padding:6px 8px;color:#111">Amount</th>' +
-        '</tr></thead><tbody>' +
-        openDocs.map(d =>
-          '<tr><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#111">' + String(d.label || '').replace(/</g, '') +
-          '</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#111">' + String(d.date || '—').replace(/</g, '') +
-          '</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:right;color:#111">' +
-          fmt(d.amount) + '</td></tr>'
-        ).join('') + '</tbody></table>';
+      y += 4;
+      ensureSpace(14);
+      put('Open ' + (partyType === 'supplier' ? 'bills' : 'invoices'), 11, 'bold');
+      y += 6;
+      put('Ref', 9, 'bold', null, left);
+      put('Date', 9, 'bold', null, left + 70);
+      put('Amount', 9, 'bold', null, right - 26, 'right');
+      y += 2;
+      doc.line(left, y, right, y);
+      y += 5;
+      openDocs.forEach(d => {
+        ensureSpace(7);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.setTextColor(17, 17, 17);
+        doc.text(String(d.label || '—').slice(0, 40), left, y);
+        doc.text(String(d.date || '—'), left + 70, y);
+        doc.text(fmt(d.amount), right - 26, y, { align: 'right' });
+        y += 5;
+      });
     }
 
-    // Explicit black text — dark-theme page CSS must not leak into capture
-    const body =
-      '<div style="font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;padding:24px;width:720px;box-sizing:border-box">' +
-      '<div style="font-size:11px;color:#555;margin-bottom:6px">' + String(biz).replace(/</g, '') + ' · ' + rep + '</div>' +
-      '<div style="font-size:18px;font-weight:700;color:#111;margin:0 0 4px">' + title + '</div>' +
-      '<div style="font-size:15px;font-weight:700;color:#111;margin:0 0 6px">' + displayName + '</div>' +
-      '<div style="font-size:12px;color:#555;margin-bottom:10px">As of ' + asOf +
-        ' · Control ' + String(act.controlId || '').replace(/</g, '') +
-        ' · ' + journals.length + ' movement' + (journals.length === 1 ? '' : 's') +
-        ' · Generated ' + new Date().toLocaleString() + '</div>' +
-      '<div style="font-size:18px;font-weight:800;color:#111;margin:0 0 16px">' + balLabel + ' ' + fmt(bal) + '</div>' +
-      '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
-      '<thead><tr>' +
-      '<th style="text-align:left;border-bottom:2px solid #111;padding:6px 8px;color:#111">Date</th>' +
-      '<th style="text-align:left;border-bottom:2px solid #111;padding:6px 8px;color:#111">Memo</th>' +
-      '<th style="text-align:right;border-bottom:2px solid #111;padding:6px 8px;color:#111">Debit</th>' +
-      '<th style="text-align:right;border-bottom:2px solid #111;padding:6px 8px;color:#111">Credit</th>' +
-      '</tr></thead><tbody>' + rowsHtml + '</tbody></table>' +
-      openDocsHtml +
-      '<div style="font-size:10px;color:#888;margin-top:20px">Invoicedey · Party statement</div>' +
-      '</div>';
+    y += 8;
+    ensureSpace(6);
+    put('Invoicedey · Party statement · ' + new Date().toLocaleString(), 8, 'normal', [136, 136, 136]);
 
-    // Primary: html2pdf direct file download (off-screen host, above modals)
-    try {
-      if (typeof loadHtml2Pdf !== 'function') throw new Error('html2pdf loader missing');
-      toast('Generating PDF…');
-      const html2pdf = await loadHtml2Pdf();
-      const host = document.createElement('div');
-      host.id = 'partyStatementPdfHost';
-      host.setAttribute('style',
-        'position:fixed;left:0;top:0;width:794px;min-height:400px;background:#ffffff;color:#111111;' +
-        'z-index:2147483646;opacity:1;pointer-events:none;overflow:visible;');
-      host.innerHTML = body;
-      document.body.appendChild(host);
-      // Force layout + fonts
-      void host.offsetHeight;
-      await new Promise(r => setTimeout(r, 250));
-      if (!host.innerText || host.innerText.trim().length < 10) {
-        throw new Error('Statement content empty — try again or use CSV');
-      }
-      await html2pdf().set({
-        margin: [10, 10, 10, 10],
-        filename: filename,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          allowTaint: true,
-          backgroundColor: '#ffffff',
-          logging: false,
-          windowWidth: 794,
-          scrollX: 0,
-          scrollY: 0
-        },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
-      }).from(host).save();
-      cleanupHosts();
-      toast('Statement PDF downloaded · ' + displayName);
-      return;
-    } catch (err) {
-      console.warn('html2pdf statement failed', err);
-      cleanupHosts();
-    }
-
-    // Fallback: write into new window (not blob URL — more reliable content)
-    try {
-      const w = window.open('', '_blank', 'noopener,noreferrer,width=800,height=900');
-      if (!w) {
-        toast('Pop-up blocked. Allow pop-ups or use CSV.');
-        return;
-      }
-      w.document.open();
-      w.document.write(
-        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Statement · ' + displayName + '</title>' +
-        '<style>@page{size:A4;margin:12mm}body{margin:0;background:#fff;color:#111}</style></head><body>' +
-        body +
-        '<' + 'script>window.onload=function(){setTimeout(function(){try{window.focus();window.print();}catch(e){}},400);};</' + 'script>' +
-        '</body></html>'
-      );
-      w.document.close();
-      toast('Use Print → Save as PDF in the dialog');
-    } catch (e2) {
-      console.warn(e2);
-      toast('PDF failed — use CSV instead');
-    }
+    doc.save(filename);
+    toast('Statement PDF downloaded · ' + displayName);
   } catch (err) {
-    console.warn(err);
-    cleanupHosts();
-    toast('Statement PDF failed — ' + (err.message || 'try CSV'));
+    console.warn('party statement PDF failed', err);
+    toast('PDF failed — ' + (err && err.message ? err.message : 'use CSV'));
   }
 }
+
 
 /**
  * Phase 5 (optional): dedicated COA sub-account per party under AR/AP control.
