@@ -22144,150 +22144,169 @@ function exportPartyStatementCsv(partyType, partyId, partyName) {
   toast('Statement CSV downloaded');
 }
 
-/** Phase 4 — statement PDF: print dialog first, then html2pdf file download. */
+/** Phase 4 — statement PDF (direct download; print is fallback only). */
 async function exportPartyStatementPdf(partyType, partyId, partyName) {
+  const cleanupHosts = () => {
+    ['partyStatementPdfHost', 'partyStatementPrintFrame'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) try { el.remove(); } catch (_) {}
+    });
+  };
   try {
-    const act = partySubledgerActivity(partyType, partyId, partyName);
+    cleanupHosts();
+    const act = partySubledgerActivity(partyType, partyId, partyName) || { journals: [], openDocs: [], controlId: '' };
+    const journals = Array.isArray(act.journals) ? act.journals : [];
+    const openDocs = Array.isArray(act.openDocs) ? act.openDocs : [];
     const rep = (db.profile && db.profile.reporting) || 'NGN';
-    const fmt = (n) => (typeof money === 'function' ? money(n, rep) : String(n));
-    const bal = partyType === 'supplier'
-      ? (partyId ? partyApBalance(partyId) : 0)
-      : (partyId ? partyArBalance(partyId) : 0);
+    const fmt = (n) => {
+      try { return typeof money === 'function' ? money(Number(n) || 0, rep) : String(Number(n) || 0); }
+      catch (_) { return String(Number(n) || 0); }
+    };
+    let bal = 0;
+    try {
+      bal = partyType === 'supplier'
+        ? (partyId ? partyApBalance(partyId) : 0)
+        : (partyId ? partyArBalance(partyId) : 0);
+    } catch (_) { bal = 0; }
+    // Name-only match fallback
+    if (!(Math.abs(bal) > 0.001) && partyName) {
+      try {
+        const rows = partyType === 'supplier' ? apSubledgerBalances() : arSubledgerBalances();
+        const hit = rows.find(r => String(r.partyName || '').toLowerCase() === String(partyName).toLowerCase());
+        if (hit) bal = hit.balance;
+      } catch (_) {}
+    }
     const biz = (db.profile && (db.profile.businessName || db.profile.name)) || 'invoicedey';
-    const logo = (db.profile && db.profile.logo) || '';
+    // Skip logo in PDF — data-URL logos often blank html2canvas captures
     const asOf = typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10);
     const title = partyType === 'supplier' ? 'Accounts payable statement' : 'Accounts receivable statement';
     const balLabel = partyType === 'supplier' ? 'You owe' : 'Balance due';
-    const safeName = String(partyName || partyId || 'party').replace(/[^\w.-]+/g, '_').slice(0, 40);
+    const displayName = String(partyName || partyId || 'Party').replace(/</g, '');
+    const safeName = displayName.replace(/[^\w.-]+/g, '_').slice(0, 40) || 'party';
     const filename = 'invoicedey-' + (partyType === 'supplier' ? 'ap' : 'ar') + '-' + safeName + '.pdf';
 
     let rowsHtml = '';
-    if (!act.journals.length) {
-      rowsHtml = '<tr><td colspan="4" style="padding:10px;color:#666">No ledger movements yet.</td></tr>';
+    if (!journals.length) {
+      rowsHtml = '<tr><td colspan="4" style="padding:12px;color:#444">No ledger movements tagged for this party yet.</td></tr>';
     } else {
-      act.journals.forEach(j => {
+      journals.forEach(j => {
+        const deb = Number(j.debit) || 0;
+        const cre = Number(j.credit) || 0;
         rowsHtml += '<tr>' +
-          '<td style="padding:5px 6px;border-bottom:1px solid #eee">' + String(j.date || '—').replace(/</g, '') + '</td>' +
-          '<td style="padding:5px 6px;border-bottom:1px solid #eee">' + String(j.memo || j.source || '').replace(/</g, '') +
-          (j.source ? ' <span style="color:#888;font-size:10px">' + String(j.source).replace(/</g, '') + '</span>' : '') +
-          '</td>' +
-          '<td style="padding:5px 6px;border-bottom:1px solid #eee;text-align:right">' + (j.debit > 0.001 ? fmt(j.debit) : '') + '</td>' +
-          '<td style="padding:5px 6px;border-bottom:1px solid #eee;text-align:right">' + (j.credit > 0.001 ? fmt(j.credit) : '') + '</td>' +
+          '<td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#111">' + String(j.date || '—').replace(/</g, '') + '</td>' +
+          '<td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#111">' + String(j.memo || j.source || '—').replace(/</g, '') + '</td>' +
+          '<td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:right;color:#111">' + (deb > 0.001 ? fmt(deb) : '') + '</td>' +
+          '<td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:right;color:#111">' + (cre > 0.001 ? fmt(cre) : '') + '</td>' +
           '</tr>';
       });
     }
 
     let openDocsHtml = '';
-    if (act.openDocs && act.openDocs.length) {
-      openDocsHtml = '<h2 style="font-size:13px;margin:18px 0 8px">Open ' +
-        (partyType === 'supplier' ? 'bills' : 'invoices') + '</h2>' +
-        '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' +
-        '<th style="text-align:left;border-bottom:2px solid #111;padding:6px">Ref</th>' +
-        '<th style="text-align:left;border-bottom:2px solid #111;padding:6px">Date</th>' +
-        '<th style="text-align:right;border-bottom:2px solid #111;padding:6px">Amount</th>' +
+    if (openDocs.length) {
+      openDocsHtml = '<div style="margin-top:20px;font-size:13px;font-weight:700;color:#111">Open ' +
+        (partyType === 'supplier' ? 'bills' : 'invoices') + '</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px"><thead><tr>' +
+        '<th style="text-align:left;border-bottom:2px solid #111;padding:6px 8px;color:#111">Ref</th>' +
+        '<th style="text-align:left;border-bottom:2px solid #111;padding:6px 8px;color:#111">Date</th>' +
+        '<th style="text-align:right;border-bottom:2px solid #111;padding:6px 8px;color:#111">Amount</th>' +
         '</tr></thead><tbody>' +
-        act.openDocs.map(d =>
-          '<tr><td style="padding:5px 6px;border-bottom:1px solid #eee">' + String(d.label || '').replace(/</g, '') +
-          '</td><td style="padding:5px 6px;border-bottom:1px solid #eee">' + (d.date || '—') +
-          '</td><td style="padding:5px 6px;border-bottom:1px solid #eee;text-align:right">' +
+        openDocs.map(d =>
+          '<tr><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#111">' + String(d.label || '').replace(/</g, '') +
+          '</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#111">' + String(d.date || '—').replace(/</g, '') +
+          '</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:right;color:#111">' +
           fmt(d.amount) + '</td></tr>'
         ).join('') + '</tbody></table>';
     }
 
+    // Explicit black text — dark-theme page CSS must not leak into capture
     const body =
-      (logo ? '<div style="margin-bottom:8px"><img src="' + logo + '" alt="" style="max-height:48px;max-width:160px"></div>' : '') +
-      '<div style="font-size:11px;color:#666;margin-bottom:4px">' + String(biz).replace(/</g, '') + ' · ' + rep + '</div>' +
-      '<h1 style="font-size:18px;margin:0 0 4px">' + title + '</h1>' +
-      '<div style="font-size:14px;font-weight:700;margin-bottom:4px">' + String(partyName || partyId || 'Party').replace(/</g, '') + '</div>' +
-      '<div style="font-size:12px;color:#555;margin-bottom:8px">As of ' + asOf +
+      '<div style="font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;padding:24px;width:720px;box-sizing:border-box">' +
+      '<div style="font-size:11px;color:#555;margin-bottom:6px">' + String(biz).replace(/</g, '') + ' · ' + rep + '</div>' +
+      '<div style="font-size:18px;font-weight:700;color:#111;margin:0 0 4px">' + title + '</div>' +
+      '<div style="font-size:15px;font-weight:700;color:#111;margin:0 0 6px">' + displayName + '</div>' +
+      '<div style="font-size:12px;color:#555;margin-bottom:10px">As of ' + asOf +
         ' · Control ' + String(act.controlId || '').replace(/</g, '') +
+        ' · ' + journals.length + ' movement' + (journals.length === 1 ? '' : 's') +
         ' · Generated ' + new Date().toLocaleString() + '</div>' +
-      '<div style="font-size:16px;font-weight:800;margin:0 0 14px">' + balLabel + ' ' + fmt(bal) + '</div>' +
+      '<div style="font-size:18px;font-weight:800;color:#111;margin:0 0 16px">' + balLabel + ' ' + fmt(bal) + '</div>' +
       '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
       '<thead><tr>' +
-      '<th style="text-align:left;border-bottom:2px solid #111;padding:6px">Date</th>' +
-      '<th style="text-align:left;border-bottom:2px solid #111;padding:6px">Memo</th>' +
-      '<th style="text-align:right;border-bottom:2px solid #111;padding:6px">Debit</th>' +
-      '<th style="text-align:right;border-bottom:2px solid #111;padding:6px">Credit</th>' +
+      '<th style="text-align:left;border-bottom:2px solid #111;padding:6px 8px;color:#111">Date</th>' +
+      '<th style="text-align:left;border-bottom:2px solid #111;padding:6px 8px;color:#111">Memo</th>' +
+      '<th style="text-align:right;border-bottom:2px solid #111;padding:6px 8px;color:#111">Debit</th>' +
+      '<th style="text-align:right;border-bottom:2px solid #111;padding:6px 8px;color:#111">Credit</th>' +
       '</tr></thead><tbody>' + rowsHtml + '</tbody></table>' +
       openDocsHtml +
-      '<p style="font-size:10px;color:#888;margin-top:16px">Invoicedey · Party statement</p>';
+      '<div style="font-size:10px;color:#888;margin-top:20px">Invoicedey · Party statement</div>' +
+      '</div>';
 
-    const fullHtml = '<!DOCTYPE html><html><head><meta charset="utf-8">' +
-      '<title>Statement · ' + String(partyName || '').replace(/</g, '') + '</title>' +
-      '<style>@page{size:A4;margin:12mm}body{font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;margin:0;padding:12px}</style>' +
-      '</head><body>' + body +
-      '<' + 'script>window.onload=function(){setTimeout(function(){try{window.focus();window.print();}catch(e){}},250);};</' + 'script>' +
-      '</body></html>';
-
-    // 1) Blob URL + print dialog (same path as ledger PDF)
-    let printed = false;
+    // Primary: html2pdf direct file download (off-screen host, above modals)
     try {
-      const blob = new Blob([fullHtml], { type: 'text/html;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const w = window.open(url, '_blank');
-      if (w) {
-        printed = true;
-        toast('Use Print → Save as PDF in the dialog');
-        setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 60000);
-      } else {
-        // Hidden iframe fallback when pop-ups blocked
-        const iframe = document.createElement('iframe');
-        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
-        iframe.src = url;
-        document.body.appendChild(iframe);
-        iframe.onload = () => {
-          try {
-            iframe.contentWindow.focus();
-            iframe.contentWindow.print();
-            printed = true;
-            toast('Use Print → Save as PDF in the dialog');
-          } catch (e) {
-            console.warn(e);
-          }
-          setTimeout(() => {
-            try { iframe.remove(); URL.revokeObjectURL(url); } catch (_) {}
-          }, 2000);
-        };
+      if (typeof loadHtml2Pdf !== 'function') throw new Error('html2pdf loader missing');
+      toast('Generating PDF…');
+      const html2pdf = await loadHtml2Pdf();
+      const host = document.createElement('div');
+      host.id = 'partyStatementPdfHost';
+      host.setAttribute('style',
+        'position:fixed;left:0;top:0;width:794px;min-height:400px;background:#ffffff;color:#111111;' +
+        'z-index:2147483646;opacity:1;pointer-events:none;overflow:visible;');
+      host.innerHTML = body;
+      document.body.appendChild(host);
+      // Force layout + fonts
+      void host.offsetHeight;
+      await new Promise(r => setTimeout(r, 250));
+      if (!host.innerText || host.innerText.trim().length < 10) {
+        throw new Error('Statement content empty — try again or use CSV');
       }
-    } catch (e) {
-      console.warn('statement print window failed', e);
-    }
-
-    // 2) Direct file download via html2pdf (when available)
-    try {
-      if (typeof loadHtml2Pdf === 'function') {
-        const html2pdf = await loadHtml2Pdf();
-        toast('Downloading PDF…');
-        const host = document.createElement('div');
-        host.id = 'partyStatementPdfHost';
-        host.style.cssText = 'position:fixed;left:0;top:0;width:794px;background:#fff;z-index:99999;';
-        host.innerHTML = body;
-        document.body.appendChild(host);
-        void host.offsetHeight;
-        await new Promise(r => setTimeout(r, 120));
-        await html2pdf().set({
-          margin: 10,
-          filename: filename,
-          image: { type: 'jpeg', quality: 0.98 },
-          html2canvas: { scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff' },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-        }).from(host).save();
-        host.remove();
-        toast('Statement PDF downloaded');
-        return;
-      }
+      await html2pdf().set({
+        margin: [10, 10, 10, 10],
+        filename: filename,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          allowTaint: true,
+          backgroundColor: '#ffffff',
+          logging: false,
+          windowWidth: 794,
+          scrollX: 0,
+          scrollY: 0
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+      }).from(host).save();
+      cleanupHosts();
+      toast('Statement PDF downloaded · ' + displayName);
+      return;
     } catch (err) {
       console.warn('html2pdf statement failed', err);
-      const existing = document.getElementById('partyStatementPdfHost');
-      if (existing) existing.remove();
+      cleanupHosts();
     }
 
-    if (!printed) {
-      toast('Could not open PDF. Allow pop-ups, or use CSV instead.');
+    // Fallback: write into new window (not blob URL — more reliable content)
+    try {
+      const w = window.open('', '_blank', 'noopener,noreferrer,width=800,height=900');
+      if (!w) {
+        toast('Pop-up blocked. Allow pop-ups or use CSV.');
+        return;
+      }
+      w.document.open();
+      w.document.write(
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Statement · ' + displayName + '</title>' +
+        '<style>@page{size:A4;margin:12mm}body{margin:0;background:#fff;color:#111}</style></head><body>' +
+        body +
+        '<' + 'script>window.onload=function(){setTimeout(function(){try{window.focus();window.print();}catch(e){}},400);};</' + 'script>' +
+        '</body></html>'
+      );
+      w.document.close();
+      toast('Use Print → Save as PDF in the dialog');
+    } catch (e2) {
+      console.warn(e2);
+      toast('PDF failed — use CSV instead');
     }
   } catch (err) {
     console.warn(err);
+    cleanupHosts();
     toast('Statement PDF failed — ' + (err.message || 'try CSV'));
   }
 }
@@ -25951,27 +25970,46 @@ function partySubledgerActivity(partyType, partyId, partyName) {
     : ((typeof getArControlId === 'function') ? getArControlId() : '1100');
   const pid = String(partyId || '').trim();
   const pname = String(partyName || '').trim().toLowerCase();
+  // Include optional per-party sub-account (AR-xxx / AP-xxx)
+  let subId = '';
+  try {
+    if (pid && typeof ensurePartySubAccount === 'function' && partySubAccountsEnabled()) {
+      subId = String(ensurePartySubAccount(partyType, pid, partyName) || '');
+    } else if (pid) {
+      subId = (partyType === 'supplier' ? 'AP-' : 'AR-') + pid.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+    }
+  } catch (_) {}
+  const isPartyControl = (accountId) => {
+    const id = String(accountId || '');
+    return id === String(controlId) || (subId && id === subId) ||
+      (pid && (id === 'AR-' + pid.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12) ||
+        id === 'AP-' + pid.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12)));
+  };
   const journals = [];
   (db.journals || []).forEach(j => {
     if (!j || j.reversed) return;
-    const hit = (j.lines || []).some(l => {
-      if (String(l.accountId) !== String(controlId)) return false;
+    const lines = j.lines || [];
+    const matchLines = lines.filter(l => {
+      if (!isPartyControl(l.accountId)) return false;
       if (pid && String(l.partyId || '') === pid) return true;
-      if (!pid && pname && String(l.partyName || '').trim().toLowerCase() === pname) return true;
+      if (pname && String(l.partyName || '').trim().toLowerCase() === pname) return true;
+      // Sub-account without tag still belongs to this party
+      if (subId && String(l.accountId) === subId) return true;
       return false;
     });
-    if (!hit) return;
-    const line = (j.lines || []).find(l => String(l.accountId) === String(controlId));
-    journals.push({
-      id: j.id,
-      date: j.date,
-      memo: j.memo || j.source || '',
-      source: j.source,
-      debit: Number(line && line.debit) || 0,
-      credit: Number(line && line.credit) || 0
+    if (!matchLines.length) return;
+    matchLines.forEach(line => {
+      journals.push({
+        id: j.id,
+        date: j.date,
+        memo: j.memo || j.source || '',
+        source: j.source,
+        debit: Number(line.debit) || 0,
+        credit: Number(line.credit) || 0
+      });
     });
   });
-  journals.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  journals.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
 
   let openDocs = [];
   if (partyType === 'client') {
