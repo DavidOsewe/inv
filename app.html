@@ -13754,16 +13754,73 @@ function listMyExpenseRequests() {
   return mine.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 12);
 }
 
-/** Completed / decided approval items for History tab (org-wide + mine). */
+/** Owner (and manager with books view) see full org history; members only their related rows. */
+function canSeeOrgApprovalHistory() {
+  try {
+    const role = String(
+      (typeof currentOrgRole === 'function' && currentOrgRole()) ||
+      (cloud && (cloud.memberRole || cloud.orgRole)) ||
+      (db && db.myOrgRole) ||
+      ''
+    ).toLowerCase();
+    if (role === 'owner') return true;
+    // Managers who can approve or open books get the full ledger of decisions
+    if (role === 'manager' && typeof can === 'function' &&
+        (can('books.view') || can('books.write') || can('expenses.approve') || can('expenses.review'))) {
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+/** Member history: requester, named approver on chain, or actor who approved/rejected. */
+function isApprovalHistoryRelatedToMe(entity) {
+  if (!entity) return false;
+  if (typeof isSelfExpenseRequest === 'function' && isSelfExpenseRequest(entity)) return true;
+  const me = typeof expenseActorMeta === 'function' ? expenseActorMeta() : {};
+  const myEmail = String(me.email || '').toLowerCase();
+  const myId = String(me.userId || '');
+  if (myId && entity.approved_by && String(entity.approved_by) === myId) return true;
+  if (myEmail && entity.approved_by_email &&
+      String(entity.approved_by_email).toLowerCase() === myEmail) return true;
+  if (myId && entity.rejected_by && String(entity.rejected_by) === myId) return true;
+  if (myEmail && entity.rejected_by_email &&
+      String(entity.rejected_by_email).toLowerCase() === myEmail) return true;
+  if (myId && entity.created_by && String(entity.created_by) === myId) return true;
+  if (myEmail && entity.created_by_email &&
+      String(entity.created_by_email).toLowerCase() === myEmail) return true;
+  const chain = entity.approval_chain;
+  if (Array.isArray(chain)) {
+    for (const lvl of chain) {
+      if (!lvl) continue;
+      if (myId && Array.isArray(lvl.approver_user_ids) &&
+          lvl.approver_user_ids.some(id => String(id) === myId)) return true;
+      if (myEmail && Array.isArray(lvl.approver_emails) &&
+          lvl.approver_emails.some(em => String(em).toLowerCase() === myEmail)) return true;
+      if (myEmail && lvl.acted_by_email &&
+          String(lvl.acted_by_email).toLowerCase() === myEmail) return true;
+      if (myId && lvl.acted_by && String(lvl.acted_by) === myId) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Completed / decided approval items for History tab.
+ * Owner/manager (main account): full org history.
+ * Member: only requests they submitted or approved/rejected.
+ */
 function listApprovalHistoryItems() {
+  const orgWide = canSeeOrgApprovalHistory();
   const out = [];
   const push = (kind, e, title) => {
     const st = e.status || '';
     if (!(st === 'open' || st === 'posted' || st === 'paid' || st === 'rejected' || st === 'approved')) return;
-    // Skip pure drafts never submitted
     if (!e.requested_at && !e.approved_at && !e.rejected_at && !e.approval_chain && st !== 'paid') {
       if (st === 'open' && kind === 'cash' && e.source && e.source !== 'manual') return;
     }
+    const mine = typeof isSelfExpenseRequest === 'function' && isSelfExpenseRequest(e);
+    if (!orgWide && !isApprovalHistoryRelatedToMe(e)) return;
     out.push({
       kind,
       id: e.id,
@@ -13772,7 +13829,7 @@ function listApprovalHistoryItems() {
       amount: e.amount,
       currency: e.currency,
       entity: e,
-      isMine: typeof isSelfExpenseRequest === 'function' && isSelfExpenseRequest(e),
+      isMine: mine,
       at: e.approved_at || e.rejected_at || e.paidAt || e.posted_at || e.requested_at || e.date || ''
     });
   };
@@ -13796,22 +13853,25 @@ function listApprovalHistoryItems() {
   try {
     (db.transfers || []).forEach(t => {
       if (t.status === 'pending_approval') return;
-      if (t.approved_at || t.status === 'in_transit' || t.status === 'received' || t.status === 'cancelled' || t.status === 'rejected') {
-        out.push({
-          kind: 'transfer',
-          id: t.id,
-          status: t.status,
-          title: t.transfer_number || 'Stock transfer',
-          amount: null,
-          currency: null,
-          entity: t,
-          isMine: false,
-          at: t.approved_at || t.received_at || t.created_at || ''
-        });
-      }
+      if (!(t.approved_at || t.status === 'in_transit' || t.status === 'received' ||
+            t.status === 'cancelled' || t.status === 'rejected')) return;
+      const related = orgWide || isApprovalHistoryRelatedToMe(t) ||
+        (t.created_by && expenseActorMeta().userId && String(t.created_by) === String(expenseActorMeta().userId));
+      if (!related) return;
+      out.push({
+        kind: 'transfer',
+        id: t.id,
+        status: t.status,
+        title: t.transfer_number || 'Stock transfer',
+        amount: null,
+        currency: null,
+        entity: t,
+        isMine: typeof isSelfExpenseRequest === 'function' && isSelfExpenseRequest(t),
+        at: t.approved_at || t.received_at || t.created_at || ''
+      });
     });
   } catch (_) {}
-  return out.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 80);
+  return out.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, orgWide ? 120 : 40);
 }
 
 function apprStatusBadge(st) {
