@@ -5138,9 +5138,145 @@ body:has(.modalback.show) .notif-panel {
         <div id="booksPayablesList"></div>
       </div>
       <div id="booksPanelReceivables" hidden>
-        <h3 class="books-panel-title">Money in · Receivables</h3>
-        <p class="books-panel-lead">Open invoices, oldest first. Tap an invoice to collect · Statement on customer for full AR history.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <h3 class="books-panel-title" style="margin:0">Money in · Receivables</h3>
+            <p class="books-panel-lead" style="margin:6px 0 0">
+              Open items, credit notes, collections. Receive payment can allocate across invoices.
+            </p>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <button type="button" class="button primary" id="booksArReceiveBtn">+ Receive payment</button>
+            <button type="button" class="button small" id="booksArCreditBtn">+ Credit note</button>
+            <button type="button" class="button small" id="booksArWriteOffBtn">Write off</button>
+          </div>
+        </div>
+        <div id="booksArPolicyBar" class="section-sub" style="margin:0 0 10px"></div>
         <div id="booksReceivablesList"></div>
+      </div>
+
+      <!-- AR Receive payment (allocate) -->
+      <div class="modal" id="arReceiveModal" role="dialog" aria-modal="true" aria-labelledby="arReceiveTitle" hidden>
+        <div class="modal-card" style="max-width:560px;width:95vw;max-height:90vh;overflow:auto">
+          <div class="modal-head">
+            <h3 id="arReceiveTitle">Receive payment</h3>
+            <button type="button" class="icon-btn" data-ar-recv-close aria-label="Close">&times;</button>
+          </div>
+          <div class="modal-body" style="display:flex;flex-direction:column;gap:12px">
+            <div class="field">
+              <label>Customer</label>
+              <select id="arRecvClient" class="searchable" data-searchable="1"></select>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="field" style="margin:0">
+                <label>Amount received</label>
+                <input type="number" id="arRecvAmount" min="0" step="0.01" placeholder="0.00">
+              </div>
+              <div class="field" style="margin:0">
+                <label>Date</label>
+                <input type="date" id="arRecvDate">
+              </div>
+            </div>
+            <div class="field">
+              <label>Deposit to</label>
+              <select id="arRecvDeposit" class="searchable" data-searchable="1"></select>
+            </div>
+            <div class="field">
+              <label>Note / reference</label>
+              <input type="text" id="arRecvNote" placeholder="Bank ref, cheque no…">
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:700;margin-bottom:6px">Allocate to open invoices</div>
+              <div id="arRecvAllocList" style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px"></div>
+              <p class="section-sub" id="arRecvAllocSummary" style="margin:8px 0 0"></p>
+            </div>
+          </div>
+          <div class="modal-foot" style="display:flex;gap:8px;justify-content:flex-end">
+            <button type="button" class="button" data-ar-recv-close>Cancel</button>
+            <button type="button" class="button primary" id="arRecvSubmit">Post receipt</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Credit note -->
+      <div class="modal" id="arCreditModal" role="dialog" aria-modal="true" hidden>
+        <div class="modal-card" style="max-width:480px;width:95vw">
+          <div class="modal-head">
+            <h3>Credit note</h3>
+            <button type="button" class="icon-btn" data-ar-cn-close aria-label="Close">&times;</button>
+          </div>
+          <div class="modal-body" style="display:flex;flex-direction:column;gap:12px">
+            <div class="field">
+              <label>Customer</label>
+              <select id="arCnClient" class="searchable" data-searchable="1"></select>
+            </div>
+            <div class="field">
+              <label>Apply to invoice (optional)</label>
+              <select id="arCnInvoice"></select>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="field" style="margin:0">
+                <label>Amount</label>
+                <input type="number" id="arCnAmount" min="0" step="0.01">
+              </div>
+              <div class="field" style="margin:0">
+                <label>Date</label>
+                <input type="date" id="arCnDate">
+              </div>
+            </div>
+            <div class="field">
+              <label>Revenue / returns ledger</label>
+              <select id="arCnRevenue" class="searchable" data-searchable="1"></select>
+            </div>
+            <div class="field">
+              <label>Reason</label>
+              <input type="text" id="arCnNote" placeholder="Return, discount, billing error…">
+            </div>
+          </div>
+          <div class="modal-foot" style="display:flex;gap:8px;justify-content:flex-end">
+            <button type="button" class="button" data-ar-cn-close>Cancel</button>
+            <button type="button" class="button primary" id="arCnSubmit">Post credit note</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Write-off -->
+      <div class="modal" id="arWriteOffModal" role="dialog" aria-modal="true" hidden>
+        <div class="modal-card" style="max-width:480px;width:95vw">
+          <div class="modal-head">
+            <h3>Write off receivable</h3>
+            <button type="button" class="icon-btn" data-ar-wo-close aria-label="Close">&times;</button>
+          </div>
+          <div class="modal-body" style="display:flex;flex-direction:column;gap:12px">
+            <p class="section-sub" style="margin:0">Owner/manager only. Posts Dr Bad debt (or chosen expense) / Cr AR.</p>
+            <div class="field">
+              <label>Invoice</label>
+              <select id="arWoInvoice"></select>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="field" style="margin:0">
+                <label>Amount</label>
+                <input type="number" id="arWoAmount" min="0" step="0.01">
+              </div>
+              <div class="field" style="margin:0">
+                <label>Date</label>
+                <input type="date" id="arWoDate">
+              </div>
+            </div>
+            <div class="field">
+              <label>Expense ledger (bad debt)</label>
+              <select id="arWoExpense" class="searchable" data-searchable="1"></select>
+            </div>
+            <div class="field">
+              <label>Reason</label>
+              <input type="text" id="arWoNote" placeholder="Uncollectible, settlement…">
+            </div>
+          </div>
+          <div class="modal-foot" style="display:flex;gap:8px;justify-content:flex-end">
+            <button type="button" class="button" data-ar-wo-close>Cancel</button>
+            <button type="button" class="button primary" id="arWoSubmit">Post write-off</button>
+          </div>
+        </div>
       </div>
       <div id="booksPanelPeriodLock" hidden>
         <div class="insight">
@@ -21156,16 +21292,30 @@ function persist(s) {
     switchTo('invoices');
     if (isNew) maybePromptSignup();
   };
-  // Mirror payables: leaving Draft → pick revenue ledger before AR posts
+  // AR post policy: auto on Send (default) or finance release
   if (leaveDraft && typeof postInvoiceAccrualWithLedgerPick === 'function') {
     const key = 'inv:' + edit.id;
     const already = (db.journals || []).some(j => j && !j.reversed && j.sourceKey === 'j:' + key && j.source === 'invoice_accrual');
-    if (!already) {
-      postInvoiceAccrualWithLedgerPick(edit).then(() => finishSaveUi()).catch(() => finishSaveUi());
+    const autoPost = !(db.profile && db.profile.arAutoPostOnSend === false);
+    if (!already && autoPost) {
+      postInvoiceAccrualWithLedgerPick(edit).then(() => {
+        edit.arPendingRelease = false;
+        finishSaveUi();
+      }).catch(() => finishSaveUi());
       return;
     }
+    if (!already && !autoPost) {
+      edit.arPendingRelease = true;
+      try { save(); } catch (_) {}
+      toast('Invoice sent — awaiting finance release to AR');
+    }
   } else if (leaveDraft) {
-    try { accrueInvoiceIfNeeded(edit, { silent: true }); } catch (e) { console.warn('accrue', e); }
+    const autoPost = !(db.profile && db.profile.arAutoPostOnSend === false);
+    if (autoPost) {
+      try { accrueInvoiceIfNeeded(edit, { silent: true }); } catch (e) { console.warn('accrue', e); }
+    } else {
+      edit.arPendingRelease = true;
+    }
   }
   finishSaveUi();
 }
@@ -21288,11 +21438,17 @@ function ensureBooksDb() {
   if (!Array.isArray(db.bankRules)) db.bankRules = [];
   if (!Array.isArray(db.bankImportMaps)) db.bankImportMaps = [];
   if (!Array.isArray(db.auditEvents)) db.auditEvents = [];
+  // AR desk: receipts (multi-invoice), credit notes, write-offs
+  if (!Array.isArray(db.arReceipts)) db.arReceipts = [];
+  if (!Array.isArray(db.creditNotes)) db.creditNotes = [];
+  if (!Array.isArray(db.arWriteOffs)) db.arWriteOffs = [];
   // postJournal reads db.profile.reporting — must never throw
   if (!db.profile || typeof db.profile !== 'object') {
     db.profile = { reporting: 'NGN', name: '' };
   }
   if (!db.profile.reporting) db.profile.reporting = 'NGN';
+  // AR policy: auto-post accrual on Send (default true). false = finance must release.
+  if (db.profile.arAutoPostOnSend == null) db.profile.arAutoPostOnSend = true;
   // Existing bank rules without explicit autoApply=false should auto-run on import
   if (Array.isArray(db.bankRules) && !db._bankRulesAutoMigrated) {
     db.bankRules.forEach(r => {
@@ -22612,7 +22768,12 @@ function partyControlAccountForPost(partyType, partyId, partyName) {
 
 function recordCashFromInvoicePayment(inv, payment) {
   ensureBooksDb();
+  // Multi-invoice AR receipt already posted the bank/AR journal — only track allocation on invoice
+  if (payment && payment.receiptId && payment.skipJournal) return;
   const key = 'pay:' + (payment.id || (payment.date + ':' + payment.amount));
+  if ((db.journals || []).some(j => j && !j.reversed && j.sourceKey === 'j:' + key && j.source === 'invoice_payment')) {
+    return;
+  }
   const depositId = payment.depositAccountId
     || (document.getElementById('payDepositAccount') && document.getElementById('payDepositAccount').value)
     || defaultCashAccountId()
@@ -23108,11 +23269,13 @@ const BOOKS_PAGES = {
   },
   ar: {
     tabs: [
-      { id: 'receivables', label: 'Open invoices' }
+      { id: 'receivables', label: 'Open AR' },
+      { id: 'arcredits', label: 'Credit notes' },
+      { id: 'arcollections', label: 'Collections' }
     ],
     defaultTab: 'receivables',
-    actionLabel: 'View invoices',
-    action: 'invoices'
+    actionLabel: 'Receive payment',
+    action: 'arpayment'
   },
   ap: {
     tabs: [
@@ -23190,8 +23353,8 @@ function runBooksAction(kind) {
     setBooksPage('recurring', 'recurringj');
     setTimeout(() => openRecurringJournalModal(), 120);
   }
-  else if (kind === 'payment') {
-    try { switchTo('invoices'); toast('Open an invoice to record a payment'); } catch {}
+  else if (kind === 'payment' || kind === 'arpayment') {
+    try { openArReceivePaymentModal(); } catch (e) { toast(e.message || 'Could not open receive payment'); }
   }
 }
 
@@ -23259,6 +23422,8 @@ function setBooksTab(tab) {
     apsuppliers: 'booksPanelPayables',
     appaid: 'booksPanelPayables',
     receivables: 'booksPanelReceivables',
+    arcredits: 'booksPanelReceivables',
+    arcollections: 'booksPanelReceivables',
     coa: 'booksPanelCoa',
     periodlock: 'booksPanelPeriodLock',
     trial: 'booksPanelTrial',
@@ -23281,6 +23446,12 @@ function setBooksTab(tab) {
     try {
       _apView = booksTab;
       if (typeof renderBooksPayables === 'function') renderBooksPayables();
+    } catch (_) {}
+  }
+  if (['receivables', 'arcredits', 'arcollections'].includes(booksTab)) {
+    try {
+      _arView = booksTab;
+      if (typeof renderBooksReceivables === 'function') renderBooksReceivables();
     } catch (_) {}
   }
 }
@@ -25826,47 +25997,689 @@ function renderBooksLedger() {
 }
 
 
-function renderBooksReceivables() {
-  const el = document.getElementById('booksReceivablesList');
-  if (!el) return;
-  const open = (db.invoices || []).filter(inv => {
+let _arView = 'receivables';
+
+/** Open AR items = invoices with balance due (after payments + credit notes applied). */
+function arOpenInvoiceItems() {
+  return (db.invoices || []).filter(inv => {
+    if (!inv || inv.status === 'Draft' || inv.status === 'void' || inv.voided) return false;
+    // Awaiting finance release still shows as commercial open, not posted AR
     syncPaidFlag(inv);
-    return inv.status !== 'Draft' && balanceDue(inv) > 0.001;
+    return balanceDue(inv) > 0.001;
   }).map(inv => {
     const due = inv.due || inv.issue || '';
-    const days = due ? Math.floor((new Date() - new Date(due + 'T12:00:00')) / 86400000) : 0;
+    const days = due ? Math.floor((Date.now() - new Date(due + 'T12:00:00').getTime()) / 86400000) : 0;
     let bucket = 'Current';
     if (days > 90) bucket = '90+';
     else if (days > 60) bucket = '61–90';
     else if (days > 30) bucket = '31–60';
     else if (days > 0) bucket = '1–30';
-    return { inv, bal: balanceDue(inv), days: Math.max(0, days), bucket, due };
-  }).sort((a, b) => b.days - a.days);
+    const c = typeof client === 'function' ? client(inv.client) : null;
+    return {
+      kind: 'invoice',
+      id: inv.id,
+      inv,
+      number: inv.number || '',
+      clientId: String(inv.client || c?.id || ''),
+      clientName: (c && c.name) || inv.clientName || '—',
+      due,
+      days: Math.max(0, days),
+      bucket,
+      bal: balanceDue(inv),
+      currency: inv.currency,
+      posted: !!(inv.revenueAccountId || (db.journals || []).some(j => j && !j.reversed && j.sourceKey === 'j:inv:' + inv.id)),
+      promiseDate: inv.promiseDate || null,
+      collector: inv.collectorName || inv.collectorUserId || null,
+      dispute: !!(inv.disputeFlag || inv.disputed),
+      disputeNote: inv.disputeNote || ''
+    };
+  }).sort((a, b) => b.days - a.days || String(a.due).localeCompare(String(b.due)));
+}
 
-  if (!open.length) {
+function arAgingFromOpenItems(items) {
+  const buckets = { Current: 0, '1–30': 0, '31–60': 0, '61–90': 0, '90+': 0 };
+  (items || arOpenInvoiceItems()).forEach(r => {
+    buckets[r.bucket] = (buckets[r.bucket] || 0) + toRep(r.bal, r.currency);
+  });
+  return buckets;
+}
+
+function arOnAccountByClient() {
+  ensureBooksDb();
+  const map = new Map();
+  (db.arReceipts || []).forEach(r => {
+    if (!r || r.reversed) return;
+    const left = Number(r.onAccount) || 0;
+    if (left < 0.001) return;
+    const cid = String(r.clientId || '');
+    const row = map.get(cid) || { clientId: cid, clientName: r.clientName || cid, amount: 0, receipts: [] };
+    row.amount += left;
+    row.receipts.push(r);
+    map.set(cid, row);
+  });
+  return Array.from(map.values()).filter(r => r.amount > 0.001);
+}
+
+function fillCashDepositSelect(sel, preferred) {
+  if (!sel) return;
+  const cashIds = new Set();
+  try {
+    getCoa().forEach(a => {
+      if (a && (a.fsLine === 'cash_and_equivalents' || /cash|bank/i.test(a.name || '') || a.id === '1000')) {
+        cashIds.add(String(a.id));
+      }
+    });
+  } catch (_) {}
+  const opts = getCoa().filter(a => cashIds.has(String(a.id)) || a.type === 'asset');
+  const prefer = preferred || defaultCashAccountId() || '1000';
+  sel.innerHTML = opts.map(a =>
+    '<option value="' + a.id + '"' + (String(a.id) === String(prefer) ? ' selected' : '') + '>' +
+    a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>'
+  ).join('') || '<option value="1000">1000 · Cash</option>';
+}
+
+function fillClientSelect(sel, preferred) {
+  if (!sel) return;
+  const list = (db.clients || []).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  sel.innerHTML = '<option value="">— Select customer —</option>' + list.map(c =>
+    '<option value="' + c.id + '"' + (preferred && String(c.id) === String(preferred) ? ' selected' : '') + '>' +
+    String(c.name || c.id).replace(/</g, '') + '</option>'
+  ).join('');
+}
+
+function openArReceivePaymentModal(prefill) {
+  ensureBooksDb();
+  const modal = document.getElementById('arReceiveModal');
+  if (!modal) { toast('Receive payment UI missing'); return; }
+  fillClientSelect(document.getElementById('arRecvClient'), prefill && prefill.clientId);
+  fillCashDepositSelect(document.getElementById('arRecvDeposit'), prefill && prefill.depositAccountId);
+  const dateEl = document.getElementById('arRecvDate');
+  if (dateEl) dateEl.value = (prefill && prefill.date) || (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+  const amtEl = document.getElementById('arRecvAmount');
+  if (amtEl) amtEl.value = prefill && prefill.amount != null ? prefill.amount : '';
+  const noteEl = document.getElementById('arRecvNote');
+  if (noteEl) noteEl.value = (prefill && prefill.note) || '';
+  const refreshAlloc = () => {
+    const cid = document.getElementById('arRecvClient')?.value;
+    const list = document.getElementById('arRecvAllocList');
+    if (!list) return;
+    if (!cid) {
+      list.innerHTML = '<p class="section-sub" style="margin:0">Pick a customer to see open invoices.</p>';
+      return;
+    }
+    const open = arOpenInvoiceItems().filter(r => String(r.clientId) === String(cid));
+    if (!open.length) {
+      list.innerHTML = '<p class="section-sub" style="margin:0">No open invoices — full amount stays on-account for this customer.</p>';
+      return;
+    }
+    list.innerHTML = open.map(r =>
+      '<label style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid var(--line);font-size:13px">' +
+      '<input type="checkbox" data-ar-alloc-inv="' + r.id + '" data-ar-alloc-bal="' + r.bal + '" checked>' +
+      '<span style="flex:1"><b>' + String(r.number || r.id).replace(/</g, '') + '</b> · due ' + (r.due || '—') +
+      ' · ' + r.bucket + '</span>' +
+      '<input type="number" min="0" step="0.01" data-ar-alloc-amt="' + r.id + '" value="' + r.bal +
+      '" style="width:100px;font-size:13px" title="Allocate">' +
+      '</label>'
+    ).join('');
+    list.querySelectorAll('[data-ar-alloc-inv]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const id = cb.getAttribute('data-ar-alloc-inv');
+        const inp = list.querySelector('[data-ar-alloc-amt="' + id + '"]');
+        if (inp) inp.disabled = !cb.checked;
+        updateArRecvAllocSummary();
+      });
+    });
+    list.querySelectorAll('[data-ar-alloc-amt]').forEach(inp => {
+      inp.addEventListener('input', updateArRecvAllocSummary);
+    });
+    updateArRecvAllocSummary();
+  };
+  document.getElementById('arRecvClient')?.addEventListener('change', refreshAlloc);
+  document.getElementById('arRecvAmount')?.addEventListener('input', updateArRecvAllocSummary);
+  refreshAlloc();
+  modal.hidden = false;
+  modal.classList.add('show');
+}
+
+function updateArRecvAllocSummary() {
+  const total = Number(document.getElementById('arRecvAmount')?.value) || 0;
+  let allocated = 0;
+  document.querySelectorAll('#arRecvAllocList [data-ar-alloc-inv]:checked').forEach(cb => {
+    const id = cb.getAttribute('data-ar-alloc-inv');
+    const inp = document.querySelector('#arRecvAllocList [data-ar-alloc-amt="' + id + '"]');
+    allocated += Number(inp?.value) || 0;
+  });
+  const onAcct = Math.round((total - allocated) * 100) / 100;
+  const el = document.getElementById('arRecvAllocSummary');
+  if (!el) return;
+  el.innerHTML = 'Allocated <b>' + (typeof money === 'function' ? money(allocated) : allocated) +
+    '</b> · On-account <b>' + (typeof money === 'function' ? money(Math.max(0, onAcct)) : Math.max(0, onAcct)) + '</b>' +
+    (onAcct < -0.001 ? ' <span style="color:var(--red-text)">· Over-allocated</span>' : '');
+}
+
+function submitArReceivePayment() {
+  ensureBooksDb();
+  const clientId = document.getElementById('arRecvClient')?.value;
+  const amount = Number(document.getElementById('arRecvAmount')?.value) || 0;
+  const date = document.getElementById('arRecvDate')?.value || today;
+  const depositId = document.getElementById('arRecvDeposit')?.value || defaultCashAccountId() || '1000';
+  const note = (document.getElementById('arRecvNote')?.value || '').trim();
+  if (!clientId) { toast('Select a customer'); return; }
+  if (!(amount > 0)) { toast('Enter amount received'); return; }
+  const c = (db.clients || []).find(x => String(x.id) === String(clientId));
+  const clientName = (c && c.name) || clientId;
+  const allocations = [];
+  let allocSum = 0;
+  document.querySelectorAll('#arRecvAllocList [data-ar-alloc-inv]:checked').forEach(cb => {
+    const invId = cb.getAttribute('data-ar-alloc-inv');
+    const inp = document.querySelector('#arRecvAllocList [data-ar-alloc-amt="' + invId + '"]');
+    let amt = Number(inp?.value) || 0;
+    const inv = (db.invoices || []).find(i => i.id === invId);
+    if (!inv || !(amt > 0)) return;
+    const bal = balanceDue(inv);
+    if (amt > bal + 0.001) amt = bal;
+    allocations.push({ invoiceId: invId, amount: amt, number: inv.number || '' });
+    allocSum += amt;
+  });
+  allocSum = Math.round(allocSum * 100) / 100;
+  if (allocSum > amount + 0.001) { toast('Allocations exceed amount received'); return; }
+  const onAccount = Math.round((amount - allocSum) * 100) / 100;
+  const receiptId = crypto.randomUUID();
+  const party = { partyType: 'client', partyId: String(clientId), partyName: clientName };
+  const arId = getArControlId();
+  const amtRep = toRep(amount, (db.profile && db.profile.reporting) || 'NGN');
+
+  // One bank receipt journal for the full amount
+  postJournal({
+    date,
+    memo: 'AR receipt · ' + clientName + (note ? ' · ' + note : '') +
+      (allocations.length ? ' · ' + allocations.map(a => a.number || a.invoiceId.slice(0, 6)).join(', ') : ' · on-account'),
+    source: 'ar_receipt',
+    sourceKey: 'j:arrecv:' + receiptId,
+    currency: (db.profile && db.profile.reporting) || 'NGN',
+    lines: [
+      { accountId: depositId, debit: amtRep, credit: 0 },
+      withPartyOnArApLine({ accountId: arId, debit: 0, credit: amtRep }, party)
+    ]
+  });
+
+  db.cashEntries.push({
+    id: crypto.randomUUID(),
+    type: 'in',
+    category: 'ar_receipt',
+    amount,
+    currency: (db.profile && db.profile.reporting) || 'NGN',
+    date,
+    note: 'AR receipt · ' + clientName + (note ? ' · ' + note : ''),
+    source: 'ar_receipt',
+    sourceKey: 'arrecv:' + receiptId,
+    accountId: depositId,
+    clientId
+  });
+
+  // Apply to invoices (document layer; journal already posted)
+  allocations.forEach(a => {
+    const inv = (db.invoices || []).find(i => i.id === a.invoiceId);
+    if (!inv) return;
+    ensurePayments(inv);
+    inv.payments.push({
+      id: crypto.randomUUID(),
+      amount: a.amount,
+      date,
+      method: 'AR receipt',
+      note: note || ('Receipt ' + receiptId.slice(0, 8)),
+      depositAccountId: depositId,
+      receiptId,
+      skipJournal: true
+    });
+    if (inv.status === 'Draft') inv.status = 'Sent';
+    syncPaidFlag(inv);
+  });
+
+  db.arReceipts.push({
+    id: receiptId,
+    clientId: String(clientId),
+    clientName,
+    amount,
+    onAccount: Math.max(0, onAccount),
+    date,
+    depositAccountId: depositId,
+    note,
+    allocations,
+    createdAt: new Date().toISOString()
+  });
+
+  try {
+    appendBooksAudit('ar_receipt', 'ar_receipt', receiptId,
+      'Received ' + amount + ' from ' + clientName,
+      null, { amount, allocations, onAccount }, null);
+  } catch (_) {}
+
+  save();
+  document.getElementById('arReceiveModal')?.classList.remove('show');
+  const m = document.getElementById('arReceiveModal');
+  if (m) m.hidden = true;
+  toast(onAccount > 0.001
+    ? 'Receipt posted · ' + money(allocSum) + ' allocated · ' + money(onAccount) + ' on-account'
+    : 'Receipt posted · ' + money(amount) + ' allocated');
+  try { renderBooksReceivables(); } catch (_) {}
+  try { renderArApSubledgers(); } catch (_) {}
+}
+
+function openArCreditNoteModal(prefill) {
+  ensureBooksDb();
+  const modal = document.getElementById('arCreditModal');
+  if (!modal) return;
+  fillClientSelect(document.getElementById('arCnClient'), prefill && prefill.clientId);
+  const dateEl = document.getElementById('arCnDate');
+  if (dateEl) dateEl.value = (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+  const revSel = document.getElementById('arCnRevenue');
+  if (revSel) {
+    const income = getCoa().filter(a => a.type === 'income' || a.fsLine === 'revenue');
+    const def = (typeof getRevenueAccountId === 'function') ? getRevenueAccountId() : '4000';
+    revSel.innerHTML = income.map(a =>
+      '<option value="' + a.id + '"' + (String(a.id) === String(def) ? ' selected' : '') + '>' +
+      a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>'
+    ).join('') || '<option value="4000">4000 · Revenue</option>';
+  }
+  const refreshInv = () => {
+    const cid = document.getElementById('arCnClient')?.value;
+    const sel = document.getElementById('arCnInvoice');
+    if (!sel) return;
+    const open = arOpenInvoiceItems().filter(r => !cid || String(r.clientId) === String(cid));
+    sel.innerHTML = '<option value="">— Unapplied credit —</option>' + open.map(r =>
+      '<option value="' + r.id + '">' + String(r.number || r.id).replace(/</g, '') +
+      ' · ' + (typeof money === 'function' ? money(r.bal, r.currency) : r.bal) + '</option>'
+    ).join('');
+  };
+  document.getElementById('arCnClient')?.addEventListener('change', refreshInv);
+  refreshInv();
+  document.getElementById('arCnAmount').value = '';
+  document.getElementById('arCnNote').value = '';
+  modal.hidden = false;
+  modal.classList.add('show');
+}
+
+function submitArCreditNote() {
+  ensureBooksDb();
+  const clientId = document.getElementById('arCnClient')?.value;
+  const invoiceId = document.getElementById('arCnInvoice')?.value || null;
+  const amount = Number(document.getElementById('arCnAmount')?.value) || 0;
+  const date = document.getElementById('arCnDate')?.value || today;
+  const revId = document.getElementById('arCnRevenue')?.value || getRevenueAccountId();
+  const note = (document.getElementById('arCnNote')?.value || '').trim();
+  if (!clientId) { toast('Select a customer'); return; }
+  if (!(amount > 0)) { toast('Enter credit amount'); return; }
+  const c = (db.clients || []).find(x => String(x.id) === String(clientId));
+  const clientName = (c && c.name) || clientId;
+  let inv = invoiceId ? (db.invoices || []).find(i => i.id === invoiceId) : null;
+  if (inv) {
+    const bal = balanceDue(inv);
+    if (amount > bal + 0.001) { toast('Credit exceeds invoice balance (' + money(bal, inv.currency) + ')'); return; }
+  }
+  const cnId = crypto.randomUUID();
+  const party = { partyType: 'client', partyId: String(clientId), partyName: clientName };
+  const arId = getArControlId();
+  const amtRep = toRep(amount, (db.profile && db.profile.reporting) || 'NGN');
+  // Credit note: Dr Revenue (returns) / Cr AR
+  postJournal({
+    date,
+    memo: 'Credit note · ' + clientName + (inv ? ' · ' + (inv.number || '') : '') + (note ? ' · ' + note : ''),
+    source: 'credit_note',
+    sourceKey: 'j:cn:' + cnId,
+    currency: (db.profile && db.profile.reporting) || 'NGN',
+    lines: [
+      { accountId: revId, debit: amtRep, credit: 0 },
+      withPartyOnArApLine({ accountId: arId, debit: 0, credit: amtRep }, party)
+    ]
+  });
+  if (inv) {
+    ensurePayments(inv);
+    inv.payments.push({
+      id: crypto.randomUUID(),
+      amount,
+      date,
+      method: 'Credit note',
+      note: note || ('CN ' + cnId.slice(0, 8)),
+      creditNoteId: cnId,
+      skipJournal: true
+    });
+    syncPaidFlag(inv);
+  }
+  db.creditNotes.push({
+    id: cnId,
+    clientId: String(clientId),
+    clientName,
+    invoiceId: inv ? inv.id : null,
+    invoiceNumber: inv ? inv.number : null,
+    amount,
+    unapplied: inv ? 0 : amount,
+    date,
+    revenueAccountId: revId,
+    note,
+    createdAt: new Date().toISOString()
+  });
+  try {
+    appendBooksAudit('credit_note', 'credit_note', cnId, 'Credit note ' + amount + ' · ' + clientName, null, { amount, invoiceId }, null);
+  } catch (_) {}
+  save();
+  document.getElementById('arCreditModal')?.classList.remove('show');
+  const m = document.getElementById('arCreditModal');
+  if (m) m.hidden = true;
+  toast('Credit note posted · ' + money(amount));
+  try { renderBooksReceivables(); } catch (_) {}
+}
+
+function openArWriteOffModal() {
+  ensureBooksDb();
+  const role = (typeof currentOrgRole === 'function') ? currentOrgRole() : 'owner';
+  if (role && role !== 'owner' && role !== 'manager') {
+    toast('Only owner or manager can write off receivables');
+    return;
+  }
+  const modal = document.getElementById('arWriteOffModal');
+  if (!modal) return;
+  const open = arOpenInvoiceItems();
+  const invSel = document.getElementById('arWoInvoice');
+  if (invSel) {
+    invSel.innerHTML = open.map(r =>
+      '<option value="' + r.id + '" data-bal="' + r.bal + '">' +
+      String(r.number || r.id).replace(/</g, '') + ' · ' + String(r.clientName).replace(/</g, '') +
+      ' · ' + (typeof money === 'function' ? money(r.bal, r.currency) : r.bal) + '</option>'
+    ).join('') || '<option value="">No open invoices</option>';
+  }
+  const expSel = document.getElementById('arWoExpense');
+  if (expSel) {
+    const exps = getCoa().filter(a => a.type === 'expense' || /bad.?debt|impairment|write.?off/i.test(a.name || ''));
+    expSel.innerHTML = exps.map(a =>
+      '<option value="' + a.id + '">' + a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>'
+    ).join('') || '<option value="5700">5700 · Expense</option>';
+    const bad = exps.find(a => /bad.?debt/i.test(a.name || ''));
+    if (bad) expSel.value = bad.id;
+  }
+  const dateEl = document.getElementById('arWoDate');
+  if (dateEl) dateEl.value = typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10);
+  const syncAmt = () => {
+    const opt = invSel?.selectedOptions?.[0];
+    const bal = Number(opt?.getAttribute('data-bal')) || 0;
+    const amt = document.getElementById('arWoAmount');
+    if (amt && bal) amt.value = bal;
+  };
+  invSel?.addEventListener('change', syncAmt);
+  syncAmt();
+  document.getElementById('arWoNote').value = '';
+  modal.hidden = false;
+  modal.classList.add('show');
+}
+
+function submitArWriteOff() {
+  ensureBooksDb();
+  const role = (typeof currentOrgRole === 'function') ? currentOrgRole() : 'owner';
+  if (role && role !== 'owner' && role !== 'manager') {
+    toast('Only owner or manager can write off');
+    return;
+  }
+  const invId = document.getElementById('arWoInvoice')?.value;
+  const amount = Number(document.getElementById('arWoAmount')?.value) || 0;
+  const date = document.getElementById('arWoDate')?.value || today;
+  const expId = document.getElementById('arWoExpense')?.value;
+  const note = (document.getElementById('arWoNote')?.value || '').trim();
+  const inv = (db.invoices || []).find(i => i.id === invId);
+  if (!inv) { toast('Select an invoice'); return; }
+  const bal = balanceDue(inv);
+  if (!(amount > 0) || amount > bal + 0.001) {
+    toast('Amount must be between 0 and balance (' + money(bal, inv.currency) + ')');
+    return;
+  }
+  if (!expId) { toast('Pick expense ledger'); return; }
+  const woId = crypto.randomUUID();
+  const party = partyFromInvoice(inv);
+  const arId = getArControlId();
+  const amtRep = toRep(amount, inv.currency);
+  postJournal({
+    date,
+    memo: 'Write-off · ' + (inv.number || '') + (party.partyName ? ' · ' + party.partyName : '') + (note ? ' · ' + note : ''),
+    source: 'ar_writeoff',
+    sourceKey: 'j:arwo:' + woId,
+    currency: (db.profile && db.profile.reporting) || 'NGN',
+    lines: [
+      { accountId: expId, debit: amtRep, credit: 0 },
+      withPartyOnArApLine({ accountId: arId, debit: 0, credit: amtRep }, party)
+    ]
+  });
+  ensurePayments(inv);
+  inv.payments.push({
+    id: crypto.randomUUID(),
+    amount,
+    date,
+    method: 'Write-off',
+    note: note || ('WO ' + woId.slice(0, 8)),
+    writeOffId: woId,
+    skipJournal: true
+  });
+  syncPaidFlag(inv);
+  db.arWriteOffs.push({
+    id: woId,
+    invoiceId: inv.id,
+    invoiceNumber: inv.number,
+    clientId: party.partyId,
+    clientName: party.partyName,
+    amount,
+    date,
+    expenseAccountId: expId,
+    note,
+    createdAt: new Date().toISOString()
+  });
+  try {
+    appendBooksAudit('ar_writeoff', 'invoice', inv.id, 'Write-off ' + amount + ' · ' + (inv.number || ''), null, { amount, note }, null);
+  } catch (_) {}
+  save();
+  document.getElementById('arWriteOffModal')?.classList.remove('show');
+  const m = document.getElementById('arWriteOffModal');
+  if (m) m.hidden = true;
+  toast('Write-off posted · ' + money(amount, inv.currency));
+  try { renderBooksReceivables(); } catch (_) {}
+}
+
+function saveArCollectionsFields(invId, fields) {
+  const inv = (db.invoices || []).find(i => i.id === invId);
+  if (!inv) return;
+  if (fields.promiseDate !== undefined) inv.promiseDate = fields.promiseDate || null;
+  if (fields.collectorName !== undefined) inv.collectorName = fields.collectorName || null;
+  if (fields.disputeFlag !== undefined) inv.disputeFlag = !!fields.disputeFlag;
+  if (fields.disputeNote !== undefined) inv.disputeNote = fields.disputeNote || '';
+  save();
+  try { renderBooksReceivables(); } catch (_) {}
+  toast('Collections updated');
+}
+
+function renderBooksReceivables() {
+  const el = document.getElementById('booksReceivablesList');
+  if (!el) return;
+  ensureBooksDb();
+  const view = (typeof booksTab === 'string' && ['receivables', 'arcredits', 'arcollections'].includes(booksTab))
+    ? booksTab
+    : (_arView || 'receivables');
+  _arView = view;
+
+  const policyEl = document.getElementById('booksArPolicyBar');
+  if (policyEl) {
+    const auto = db.profile && db.profile.arAutoPostOnSend !== false;
+    policyEl.innerHTML = 'Post policy: <b>' + (auto ? 'Auto-post AR on Send' : 'Finance release required') +
+      '</b> · <button type="button" class="button small" id="arTogglePostPolicy" style="margin-left:6px">' +
+      (auto ? 'Require finance release' : 'Enable auto-post') + '</button>';
+    document.getElementById('arTogglePostPolicy')?.addEventListener('click', () => {
+      db.profile.arAutoPostOnSend = !(db.profile.arAutoPostOnSend !== false);
+      save();
+      renderBooksReceivables();
+      toast(db.profile.arAutoPostOnSend !== false ? 'Invoices will post AR when sent' : 'Send keeps invoice commercial until finance posts');
+    });
+  }
+
+  // Wire header buttons once
+  const recvBtn = document.getElementById('booksArReceiveBtn');
+  if (recvBtn && !recvBtn.dataset.wired) {
+    recvBtn.dataset.wired = '1';
+    recvBtn.onclick = () => openArReceivePaymentModal();
+  }
+  const cnBtn = document.getElementById('booksArCreditBtn');
+  if (cnBtn && !cnBtn.dataset.wired) {
+    cnBtn.dataset.wired = '1';
+    cnBtn.onclick = () => openArCreditNoteModal();
+  }
+  const woBtn = document.getElementById('booksArWriteOffBtn');
+  if (woBtn && !woBtn.dataset.wired) {
+    woBtn.dataset.wired = '1';
+    woBtn.onclick = () => openArWriteOffModal();
+  }
+
+  if (view === 'arcredits') {
+    const cns = (db.creditNotes || []).slice().reverse();
+    const onAcct = arOnAccountByClient();
+    let html = '<div style="margin-bottom:14px"><div style="font-size:12px;font-weight:700;margin-bottom:6px">Credit notes</div>';
+    if (!cns.length) html += '<p class="section-sub">No credit notes yet.</p>';
+    else {
+      html += '<table class="table"><thead><tr><th>Date</th><th>Customer</th><th>Invoice</th><th>Reason</th><th class="right">Amount</th></tr></thead><tbody>';
+      cns.forEach(cn => {
+        html += '<tr><td>' + (cn.date || '') + '</td><td>' + String(cn.clientName || '').replace(/</g, '') +
+          '</td><td>' + String(cn.invoiceNumber || (cn.unapplied ? 'Unapplied' : '—')).replace(/</g, '') +
+          '</td><td>' + String(cn.note || '').replace(/</g, '') +
+          '</td><td class="right"><b>' + money(cn.amount) + '</b></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div><div><div style="font-size:12px;font-weight:700;margin-bottom:6px">Customer on-account (unallocated receipts)</div>';
+    if (!onAcct.length) html += '<p class="section-sub">No on-account balances.</p>';
+    else {
+      html += '<table class="table"><thead><tr><th>Customer</th><th class="right">On-account</th><th></th></tr></thead><tbody>';
+      onAcct.forEach(r => {
+        html += '<tr><td>' + String(r.clientName || '').replace(/</g, '') +
+          '</td><td class="right"><b>' + money(r.amount) + '</b></td>' +
+          '<td><button type="button" class="button small" data-ar-recv-client="' + r.clientId + '">Apply</button></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+    el.querySelectorAll('[data-ar-recv-client]').forEach(btn => {
+      btn.onclick = () => openArReceivePaymentModal({ clientId: btn.getAttribute('data-ar-recv-client') });
+    });
+    return;
+  }
+
+  if (view === 'arcollections') {
+    const open = arOpenInvoiceItems().filter(r => r.bal > 0.001);
+    if (!open.length) {
+      el.innerHTML = '<p class="section-sub">Nothing to collect.</p>';
+      return;
+    }
+    let html = '<table class="table"><thead><tr><th>Invoice</th><th>Customer</th><th>Age</th><th class="right">Balance</th><th>Promise</th><th>Owner</th><th>Dispute</th><th></th></tr></thead><tbody>';
+    open.forEach(r => {
+      html += '<tr data-ar-coll-row="' + r.id + '">' +
+        '<td><button type="button" class="button small" data-open="' + r.id + '">' + String(r.number || '—').replace(/</g, '') + '</button></td>' +
+        '<td>' + String(r.clientName).replace(/</g, '') + '</td>' +
+        '<td>' + r.bucket + '</td>' +
+        '<td class="right"><b>' + money(r.bal, r.currency) + '</b></td>' +
+        '<td><input type="date" data-ar-promise="' + r.id + '" value="' + (r.promiseDate || '') + '" style="font-size:12px;max-width:130px"></td>' +
+        '<td><input type="text" data-ar-collector="' + r.id + '" value="' + String(r.collector || '').replace(/"/g, '') +
+        '" placeholder="Name" style="font-size:12px;max-width:100px"></td>' +
+        '<td><label style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" data-ar-dispute="' + r.id + '"' +
+        (r.dispute ? ' checked' : '') + '> Flag</label></td>' +
+        '<td><button type="button" class="button small primary" data-ar-recv-one="' + r.id + '" data-client="' + r.clientId + '">Receive</button> ' +
+        '<button type="button" class="button small" data-ar-coll-save="' + r.id + '">Save</button></td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+    el.querySelectorAll('[data-ar-coll-save]').forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.getAttribute('data-ar-coll-save');
+        saveArCollectionsFields(id, {
+          promiseDate: el.querySelector('[data-ar-promise="' + id + '"]')?.value || null,
+          collectorName: el.querySelector('[data-ar-collector="' + id + '"]')?.value || null,
+          disputeFlag: !!el.querySelector('[data-ar-dispute="' + id + '"]')?.checked
+        });
+      };
+    });
+    el.querySelectorAll('[data-ar-recv-one]').forEach(btn => {
+      btn.onclick = () => {
+        const inv = (db.invoices || []).find(i => i.id === btn.getAttribute('data-ar-recv-one'));
+        openArReceivePaymentModal({
+          clientId: btn.getAttribute('data-client'),
+          amount: inv ? balanceDue(inv) : null
+        });
+      };
+    });
+    return;
+  }
+
+  // Default: Open AR + aging from open items
+  const open = arOpenInvoiceItems();
+  const pendingRelease = (db.invoices || []).filter(inv =>
+    inv && inv.status === 'Sent' && inv.arPendingRelease && balanceDue(inv) > 0.001
+  );
+  if (!open.length && !pendingRelease.length) {
     el.innerHTML = '<p class="section-sub">No open receivables. Sent invoices with a balance will appear here.</p>';
     return;
   }
-  const buckets = { 'Current': 0, '1–30': 0, '31–60': 0, '61–90': 0, '90+': 0 };
-  open.forEach(r => { buckets[r.bucket] = (buckets[r.bucket] || 0) + toRep(r.bal, r.inv.currency); });
+  const buckets = arAgingFromOpenItems(open);
   let html = '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px">';
   Object.entries(buckets).forEach(([k, v]) => {
-    if (v > 0.001) html += `<span class="badge">${k}: ${money(v)}</span>`;
+    if (v > 0.001) html += '<span class="badge">' + k + ': ' + money(v) + '</span>';
   });
+  const totalOpen = open.reduce((s, r) => s + toRep(r.bal, r.currency), 0);
+  html += '<span class="badge" style="background:#dbeafe;color:#1e40af">Total open · ' + money(totalOpen) + '</span>';
   html += '</div>';
-  html += `<table class="table"><thead><tr><th>Invoice</th><th>Client</th><th>Due</th><th>Age</th><th class="right">Balance</th></tr></thead><tbody>`;
+
+  if (pendingRelease.length) {
+    html += '<div style="margin-bottom:12px;padding:10px 12px;border:1px solid #fcd34d;border-radius:10px;background:#fffbeb">' +
+      '<div style="font-size:12px;font-weight:700;margin-bottom:6px">Awaiting finance release (' + pendingRelease.length + ')</div>';
+    pendingRelease.forEach(inv => {
+      const c = typeof client === 'function' ? client(inv.client) : null;
+      html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:4px 0">' +
+        '<span style="font-size:13px"><b>' + String(inv.number || '').replace(/</g, '') + '</b> · ' +
+        String((c && c.name) || '').replace(/</g, '') + ' · ' + money(balanceDue(inv), inv.currency) + '</span>' +
+        '<button type="button" class="button small primary" data-ar-release="' + inv.id + '">Post to AR</button></div>';
+    });
+    html += '</div>';
+  }
+
+  html += '<table class="table"><thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Age</th><th>GL</th><th class="right">Balance</th><th></th></tr></thead><tbody>';
   open.forEach(r => {
-    const c = client(r.inv.client);
-    html += `<tr>
-      <td><button type="button" class="button small" data-open="${r.inv.id}">${r.inv.number || '—'}</button></td>
-      <td>${c?.name || '—'}</td>
-      <td>${r.due || '—'}</td>
-      <td>${r.bucket}</td>
-      <td class="right"><b>${money(r.bal, r.inv.currency)}</b></td>
-    </tr>`;
+    html += '<tr>' +
+      '<td><button type="button" class="button small" data-open="' + r.id + '">' + String(r.number || '—').replace(/</g, '') + '</button></td>' +
+      '<td>' + String(r.clientName).replace(/</g, '') + '</td>' +
+      '<td>' + (r.due || '—') + '</td>' +
+      '<td>' + r.bucket + (r.dispute ? ' · <span class="badge" style="background:#fee2e2;color:#991b1b">Dispute</span>' : '') + '</td>' +
+      '<td>' + (r.posted ? 'Posted' : '<span style="color:#92400e">Pending</span>') + '</td>' +
+      '<td class="right"><b>' + money(r.bal, r.currency) + '</b></td>' +
+      '<td><button type="button" class="button small primary" data-ar-recv-one="' + r.id + '" data-client="' + r.clientId + '">Receive</button></td></tr>';
   });
   html += '</tbody></table>';
   el.innerHTML = html;
+
+  el.querySelectorAll('[data-ar-recv-one]').forEach(btn => {
+    btn.onclick = () => {
+      const inv = (db.invoices || []).find(i => i.id === btn.getAttribute('data-ar-recv-one'));
+      openArReceivePaymentModal({
+        clientId: btn.getAttribute('data-client'),
+        amount: inv ? balanceDue(inv) : null
+      });
+    };
+  });
+  el.querySelectorAll('[data-ar-release]').forEach(btn => {
+    btn.onclick = () => {
+      const inv = (db.invoices || []).find(i => i.id === btn.getAttribute('data-ar-release'));
+      if (!inv) return;
+      postInvoiceAccrualWithLedgerPick(inv).then(ok => {
+        if (ok) {
+          inv.arPendingRelease = false;
+          save();
+          toast('Posted to AR');
+          renderBooksReceivables();
+        }
+      }).catch(e => toast(e.message || 'Post failed'));
+    };
+  });
 }
 
 function renderBooksCoa() {
@@ -32655,6 +33468,36 @@ document.getElementById('booksPages')?.addEventListener('click', (e) => {
   if (!btn) return;
   setBooksPage(btn.getAttribute('data-books-page'));
 });
+
+/* AR desk modals */
+document.getElementById('arRecvSubmit')?.addEventListener('click', () => {
+  try { submitArReceivePayment(); } catch (err) { toast(err.message || 'Receipt failed'); }
+});
+document.getElementById('arCnSubmit')?.addEventListener('click', () => {
+  try { submitArCreditNote(); } catch (err) { toast(err.message || 'Credit note failed'); }
+});
+document.getElementById('arWoSubmit')?.addEventListener('click', () => {
+  try { submitArWriteOff(); } catch (err) { toast(err.message || 'Write-off failed'); }
+});
+document.querySelectorAll('[data-ar-recv-close]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const m = document.getElementById('arReceiveModal');
+    if (m) { m.classList.remove('show'); m.hidden = true; }
+  });
+});
+document.querySelectorAll('[data-ar-cn-close]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const m = document.getElementById('arCreditModal');
+    if (m) { m.classList.remove('show'); m.hidden = true; }
+  });
+});
+document.querySelectorAll('[data-ar-wo-close]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const m = document.getElementById('arWriteOffModal');
+    if (m) { m.classList.remove('show'); m.hidden = true; }
+  });
+});
+
 document.getElementById('cashSave')?.addEventListener('click', async () => {
   ensureBooksDb();
   const amount = Number(document.getElementById('cashAmount')?.value || 0);
