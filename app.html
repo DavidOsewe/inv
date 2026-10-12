@@ -5155,129 +5155,7 @@ body:has(.modalback.show) .notif-panel {
         <div id="booksReceivablesList"></div>
       </div>
 
-      <!-- AR Receive payment (allocate) -->
-      <div class="modal" id="arReceiveModal" role="dialog" aria-modal="true" aria-labelledby="arReceiveTitle" hidden>
-        <div class="modal-card" style="max-width:560px;width:95vw;max-height:90vh;overflow:auto">
-          <div class="modal-head">
-            <h3 id="arReceiveTitle">Receive payment</h3>
-            <button type="button" class="icon-btn" data-ar-recv-close aria-label="Close">&times;</button>
-          </div>
-          <div class="modal-body" style="display:flex;flex-direction:column;gap:12px">
-            <div class="field">
-              <label>Customer</label>
-              <select id="arRecvClient" class="searchable" data-searchable="1"></select>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-              <div class="field" style="margin:0">
-                <label>Amount received</label>
-                <input type="number" id="arRecvAmount" min="0" step="0.01" placeholder="0.00">
-              </div>
-              <div class="field" style="margin:0">
-                <label>Date</label>
-                <input type="date" id="arRecvDate">
-              </div>
-            </div>
-            <div class="field">
-              <label>Deposit to</label>
-              <select id="arRecvDeposit" class="searchable" data-searchable="1"></select>
-            </div>
-            <div class="field">
-              <label>Note / reference</label>
-              <input type="text" id="arRecvNote" placeholder="Bank ref, cheque no…">
-            </div>
-            <div>
-              <div style="font-size:12px;font-weight:700;margin-bottom:6px">Allocate to open invoices</div>
-              <div id="arRecvAllocList" style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px"></div>
-              <p class="section-sub" id="arRecvAllocSummary" style="margin:8px 0 0"></p>
-            </div>
-          </div>
-          <div class="modal-foot" style="display:flex;gap:8px;justify-content:flex-end">
-            <button type="button" class="button" data-ar-recv-close>Cancel</button>
-            <button type="button" class="button primary" id="arRecvSubmit">Post receipt</button>
-          </div>
-        </div>
-      </div>
 
-      <!-- Credit note -->
-      <div class="modal" id="arCreditModal" role="dialog" aria-modal="true" hidden>
-        <div class="modal-card" style="max-width:480px;width:95vw">
-          <div class="modal-head">
-            <h3>Credit note</h3>
-            <button type="button" class="icon-btn" data-ar-cn-close aria-label="Close">&times;</button>
-          </div>
-          <div class="modal-body" style="display:flex;flex-direction:column;gap:12px">
-            <div class="field">
-              <label>Customer</label>
-              <select id="arCnClient" class="searchable" data-searchable="1"></select>
-            </div>
-            <div class="field">
-              <label>Apply to invoice (optional)</label>
-              <select id="arCnInvoice"></select>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-              <div class="field" style="margin:0">
-                <label>Amount</label>
-                <input type="number" id="arCnAmount" min="0" step="0.01">
-              </div>
-              <div class="field" style="margin:0">
-                <label>Date</label>
-                <input type="date" id="arCnDate">
-              </div>
-            </div>
-            <div class="field">
-              <label>Revenue / returns ledger</label>
-              <select id="arCnRevenue" class="searchable" data-searchable="1"></select>
-            </div>
-            <div class="field">
-              <label>Reason</label>
-              <input type="text" id="arCnNote" placeholder="Return, discount, billing error…">
-            </div>
-          </div>
-          <div class="modal-foot" style="display:flex;gap:8px;justify-content:flex-end">
-            <button type="button" class="button" data-ar-cn-close>Cancel</button>
-            <button type="button" class="button primary" id="arCnSubmit">Post credit note</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Write-off -->
-      <div class="modal" id="arWriteOffModal" role="dialog" aria-modal="true" hidden>
-        <div class="modal-card" style="max-width:480px;width:95vw">
-          <div class="modal-head">
-            <h3>Write off receivable</h3>
-            <button type="button" class="icon-btn" data-ar-wo-close aria-label="Close">&times;</button>
-          </div>
-          <div class="modal-body" style="display:flex;flex-direction:column;gap:12px">
-            <p class="section-sub" style="margin:0">Owner/manager only. Posts Dr Bad debt (or chosen expense) / Cr AR.</p>
-            <div class="field">
-              <label>Invoice</label>
-              <select id="arWoInvoice"></select>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-              <div class="field" style="margin:0">
-                <label>Amount</label>
-                <input type="number" id="arWoAmount" min="0" step="0.01">
-              </div>
-              <div class="field" style="margin:0">
-                <label>Date</label>
-                <input type="date" id="arWoDate">
-              </div>
-            </div>
-            <div class="field">
-              <label>Expense ledger (bad debt)</label>
-              <select id="arWoExpense" class="searchable" data-searchable="1"></select>
-            </div>
-            <div class="field">
-              <label>Reason</label>
-              <input type="text" id="arWoNote" placeholder="Uncollectible, settlement…">
-            </div>
-          </div>
-          <div class="modal-foot" style="display:flex;gap:8px;justify-content:flex-end">
-            <button type="button" class="button" data-ar-wo-close>Cancel</button>
-            <button type="button" class="button primary" id="arWoSubmit">Post write-off</button>
-          </div>
-        </div>
-      </div>
       <div id="booksPanelPeriodLock" hidden>
         <div class="insight">
           <h3 style="margin:0 0 6px">Period lock</h3>
@@ -6210,6 +6088,115 @@ body:has(.modalback.show) .notif-panel {
 
 
 
+
+<!-- AR desk modals (modalback = centered overlay, same as rest of app) -->
+<div class="modalback" id="arReceiveModal">
+  <div class="modal" style="max-width:560px;max-height:90vh;overflow:auto">
+    <h2 id="arReceiveTitle">Receive payment</h2>
+    <p class="section-sub" style="margin:0 0 12px">Allocate across open invoices or leave on-account for the customer.</p>
+    <div class="field">
+      <label>Customer</label>
+      <select id="arRecvClient" class="searchable" data-searchable="1"></select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field" style="margin:0">
+        <label>Amount received</label>
+        <input type="number" id="arRecvAmount" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="field" style="margin:0">
+        <label>Date</label>
+        <input type="date" id="arRecvDate">
+      </div>
+    </div>
+    <div class="field">
+      <label>Deposit to</label>
+      <select id="arRecvDeposit" class="searchable" data-searchable="1"></select>
+    </div>
+    <div class="field">
+      <label>Note / reference</label>
+      <input type="text" id="arRecvNote" placeholder="Bank ref, cheque no…">
+    </div>
+    <div style="margin-top:4px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">Allocate to open invoices</div>
+      <div id="arRecvAllocList" style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--panel-2)"></div>
+      <p class="section-sub" id="arRecvAllocSummary" style="margin:8px 0 0"></p>
+    </div>
+    <div class="buttons" style="justify-content:flex-end;margin-top:16px;gap:10px">
+      <button type="button" class="button" data-ar-recv-close>Cancel</button>
+      <button type="button" class="button primary" id="arRecvSubmit">Post receipt</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="arCreditModal">
+  <div class="modal" style="max-width:480px;max-height:90vh;overflow:auto">
+    <h2>Credit note</h2>
+    <p class="section-sub" style="margin:0 0 12px">Reduces AR. Optionally apply to an open invoice.</p>
+    <div class="field">
+      <label>Customer</label>
+      <select id="arCnClient" class="searchable" data-searchable="1"></select>
+    </div>
+    <div class="field">
+      <label>Apply to invoice (optional)</label>
+      <select id="arCnInvoice"></select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field" style="margin:0">
+        <label>Amount</label>
+        <input type="number" id="arCnAmount" min="0" step="0.01">
+      </div>
+      <div class="field" style="margin:0">
+        <label>Date</label>
+        <input type="date" id="arCnDate">
+      </div>
+    </div>
+    <div class="field">
+      <label>Revenue / returns ledger</label>
+      <select id="arCnRevenue" class="searchable" data-searchable="1"></select>
+    </div>
+    <div class="field">
+      <label>Reason</label>
+      <input type="text" id="arCnNote" placeholder="Return, discount, billing error…">
+    </div>
+    <div class="buttons" style="justify-content:flex-end;margin-top:16px;gap:10px">
+      <button type="button" class="button" data-ar-cn-close>Cancel</button>
+      <button type="button" class="button primary" id="arCnSubmit">Post credit note</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalback" id="arWriteOffModal">
+  <div class="modal" style="max-width:480px;max-height:90vh;overflow:auto">
+    <h2>Write off receivable</h2>
+    <p class="section-sub" style="margin:0 0 12px">Owner/manager only. Posts Dr Bad debt (or chosen expense) / Cr AR.</p>
+    <div class="field">
+      <label>Invoice</label>
+      <select id="arWoInvoice"></select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field" style="margin:0">
+        <label>Amount</label>
+        <input type="number" id="arWoAmount" min="0" step="0.01">
+      </div>
+      <div class="field" style="margin:0">
+        <label>Date</label>
+        <input type="date" id="arWoDate">
+      </div>
+    </div>
+    <div class="field">
+      <label>Expense ledger (bad debt)</label>
+      <select id="arWoExpense" class="searchable" data-searchable="1"></select>
+    </div>
+    <div class="field">
+      <label>Reason</label>
+      <input type="text" id="arWoNote" placeholder="Uncollectible, settlement…">
+    </div>
+    <div class="buttons" style="justify-content:flex-end;margin-top:16px;gap:10px">
+      <button type="button" class="button" data-ar-wo-close>Cancel</button>
+      <button type="button" class="button primary" id="arWoSubmit">Post write-off</button>
+    </div>
+  </div>
+</div>
 
 <div class="modalback" id="chatDmModal">
   <div class="modal" style="max-width:420px">
@@ -23394,8 +23381,10 @@ function setBooksPage(page, tab) {
   }
   const toolbar = document.getElementById('booksToolbar');
   if (toolbar) {
-    // Period matters most for Home + Reports
-    toolbar.style.display = (booksPage === 'banking' && (activeTab || conf.defaultTab) === 'banktx') ? 'none' : '';
+    // Period matters for Home + Reports; hide on AR desk (open items are not period-sliced)
+    const hideToolbar = (booksPage === 'banking' && (activeTab || conf.defaultTab) === 'banktx')
+      || booksPage === 'ar';
+    toolbar.style.display = hideToolbar ? 'none' : '';
   }
   setBooksTab(activeTab);
 }
@@ -26002,9 +25991,10 @@ let _arView = 'receivables';
 /** Open AR items = invoices with balance due (after payments + credit notes applied). */
 function arOpenInvoiceItems() {
   return (db.invoices || []).filter(inv => {
-    if (!inv || inv.status === 'Draft' || inv.status === 'void' || inv.voided) return false;
-    // Awaiting finance release still shows as commercial open, not posted AR
-    syncPaidFlag(inv);
+    if (!inv) return false;
+    const st = String(inv.status || '').toLowerCase();
+    if (st === 'draft' || st === 'void' || inv.voided) return false;
+    try { syncPaidFlag(inv); } catch (_) {}
     return balanceDue(inv) > 0.001;
   }).map(inv => {
     const due = inv.due || inv.issue || '';
@@ -26087,8 +26077,16 @@ function fillClientSelect(sel, preferred) {
   ).join('');
 }
 
+function closeArModals() {
+  ['arReceiveModal', 'arCreditModal', 'arWriteOffModal'].forEach(id => {
+    const m = document.getElementById(id);
+    if (m) m.classList.remove('show');
+  });
+}
+
 function openArReceivePaymentModal(prefill) {
   ensureBooksDb();
+  closeArModals();
   const modal = document.getElementById('arReceiveModal');
   if (!modal) { toast('Receive payment UI missing'); return; }
   fillClientSelect(document.getElementById('arRecvClient'), prefill && prefill.clientId);
@@ -26134,10 +26132,17 @@ function openArReceivePaymentModal(prefill) {
     });
     updateArRecvAllocSummary();
   };
-  document.getElementById('arRecvClient')?.addEventListener('change', refreshAlloc);
-  document.getElementById('arRecvAmount')?.addEventListener('input', updateArRecvAllocSummary);
+  const clientSel = document.getElementById('arRecvClient');
+  if (clientSel && !clientSel.dataset.arWired) {
+    clientSel.dataset.arWired = '1';
+    clientSel.addEventListener('change', refreshAlloc);
+  }
+  const amtInput = document.getElementById('arRecvAmount');
+  if (amtInput && !amtInput.dataset.arWired) {
+    amtInput.dataset.arWired = '1';
+    amtInput.addEventListener('input', updateArRecvAllocSummary);
+  }
   refreshAlloc();
-  modal.hidden = false;
   modal.classList.add('show');
 }
 
@@ -26256,9 +26261,7 @@ function submitArReceivePayment() {
   } catch (_) {}
 
   save();
-  document.getElementById('arReceiveModal')?.classList.remove('show');
-  const m = document.getElementById('arReceiveModal');
-  if (m) m.hidden = true;
+  closeArModals();
   toast(onAccount > 0.001
     ? 'Receipt posted · ' + money(allocSum) + ' allocated · ' + money(onAccount) + ' on-account'
     : 'Receipt posted · ' + money(amount) + ' allocated');
@@ -26268,6 +26271,7 @@ function submitArReceivePayment() {
 
 function openArCreditNoteModal(prefill) {
   ensureBooksDb();
+  closeArModals();
   const modal = document.getElementById('arCreditModal');
   if (!modal) return;
   fillClientSelect(document.getElementById('arCnClient'), prefill && prefill.clientId);
@@ -26292,11 +26296,14 @@ function openArCreditNoteModal(prefill) {
       ' · ' + (typeof money === 'function' ? money(r.bal, r.currency) : r.bal) + '</option>'
     ).join('');
   };
-  document.getElementById('arCnClient')?.addEventListener('change', refreshInv);
+  const cnClient = document.getElementById('arCnClient');
+  if (cnClient && !cnClient.dataset.arWired) {
+    cnClient.dataset.arWired = '1';
+    cnClient.addEventListener('change', refreshInv);
+  }
   refreshInv();
-  document.getElementById('arCnAmount').value = '';
-  document.getElementById('arCnNote').value = '';
-  modal.hidden = false;
+  if (document.getElementById('arCnAmount')) document.getElementById('arCnAmount').value = '';
+  if (document.getElementById('arCnNote')) document.getElementById('arCnNote').value = '';
   modal.classList.add('show');
 }
 
@@ -26363,15 +26370,14 @@ function submitArCreditNote() {
     appendBooksAudit('credit_note', 'credit_note', cnId, 'Credit note ' + amount + ' · ' + clientName, null, { amount, invoiceId }, null);
   } catch (_) {}
   save();
-  document.getElementById('arCreditModal')?.classList.remove('show');
-  const m = document.getElementById('arCreditModal');
-  if (m) m.hidden = true;
+  closeArModals();
   toast('Credit note posted · ' + money(amount));
   try { renderBooksReceivables(); } catch (_) {}
 }
 
 function openArWriteOffModal() {
   ensureBooksDb();
+  closeArModals();
   const role = (typeof currentOrgRole === 'function') ? currentOrgRole() : 'owner';
   if (role && role !== 'owner' && role !== 'manager') {
     toast('Only owner or manager can write off receivables');
@@ -26405,10 +26411,12 @@ function openArWriteOffModal() {
     const amt = document.getElementById('arWoAmount');
     if (amt && bal) amt.value = bal;
   };
-  invSel?.addEventListener('change', syncAmt);
+  if (invSel && !invSel.dataset.arWired) {
+    invSel.dataset.arWired = '1';
+    invSel.addEventListener('change', syncAmt);
+  }
   syncAmt();
-  document.getElementById('arWoNote').value = '';
-  modal.hidden = false;
+  if (document.getElementById('arWoNote')) document.getElementById('arWoNote').value = '';
   modal.classList.add('show');
 }
 
@@ -26474,9 +26482,7 @@ function submitArWriteOff() {
     appendBooksAudit('ar_writeoff', 'invoice', inv.id, 'Write-off ' + amount + ' · ' + (inv.number || ''), null, { amount, note }, null);
   } catch (_) {}
   save();
-  document.getElementById('arWriteOffModal')?.classList.remove('show');
-  const m = document.getElementById('arWriteOffModal');
-  if (m) m.hidden = true;
+  closeArModals();
   toast('Write-off posted · ' + money(amount, inv.currency));
   try { renderBooksReceivables(); } catch (_) {}
 }
@@ -26614,11 +26620,45 @@ function renderBooksReceivables() {
 
   // Default: Open AR + aging from open items
   const open = arOpenInvoiceItems();
-  const pendingRelease = (db.invoices || []).filter(inv =>
-    inv && inv.status === 'Sent' && inv.arPendingRelease && balanceDue(inv) > 0.001
-  );
+  const pendingRelease = (db.invoices || []).filter(inv => {
+    if (!inv) return false;
+    const st = String(inv.status || '');
+    return (st === 'Sent' || st === 'sent') && inv.arPendingRelease && balanceDue(inv) > 0.001;
+  });
   if (!open.length && !pendingRelease.length) {
-    el.innerHTML = '<p class="section-sub">No open receivables. Sent invoices with a balance will appear here.</p>';
+    let glAr = 0;
+    try {
+      const arId = getArControlId();
+      const bal = typeof accountBalances === 'function' ? accountBalances(null) : {};
+      glAr = Math.max(0, bal[arId] || 0);
+    } catch (_) {}
+    let subRows = [];
+    try { subRows = (typeof arSubledgerBalances === 'function' ? arSubledgerBalances() : []).filter(r => (r.balance || 0) > 0.001); } catch (_) {}
+    let html = '<div style="padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">';
+    html += '<p class="section-sub" style="margin:0 0 8px"><b>No open invoice balances</b> — every sent invoice is fully paid (or still draft).</p>';
+    if (glAr > 0.001) {
+      html += '<p class="section-sub" style="margin:0 0 8px">Ledger AR still shows <b>' + money(glAr) +
+        '</b>. That usually means accruals without matching open invoices (old data or payments recorded only on the invoice). Use customer statements under Home → Receivables by customer, or post a receipt / write-off against the party.</p>';
+    }
+    if (subRows.length) {
+      html += '<div style="font-size:12px;font-weight:700;margin:10px 0 6px">Customers with AR on the subledger</div>';
+      html += '<table class="table"><thead><tr><th>Customer</th><th class="right">Balance</th><th></th></tr></thead><tbody>';
+      subRows.slice(0, 12).forEach(r => {
+        html += '<tr><td>' + String(r.partyName || '—').replace(/</g, '') +
+          '</td><td class="right"><b>' + money(r.balance) + '</b></td>' +
+          '<td><button type="button" class="button small primary" data-ar-recv-client="' +
+          String(r.partyId || '').replace(/"/g, '') + '">Receive</button></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '<div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px">' +
+      '<button type="button" class="button primary" id="arEmptyRecv">+ Receive payment</button>' +
+      '<button type="button" class="button small" onclick="switchTo(\'invoices\')">Open invoices</button></div></div>';
+    el.innerHTML = html;
+    el.querySelectorAll('[data-ar-recv-client]').forEach(btn => {
+      btn.onclick = () => openArReceivePaymentModal({ clientId: btn.getAttribute('data-ar-recv-client') });
+    });
+    document.getElementById('arEmptyRecv')?.addEventListener('click', () => openArReceivePaymentModal());
     return;
   }
   const buckets = arAgingFromOpenItems(open);
@@ -33480,21 +33520,18 @@ document.getElementById('arWoSubmit')?.addEventListener('click', () => {
   try { submitArWriteOff(); } catch (err) { toast(err.message || 'Write-off failed'); }
 });
 document.querySelectorAll('[data-ar-recv-close]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const m = document.getElementById('arReceiveModal');
-    if (m) { m.classList.remove('show'); m.hidden = true; }
-  });
+  btn.addEventListener('click', () => closeArModals());
 });
 document.querySelectorAll('[data-ar-cn-close]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const m = document.getElementById('arCreditModal');
-    if (m) { m.classList.remove('show'); m.hidden = true; }
-  });
+  btn.addEventListener('click', () => closeArModals());
 });
 document.querySelectorAll('[data-ar-wo-close]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const m = document.getElementById('arWriteOffModal');
-    if (m) { m.classList.remove('show'); m.hidden = true; }
+  btn.addEventListener('click', () => closeArModals());
+});
+// Click backdrop to close
+['arReceiveModal', 'arCreditModal', 'arWriteOffModal'].forEach(id => {
+  document.getElementById(id)?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeArModals();
   });
 });
 
