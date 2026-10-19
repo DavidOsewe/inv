@@ -25992,19 +25992,29 @@ let _arView = 'receivables';
 function arOpenInvoiceItems() {
   return (db.invoices || []).filter(inv => {
     if (!inv) return false;
+    if (inv.voided) return false;
     const st = String(inv.status || '').toLowerCase();
-    if (st === 'draft' || st === 'void' || inv.voided) return false;
+    if (st === 'draft' || st === 'void' || st === 'cancelled' || st === 'canceled') return false;
     try { syncPaidFlag(inv); } catch (_) {}
+    // Still open if money is owed — even if status was wrongly left as Paid
     return balanceDue(inv) > 0.001;
   }).map(inv => {
     const due = inv.due || inv.issue || '';
-    const days = due ? Math.floor((Date.now() - new Date(due + 'T12:00:00').getTime()) / 86400000) : 0;
+    let days = 0;
+    if (due) {
+      const t = new Date(due + (String(due).length <= 10 ? 'T12:00:00' : '')).getTime();
+      if (Number.isFinite(t)) days = Math.floor((Date.now() - t) / 86400000);
+    }
     let bucket = 'Current';
     if (days > 90) bucket = '90+';
     else if (days > 60) bucket = '61–90';
     else if (days > 30) bucket = '31–60';
     else if (days > 0) bucket = '1–30';
     const c = typeof client === 'function' ? client(inv.client) : null;
+    const bal = balanceDue(inv);
+    const posted = !!(inv.revenueAccountId || (db.journals || []).some(j =>
+      j && !j.reversed && j.source === 'invoice_accrual' && j.sourceKey === 'j:inv:' + inv.id
+    ));
     return {
       kind: 'invoice',
       id: inv.id,
@@ -26015,15 +26025,45 @@ function arOpenInvoiceItems() {
       due,
       days: Math.max(0, days),
       bucket,
-      bal: balanceDue(inv),
-      currency: inv.currency,
-      posted: !!(inv.revenueAccountId || (db.journals || []).some(j => j && !j.reversed && j.sourceKey === 'j:inv:' + inv.id)),
+      bal,
+      currency: inv.currency || (db.profile && db.profile.reporting) || 'NGN',
+      posted,
       promiseDate: inv.promiseDate || null,
       collector: inv.collectorName || inv.collectorUserId || null,
       dispute: !!(inv.disputeFlag || inv.disputed),
       disputeNote: inv.disputeNote || ''
     };
   }).sort((a, b) => b.days - a.days || String(a.due).localeCompare(String(b.due)));
+}
+
+/** Open invoice balance total in reporting currency (document layer). */
+function arOpenInvoicesTotalRep() {
+  return arOpenInvoiceItems().reduce((n, r) => n + toRep(r.bal, r.currency), 0);
+}
+
+/** GL AR control balance (asset, debit-positive). */
+function arGlBalance() {
+  try {
+    const arId = getArControlId();
+    const bal = typeof accountBalances === 'function' ? accountBalances(null) : {};
+    return Math.max(0, bal[arId] || 0);
+  } catch (_) {
+    return 0;
+  }
+}
+
+function refreshArUi() {
+  try { renderBooksReceivables(); } catch (_) {}
+  try { renderArApSubledgers(); } catch (_) {}
+  try {
+    if (typeof booksPage === 'string' && booksPage === 'home' && typeof booksView === 'function') booksView();
+    else if (typeof updateBooksMetrics === 'function') updateBooksMetrics();
+  } catch (_) {}
+  // Always refresh the AR metric card if present
+  try {
+    const elAR = document.getElementById('booksAR');
+    if (elAR) elAR.textContent = money(arGlBalance());
+  } catch (_) {}
 }
 
 function arAgingFromOpenItems(items) {
@@ -26052,16 +26092,24 @@ function arOnAccountByClient() {
 
 function fillCashDepositSelect(sel, preferred) {
   if (!sel) return;
-  const cashIds = new Set();
+  let opts = [];
   try {
-    getCoa().forEach(a => {
-      if (a && (a.fsLine === 'cash_and_equivalents' || /cash|bank/i.test(a.name || '') || a.id === '1000')) {
-        cashIds.add(String(a.id));
-      }
+    opts = getCoa().filter(a => {
+      if (!a || a.archived) return false;
+      if (a.fsLine === 'cash_and_equivalents') return true;
+      if (String(a.id) === '1000') return true;
+      const n = String(a.name || '');
+      // Cash / bank only — not every asset (inventory, AR, fixed assets)
+      return /^(cash|bank|petty\s*cash|mobile\s*money|pos\s*float)/i.test(n)
+        || /\b(cash|bank account|current account)\b/i.test(n);
     });
   } catch (_) {}
-  const opts = getCoa().filter(a => cashIds.has(String(a.id)) || a.type === 'asset');
-  const prefer = preferred || defaultCashAccountId() || '1000';
+  if (!opts.length) {
+    try {
+      opts = getCoa().filter(a => a && (a.type === 'asset') && /cash|bank/i.test(a.name || ''));
+    } catch (_) {}
+  }
+  const prefer = preferred || (typeof defaultCashAccountId === 'function' && defaultCashAccountId()) || '1000';
   sel.innerHTML = opts.map(a =>
     '<option value="' + a.id + '"' + (String(a.id) === String(prefer) ? ' selected' : '') + '>' +
     a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>'
@@ -26107,14 +26155,21 @@ function openArReceivePaymentModal(prefill) {
     }
     const open = arOpenInvoiceItems().filter(r => String(r.clientId) === String(cid));
     if (!open.length) {
-      list.innerHTML = '<p class="section-sub" style="margin:0">No open invoices — full amount stays on-account for this customer.</p>';
+      list.innerHTML = '<p class="section-sub" style="margin:0">No open invoices — full amount stays on-account for this customer (clears AR control only).</p>';
       return;
+    }
+    // Prefill amount with open total when user hasn't typed one yet
+    const amtInput = document.getElementById('arRecvAmount');
+    const openSum = open.reduce((n, r) => n + (Number(r.bal) || 0), 0);
+    if (amtInput && (!(Number(amtInput.value) > 0) || amtInput.dataset.autoPrefill === '1')) {
+      amtInput.value = Math.round(openSum * 100) / 100;
+      amtInput.dataset.autoPrefill = '1';
     }
     list.innerHTML = open.map(r =>
       '<label style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid var(--line);font-size:13px">' +
       '<input type="checkbox" data-ar-alloc-inv="' + r.id + '" data-ar-alloc-bal="' + r.bal + '" checked>' +
       '<span style="flex:1"><b>' + String(r.number || r.id).replace(/</g, '') + '</b> · due ' + (r.due || '—') +
-      ' · ' + r.bucket + '</span>' +
+      ' · ' + r.bucket + (r.posted ? '' : ' · <span style="color:var(--amber-text,#b45309)">unposted</span>') + '</span>' +
       '<input type="number" min="0" step="0.01" data-ar-alloc-amt="' + r.id + '" value="' + r.bal +
       '" style="width:100px;font-size:13px" title="Allocate">' +
       '</label>'
@@ -26140,7 +26195,10 @@ function openArReceivePaymentModal(prefill) {
   const amtInput = document.getElementById('arRecvAmount');
   if (amtInput && !amtInput.dataset.arWired) {
     amtInput.dataset.arWired = '1';
-    amtInput.addEventListener('input', updateArRecvAllocSummary);
+    amtInput.addEventListener('input', () => {
+      amtInput.dataset.autoPrefill = '0';
+      updateArRecvAllocSummary();
+    });
   }
   refreshAlloc();
   modal.classList.add('show');
@@ -26265,8 +26323,7 @@ function submitArReceivePayment() {
   toast(onAccount > 0.001
     ? 'Receipt posted · ' + money(allocSum) + ' allocated · ' + money(onAccount) + ' on-account'
     : 'Receipt posted · ' + money(amount) + ' allocated');
-  try { renderBooksReceivables(); } catch (_) {}
-  try { renderArApSubledgers(); } catch (_) {}
+  refreshArUi();
 }
 
 function openArCreditNoteModal(prefill) {
@@ -26372,7 +26429,7 @@ function submitArCreditNote() {
   save();
   closeArModals();
   toast('Credit note posted · ' + money(amount));
-  try { renderBooksReceivables(); } catch (_) {}
+  refreshArUi();
 }
 
 function openArWriteOffModal() {
@@ -26484,7 +26541,7 @@ function submitArWriteOff() {
   save();
   closeArModals();
   toast('Write-off posted · ' + money(amount, inv.currency));
-  try { renderBooksReceivables(); } catch (_) {}
+  refreshArUi();
 }
 
 function saveArCollectionsFields(invId, fields) {
@@ -26622,23 +26679,18 @@ function renderBooksReceivables() {
   const open = arOpenInvoiceItems();
   const pendingRelease = (db.invoices || []).filter(inv => {
     if (!inv) return false;
-    const st = String(inv.status || '');
-    return (st === 'Sent' || st === 'sent') && inv.arPendingRelease && balanceDue(inv) > 0.001;
+    const st = String(inv.status || '').toLowerCase();
+    return st === 'sent' && inv.arPendingRelease && balanceDue(inv) > 0.001;
   });
   if (!open.length && !pendingRelease.length) {
-    let glAr = 0;
-    try {
-      const arId = getArControlId();
-      const bal = typeof accountBalances === 'function' ? accountBalances(null) : {};
-      glAr = Math.max(0, bal[arId] || 0);
-    } catch (_) {}
+    const glAr = arGlBalance();
     let subRows = [];
     try { subRows = (typeof arSubledgerBalances === 'function' ? arSubledgerBalances() : []).filter(r => (r.balance || 0) > 0.001); } catch (_) {}
     let html = '<div style="padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">';
     html += '<p class="section-sub" style="margin:0 0 8px"><b>No open invoice balances</b> — every sent invoice is fully paid (or still draft).</p>';
     if (glAr > 0.001) {
       html += '<p class="section-sub" style="margin:0 0 8px">Ledger AR still shows <b>' + money(glAr) +
-        '</b>. That usually means accruals without matching open invoices (old data or payments recorded only on the invoice). Use customer statements under Home → Receivables by customer, or post a receipt / write-off against the party.</p>';
+        '</b>. Document layer is clear but the control account is not. Post a receipt against the customer (on-account) or write off to clear it.</p>';
     }
     if (subRows.length) {
       html += '<div style="font-size:12px;font-weight:700;margin:10px 0 6px">Customers with AR on the subledger</div>';
