@@ -18098,30 +18098,68 @@ function ensureAllLocationStockRows() {
 function migrateProductStockToLocations() {
   ensurePosDb();
   try { dedupeLocationsByName(); } catch (_) {}
+  try { consolidateStockOntoCanonicalLocations(); } catch (_) {}
   const locs = (db.locations || []).filter(l => l.active !== false);
   if (!locs.length) return;
   const def = locs.find(l => l.is_default) || locs[0];
   const activeIds = new Set(locs.map(l => l.id));
+  if (!Array.isArray(db.locationStock)) db.locationStock = [];
   (db.products || []).forEach(p => {
     if (!p || p.track_stock === false) return;
     const map = ensureProductStockMap(p);
-    // One-time: opening qty only on product.stock_qty → put on main store
-    let sum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
-    const total = Number(p.stock_qty) || 0;
-    if (Math.abs(sum) < 0.0001 && Math.abs(total) > 0.0001 && def) {
-      map[def.id] = total;
-      sum = total;
-    }
     // Drop dead location keys (do not re-add into main — avoids double-count after dedupe)
     Object.keys(map).forEach(lid => {
       if (!activeIds.has(lid)) delete map[lid];
     });
+    let sum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
+    // Hydrate from locationStock if POS wrote there and map is empty
+    const rows = db.locationStock.filter(s => s.product_id === p.id && activeIds.has(String(s.location_id)));
+    const rowSum = rows.reduce((n, s) => n + (Number(s.qty) || 0), 0);
+    if (Math.abs(sum) < 0.0001 && Math.abs(rowSum) > 0.0001) {
+      rows.forEach(s => { map[s.location_id] = Number(s.qty) || 0; });
+      sum = locs.reduce((n, l) => n + (Number(map[l.id]) || 0), 0);
+    }
+    // One-time: opening qty only on product.stock_qty → put on main store
+    // Only when BOTH map and rows are empty — never add stock_qty on top of existing map
+    const total = Number(p.stock_qty) || 0;
+    if (Math.abs(sum) < 0.0001 && Math.abs(rowSum) < 0.0001 && Math.abs(total) > 0.0001 && def) {
+      map[def.id] = total;
+      sum = total;
+    }
     locs.forEach(loc => {
       if (map[loc.id] == null) map[loc.id] = 0;
       stockMirrorRow(p.id, loc.id, map[loc.id]);
     });
     stockRecalcTotal(p);
   });
+}
+
+/** Repair: force map ↔ locationStock alignment and recompute totals (no double-count). */
+function repairStockIntegrity() {
+  ensurePosDb();
+  try { consolidateStockOntoCanonicalLocations(); } catch (_) {}
+  try { migrateProductStockToLocations(); } catch (_) {}
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  (db.products || []).forEach(p => {
+    if (!p || p.track_stock === false) return;
+    const map = ensureProductStockMap(p);
+    locs.forEach(loc => {
+      if (map[loc.id] == null) map[loc.id] = 0;
+      stockMirrorRow(p.id, loc.id, Number(map[loc.id]) || 0);
+    });
+    stockRecalcTotal(p);
+  });
+  try { persistDb(); } catch (_) {}
+  return {
+    products: (db.products || []).length,
+    locations: locs.length,
+    totalUnits: locs.reduce((n, loc) => {
+      return n + (db.products || []).reduce((m, p) => {
+        if (!p || p.track_stock === false) return m;
+        return m + (Number((p.stock_by_location || {})[loc.id]) || 0);
+      }, 0);
+    }, 0)
+  };
 }
 
 function resolveStockTargetLocationId() {
@@ -18982,6 +19020,7 @@ function productsView() {
   } catch (_) {}
   try { consolidateStockOntoCanonicalLocations(); } catch (_) {}
   try { repairLocationStockIds(); } catch (_) {}
+  try { repairStockIntegrity(); } catch (_) {}
   try { migrateProductStockToLocations(); } catch (_) {}
   try { runLowStockAlertEngine({ silent: true }); } catch (_) {}
   fillProductLocationFilter();
