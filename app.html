@@ -1806,11 +1806,18 @@ body:has(.modalback.show) .notif-panel {
 .mobile-card-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
+  margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid var(--line);
 }
-.mobile-card-actions .button { min-height: 34px; font-size: 12px; }
+.mobile-card-actions .button {
+  min-height: 44px;
+  min-width: 44px;
+  font-size: 13px;
+  padding: 10px 14px;
+  flex: 1 1 auto;
+}
 
 /* Preview bottom sheet (phone) */
 .preview-sheet-backdrop {
@@ -3374,6 +3381,21 @@ body:has(.modalback.show) .notif-panel {
   }
   .bottom-nav button span {
     font-size: 18px;
+  }
+
+  /* Action chips on phone — full 44px targets */
+  .button.small {
+    min-height: 44px;
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+  .client-actions .button,
+  .table .actions .button {
+    min-height: 44px;
+  }
+  .more-sheet-grid button,
+  .more-sheet-grid a {
+    min-height: 56px;
   }
 
   .main {
@@ -7055,11 +7077,19 @@ function hideAllModals() {
     m.classList.remove('show');
     try { m.style.display = ''; m.style.zIndex = ''; } catch (_) {}
   });
+  try { closeMoreSheet(); } catch (_) {}
 }
 // Escape key closes any stuck overlay
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') hideAllModals();
 });
+// Backdrop click (only the dimmed layer, not the dialog) closes that modal
+document.addEventListener('click', (e) => {
+  const back = e.target;
+  if (back && back.classList && back.classList.contains('modalback') && back.classList.contains('show')) {
+    hideModal(back);
+  }
+}, true);
 
 /** Turn a <select> into a searchable combobox. Safe to call repeatedly. */
 function enhanceSearchableSelect(sel) {
@@ -10322,11 +10352,12 @@ function renderInvoiceRows(arr, options = {}) {
           <td><span class="badge ${st.toLowerCase()}">${st}</span></td>
           <td class="right"><b>${money(tot, i.currency)}</b>${amtExtra}${repNote}</td>
           ${showActions ? `<td class="actions">
-            ${bal > 0.001 ? `<button class="button small" data-remind-wa="${i.id}">Remind</button>` : ''}
-            ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Record payment</button>` : ''}
-            ${paid > 0 ? `<button class="button small" data-receipt="${i.id}" title="${hasFeature('payment_receipts') ? 'Download receipt' : 'Receipts require Starter'}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
-            <button class="button small" data-chat-discuss-invoice="${i.id}">Discuss</button>
-            <button class="button small danger" data-delete-invoice="${i.id}">Delete</button>
+            <button class="button small" type="button" data-open-invoice="${i.id}">Open</button>
+            ${bal > 0.001 ? `<button class="button small" type="button" data-remind-wa="${i.id}">Remind</button>` : ''}
+            ${bal > 0.001 ? `<button class="button small" type="button" data-mark-paid="${i.id}">Receive</button>` : ''}
+            ${paid > 0 ? `<button class="button small" type="button" data-receipt="${i.id}" title="${hasFeature('payment_receipts') ? 'Download receipt' : 'Receipts require Starter'}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
+            <button class="button small" type="button" data-chat-discuss-invoice="${i.id}">Discuss</button>
+            <button class="button small danger" type="button" data-delete-invoice="${i.id}">Delete</button>
           </td>` : ''}
         </tr>`;
       }).join('')}
@@ -10346,11 +10377,12 @@ function renderInvoiceRows(arr, options = {}) {
           ? 'Bal ' + money(bal, i.currency)
           : '';
       const actions = showActions ? `<div class="mobile-card-actions">
-          ${bal > 0.001 ? `<button class="button small" data-remind-wa="${i.id}">Remind</button>` : ''}
-          ${bal > 0.001 ? `<button class="button small" data-mark-paid="${i.id}">Pay in full</button>` : ''}
-          ${paid > 0 ? `<button class="button small" data-receipt="${i.id}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
-          <button class="button small" data-chat-discuss-invoice="${i.id}">Discuss</button>
-          <button class="button small danger" data-delete-invoice="${i.id}">Delete</button>
+          <button class="button small primary" type="button" data-open-invoice="${i.id}">Open</button>
+          ${bal > 0.001 ? `<button class="button small" type="button" data-remind-wa="${i.id}">Remind</button>` : ''}
+          ${bal > 0.001 ? `<button class="button small" type="button" data-mark-paid="${i.id}">Receive</button>` : ''}
+          ${paid > 0 ? `<button class="button small" type="button" data-receipt="${i.id}">${hasFeature('payment_receipts') ? 'Receipt' : 'Receipt 🔒'}</button>` : ''}
+          <button class="button small" type="button" data-chat-discuss-invoice="${i.id}">Discuss</button>
+          <button class="button small danger" type="button" data-delete-invoice="${i.id}">Delete</button>
         </div>` : '';
       return `<div class="mobile-card" role="listitem" data-open="${i.id}">
         <div class="mobile-card-top">
@@ -33968,6 +34000,19 @@ document.addEventListener('click', e => {
   const v = e.target.closest('[data-view]');
   if (v) switchTo(v.dataset.view);
 
+  const openInvBtn = e.target.closest('[data-open-invoice]');
+  if (openInvBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    const invRow = db.invoices.find(i => i.id === openInvBtn.getAttribute('data-open-invoice'));
+    if (invRow) {
+      edit = structuredClone(invRow);
+      edit.lines = (edit.lines || []).map(l => ({ unit: 'hours', ...l }));
+      editor();
+    }
+    return;
+  }
+
   const o = e.target.closest('[data-open]');
   if (o && !e.target.closest('button, a, select, input, label, .actions, .mobile-card-actions')) {
     const invRow = db.invoices.find(i => i.id === o.dataset.open);
@@ -33990,31 +34035,45 @@ document.addEventListener('click', e => {
     e.preventDefault();
     e.stopPropagation();
     const inv = db.invoices.find(i => i.id === markPaid.dataset.markPaid);
-    if (inv) {
-      ensurePayments(inv);
-      const bal = balanceDue(inv);
-      if (bal > 0.001) {
-        const depositId = (typeof defaultCashAccountId === 'function' ? defaultCashAccountId() : null)
-          || (document.getElementById('payDepositAccount')?.value)
-          || '1000';
-        inv.payments.push({
-          id: crypto.randomUUID(),
-          amount: Math.round(bal * 100) / 100,
-          date: (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10)),
-          note: 'Paid in full',
-          method: 'Payment',
-          depositAccountId: depositId
-        });
+    if (!inv) return;
+    // Prefer AR receive desk (allocate + deposit account) when available
+    try {
+      if (typeof openArReceivePaymentModal === 'function') {
+        const clientId = inv.client || inv.clientId || null;
+        const c = clientId && typeof client === 'function' ? client(clientId) : null;
+        openArReceivePaymentModal(c || { id: clientId, name: inv.clientName || 'Customer' });
+        // Prefill amount from this invoice balance when helpers exist
+        try {
+          const amtEl = document.getElementById('arReceiveAmount');
+          const bal = balanceDue(inv);
+          if (amtEl && bal > 0) amtEl.value = String(Math.round(bal * 100) / 100);
+        } catch (_) {}
+        return;
       }
-      if (inv.status === 'Draft') inv.status = 'Sent';
-      syncPaidFlag(inv);
-      const lastPay = (inv.payments || [])[inv.payments.length - 1];
-      if (lastPay) recordCashFromInvoicePayment(inv, lastPay);
-      save();
-      toast(inv.paid ? 'Invoice paid in full.' : 'Payment recorded.');
-      try { invoices(); } catch (_) {}
-      try { if ($('#dashboard')?.classList.contains('active')) dashboard(); } catch (_) {}
+    } catch (_) {}
+    ensurePayments(inv);
+    const bal = balanceDue(inv);
+    if (bal > 0.001) {
+      const depositId = (typeof defaultCashAccountId === 'function' ? defaultCashAccountId() : null)
+        || (document.getElementById('payDepositAccount')?.value)
+        || '1000';
+      inv.payments.push({
+        id: crypto.randomUUID(),
+        amount: Math.round(bal * 100) / 100,
+        date: (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10)),
+        note: 'Paid in full',
+        method: 'Payment',
+        depositAccountId: depositId
+      });
     }
+    if (inv.status === 'Draft') inv.status = 'Sent';
+    syncPaidFlag(inv);
+    const lastPay = (inv.payments || [])[inv.payments.length - 1];
+    if (lastPay) recordCashFromInvoicePayment(inv, lastPay);
+    save();
+    toast(inv.paid ? 'Invoice paid in full.' : 'Payment recorded.');
+    try { invoices(); } catch (_) {}
+    try { if ($('#dashboard')?.classList.contains('active')) dashboard(); } catch (_) {}
     return;
   }
 
