@@ -62,9 +62,9 @@
   /* Layout shell */
   --side-width: 240px;
   --side-width-compact: 72px;
-  --main-pad-x: clamp(20px, 3.5vw, 48px);
-  --main-pad-y: 28px;
-  --content-max: 1320px;
+  --main-pad-x: clamp(16px, 2.5vw, 36px);
+  --main-pad-y: 22px;
+  --content-max: 1360px;
   --bottom-nav-height: 64px;
 
   /* Touch targets */
@@ -382,19 +382,19 @@ input:focus:not(:focus-visible) {
 .main {
   width: 100%;
   min-width: 0;
-  padding: 32px clamp(20px, 4vw, 56px);
+  padding: var(--main-pad-y) var(--main-pad-x);
   padding-bottom: 40px;
 }
 .top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 28px;
+  margin-bottom: 20px;
   gap: 16px;
 }
 .top h1 {
   margin: 0;
-  font-size: clamp(22px, 4vw, 26px);
+  font-size: clamp(20px, 3vw, 24px);
   font-weight: 800;
   letter-spacing: -0.6px;
   color: var(--text);
@@ -548,17 +548,17 @@ input:focus:not(:focus-visible) {
 }
 
 #dashboard .dash-hero {
-  margin-bottom: 28px;
-  padding: 28px 26px;
+  margin-bottom: 20px;
+  padding: 16px 8px 12px;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 #dashboard .dash-title {
-  font-size: clamp(26px, 4.5vw, 34px);
+  font-size: clamp(22px, 3.2vw, 28px);
   font-weight: 800;
   letter-spacing: -0.04em;
-  line-height: 1.12;
+  line-height: 1.15;
 }
 #dashboard .dash-sub {
   max-width: 48ch;
@@ -727,11 +727,8 @@ input:focus:not(:focus-visible) {
   .eco-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 }
 @media (min-width: 900px) {
-  .eco-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
-}
-@media (min-width: 1200px) {
-  .eco-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
-  .eco-tile { min-height: 140px; padding: 24px 16px 20px; }
+  .eco-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+  .eco-tile { min-height: 118px; padding: 16px 12px 14px; border-radius: 16px; }
 }
 .eco-tile {
   appearance: none;
@@ -891,14 +888,14 @@ input:focus:not(:focus-visible) {
 [data-theme="dark"] #pulse.view.active::before { opacity: 0.5; }
 
 #pulse .dash-hero {
-  margin-bottom: 22px;
-  padding: 24px 22px;
+  margin-bottom: 16px;
+  padding: 12px 4px 8px;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 #pulse .dash-title {
-  font-size: clamp(24px, 4vw, 30px);
+  font-size: clamp(20px, 2.8vw, 26px);
   letter-spacing: -0.04em;
 }
 #pulse .dash-hero-actions .button {
@@ -909,13 +906,13 @@ input:focus:not(:focus-visible) {
 
 #pulse .cards-pulse-main .card,
 #pulse .cards-pulse-pl .card {
-  border-radius: 18px;
-  padding: 20px 18px;
+  border-radius: 14px;
+  padding: 14px 16px;
   border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), var(--panel));
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--text) 4%, transparent),
-    0 10px 28px color-mix(in srgb, var(--text) 4%, transparent);
+    0 6px 16px color-mix(in srgb, var(--text) 3%, transparent);
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
   cursor: pointer;
 }
@@ -1442,14 +1439,14 @@ body:has(.modalback.show) .notif-panel {
 [data-theme="dark"] #books.view.active::before { opacity: 0.5; }
 
 #books .books-hero {
-  margin-bottom: 16px;
-  padding: 22px 20px;
+  margin-bottom: 12px;
+  padding: 10px 4px 6px;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 #books .books-hero .dash-title {
-  font-size: clamp(24px, 4vw, 30px);
+  font-size: clamp(20px, 2.8vw, 26px);
   letter-spacing: -0.04em;
 }
 #books .books-hero .button {
@@ -2131,7 +2128,7 @@ body:has(.modalback.show) .notif-panel {
 .cards {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 14px;
+  gap: 10px;
 }
 @container (min-width: 360px) {
   .cards { grid-template-columns: 1fr 1fr; }
@@ -2162,7 +2159,7 @@ body:has(.modalback.show) .notif-panel {
 .card {
   background: var(--panel);
   border-radius: var(--radius);
-  padding: 20px;
+  padding: 14px 16px;
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
   transition: background var(--ease), border-color var(--ease);
@@ -2171,16 +2168,16 @@ body:has(.modalback.show) .notif-panel {
   display: block;
   color: var(--muted);
   font-weight: 600;
-  font-size: 11px;
+  font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
 .card b {
-  font-size: clamp(18px, 2.6vw, 22px);
+  font-size: clamp(16px, 1.8vw, 20px);
   font-weight: 800;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.4px;
   display: block;
-  margin: 8px 0 2px;
+  margin: 6px 0 2px;
   color: var(--text);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -2195,7 +2192,7 @@ body:has(.modalback.show) .notif-panel {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin: 32px 0 14px;
+  margin: 22px 0 10px;
   gap: 12px;
   flex-wrap: wrap;
 }
@@ -2660,20 +2657,20 @@ body:has(.modalback.show) .notif-panel {
 .insights {
   display: grid;
   grid-template-columns: 1.1fr 0.9fr;
-  gap: 14px;
+  gap: 10px;
 }
 .insight {
   background: var(--panel);
-  padding: 20px;
+  padding: 14px 16px;
   border-radius: var(--radius);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
   transition: background var(--ease), border-color var(--ease);
 }
 .insight h3 {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
-  margin: 0 0 16px;
+  margin: 0 0 12px;
   color: var(--text);
 }
 .barrow {
