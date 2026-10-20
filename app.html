@@ -394,7 +394,7 @@ input:focus:not(:focus-visible) {
 }
 .top h1 {
   margin: 0;
-  font-size: clamp(20px, 3vw, 24px);
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: -0.6px;
   color: var(--text);
@@ -483,37 +483,35 @@ input:focus:not(:focus-visible) {
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 16px 24px;
-  margin: 4px 0 22px;
-  padding: 20px 22px;
-  border-radius: 16px;
-  border: 1px solid var(--line);
-  background:
-    radial-gradient(1200px 200px at 10% -40%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 55%),
-    linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, var(--card, var(--bg))) 0%, var(--card, var(--bg)) 100%);
+  gap: 12px 16px;
+  margin: 0 0 14px;
+  padding: 8px 4px;
+  border-radius: 12px;
+  border: 0;
+  background: transparent;
 }
 .dash-greeting {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--accent);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 .dash-title {
   margin: 0;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 800;
   letter-spacing: -0.03em;
   line-height: 1.2;
   color: var(--text);
 }
 .dash-sub {
-  margin: 8px 0 0;
-  font-size: 13.5px;
+  margin: 6px 0 0;
+  font-size: 13px;
   color: var(--muted);
-  max-width: 42ch;
-  line-height: 1.5;
+  max-width: 48ch;
+  line-height: 1.45;
 }
 .dash-hero-actions {
   display: flex;
@@ -555,7 +553,7 @@ input:focus:not(:focus-visible) {
   box-shadow: none;
 }
 #dashboard .dash-title {
-  font-size: clamp(22px, 3.2vw, 28px);
+  font-size: 22px;
   font-weight: 800;
   letter-spacing: -0.04em;
   line-height: 1.15;
@@ -736,11 +734,11 @@ input:focus:not(:focus-visible) {
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--panel, #fff) 92%, transparent) 0%, var(--card, var(--panel, #fff)) 100%);
   border-radius: 20px;
-  padding: 22px 14px 18px;
+  padding: 14px 12px 12px;
   text-align: center;
   cursor: pointer;
   transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
-  min-height: 132px;
+  min-height: 112px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -895,7 +893,7 @@ input:focus:not(:focus-visible) {
   box-shadow: none;
 }
 #pulse .dash-title {
-  font-size: clamp(20px, 2.8vw, 26px);
+  font-size: 20px;
   letter-spacing: -0.04em;
 }
 #pulse .dash-hero-actions .button {
@@ -1028,13 +1026,13 @@ input:focus:not(:focus-visible) {
 [data-theme="dark"] #approvals.view.active::before { opacity: 0.5; }
 #approvals .approvals-hero {
   margin-bottom: 16px;
-  padding: 22px 20px;
+  padding: 10px 4px;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 #approvals .approvals-hero .dash-title {
-  font-size: clamp(24px, 4vw, 30px);
+  font-size: 20px;
   letter-spacing: -0.04em;
 }
 #approvals .approvals-hero .button { border-radius: 999px; padding-left: 16px; padding-right: 16px; }
@@ -1254,13 +1252,13 @@ body:has(.modalback.show) .notif-panel {
 
 #invoices .inv-hero {
   margin-bottom: 18px;
-  padding: 24px 22px;
+  padding: 10px 4px;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 #invoices .inv-hero .dash-title {
-  font-size: clamp(24px, 4vw, 30px);
+  font-size: 20px;
   letter-spacing: -0.04em;
 }
 #invoices .inv-hero .button {
@@ -1386,13 +1384,13 @@ body:has(.modalback.show) .notif-panel {
 
 #clients .clients-hero {
   margin-bottom: 18px;
-  padding: 24px 22px;
+  padding: 10px 4px;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 #clients .clients-hero .dash-title {
-  font-size: clamp(24px, 4vw, 30px);
+  font-size: 20px;
   letter-spacing: -0.04em;
 }
 #clients .clients-hero .button {
@@ -1446,7 +1444,7 @@ body:has(.modalback.show) .notif-panel {
   box-shadow: none;
 }
 #books .books-hero .dash-title {
-  font-size: clamp(20px, 2.8vw, 26px);
+  font-size: 20px;
   letter-spacing: -0.04em;
 }
 #books .books-hero .button {
@@ -1499,13 +1497,13 @@ body:has(.modalback.show) .notif-panel {
 
 #inventory .inv-stock-hero {
   margin-bottom: 16px;
-  padding: 22px 20px;
+  padding: 10px 4px;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 #inventory .inv-stock-hero .dash-title {
-  font-size: clamp(24px, 4vw, 30px);
+  font-size: 20px;
   letter-spacing: -0.04em;
 }
 #inventory .inv-stock-hero .button,
@@ -1571,14 +1569,14 @@ body:has(.modalback.show) .notif-panel {
 #receipts .receipts-hero,
 #recurring .recurring-hero {
   margin-bottom: 18px;
-  padding: 22px 20px;
+  padding: 10px 4px;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 #receipts .receipts-hero .dash-title,
 #recurring .recurring-hero .dash-title {
-  font-size: clamp(24px, 4vw, 30px);
+  font-size: 20px;
   letter-spacing: -0.04em;
 }
 #receipts .receipts-hero .button,
@@ -1629,7 +1627,7 @@ body:has(.modalback.show) .notif-panel {
   box-shadow: none;
 }
 #chat .chat-hero .dash-title {
-  font-size: clamp(24px, 4vw, 30px);
+  font-size: 20px;
   letter-spacing: -0.04em;
 }
 #chat .chat-hero .button {
@@ -4405,6 +4403,63 @@ body:has(.modalback.show) .notif-panel {
 #orgRoleChip[data-role="owner"] { background: #dbeafe; color: #1e40af; }
 #orgRoleChip[data-role="manager"] { background: #ffedd5; color: #9a3412; }
 #orgRoleChip[data-role="member"] { background: #f3f4f6; color: #4b5563; }
+
+
+/* =========================================================
+   DESKTOP DENSITY — normal 100% zoom should not feel magnified
+   ========================================================= */
+@media (min-width: 900px) {
+  body { font-size: 13px; }
+  .main {
+    padding: 16px 24px 28px;
+  }
+  .dash-title,
+  #dashboard .dash-title,
+  #pulse .dash-title,
+  #books .books-hero .dash-title,
+  #invoices .inv-hero .dash-title,
+  #clients .clients-hero .dash-title,
+  #inventory .inv-stock-hero .dash-title,
+  #approvals .approvals-hero .dash-title,
+  #receipts .receipts-hero .dash-title,
+  #recurring .recurring-hero .dash-title,
+  #chat .chat-hero .dash-title {
+    font-size: 18px !important;
+  }
+  .dash-hero,
+  #dashboard .dash-hero,
+  #pulse .dash-hero,
+  #books .books-hero {
+    padding: 4px 0 6px !important;
+    margin-bottom: 10px !important;
+  }
+  .card,
+  #pulse .cards-pulse-main .card,
+  #pulse .cards-pulse-pl .card {
+    padding: 12px 14px !important;
+    border-radius: 12px !important;
+  }
+  .card b {
+    font-size: 16px !important;
+    margin: 4px 0 2px !important;
+  }
+  .card small { font-size: 10px !important; }
+  .cards { gap: 8px !important; }
+  .insights { gap: 8px !important; }
+  .insight { padding: 12px 14px !important; }
+  .insight h3 { font-size: 12.5px !important; margin-bottom: 10px !important; }
+  .section-head { margin: 16px 0 8px !important; }
+  .eco-tile {
+    min-height: 104px !important;
+    padding: 12px 10px 10px !important;
+    border-radius: 14px !important;
+  }
+  .eco-tile-icon { font-size: 22px !important; }
+  .eco-tile-name { font-size: 13px !important; }
+  .eco-tile-desc { font-size: 11px !important; }
+  .books-nav { padding: 4px !important; }
+  .button { padding: 8px 14px; min-height: 36px; font-size: 13px; }
+}
 
 </style>
 </head>
