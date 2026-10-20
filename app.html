@@ -3279,7 +3279,8 @@ body:has(.modalback.show) .notif-panel {
   display: none;
   place-items: center;
   padding: 18px;
-  z-index: 140;
+  /* Above books create portal (240), bell, sticky bars */
+  z-index: 280;
   transition: background var(--ease);
 }
 [data-theme="dark"] .modalback {
@@ -3292,9 +3293,14 @@ body:has(.modalback.show) .notif-panel {
   border-radius: 16px;
   max-width: 420px;
   width: 100%;
+  max-height: min(90vh, 900px);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
   border: 1px solid var(--line);
   box-shadow: var(--shadow-lg);
   transition: background var(--ease), border-color var(--ease);
+  position: relative;
+  z-index: 1;
 }
 /* Expense / supplier bill — wider, scrollable body, sticky actions */
 .modal.bill-modal {
@@ -3972,6 +3978,7 @@ body:has(.modalback.show) .notif-panel {
 }
 .searchable-select-input:focus { outline: 2px solid var(--blue-soft); border-color: var(--blue); }
 .searchable-select-list {
+  z-index: 300;
   position: absolute; z-index: 200; left: 0; right: 0; top: calc(100% + 4px);
   max-height: 240px; overflow: auto;
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm);
@@ -7278,10 +7285,18 @@ function showModal(id) {
   const m = document.getElementById(id);
   if (!m) return null;
   try { closeMoreSheet(); } catch (_) {}
+  try { toggleBooksCreateMenu(false); } catch (_) {}
+  // Ensure host is on body so no parent stacking context can bury it
+  try {
+    if (m.parentElement !== document.body) {
+      document.body.appendChild(m);
+    }
+  } catch (_) {}
   m.classList.add('show');
   try {
     m.style.display = 'grid';
-    m.style.zIndex = m.style.zIndex || '80';
+    // Must beat #booksCreatePortal (240), notif (130), sticky chrome
+    m.style.zIndex = '280';
   } catch (_) {}
   try { initSearchableSelects(m); } catch (_) {}
   return m;
@@ -28260,6 +28275,7 @@ function booksView() {
 
 function openCashModal() {
   try { closeNotifPanel(); } catch (_) {}
+  try { toggleBooksCreateMenu(false); } catch (_) {}
   const m = document.getElementById('cashModal');
   if (!m) return;
   if (typeof canRequestExpense === 'function' && !canRequestExpense() && !can('books.write')) {
@@ -30761,27 +30777,31 @@ function toggleBooksCreateMenu(show) {
 }
 function handleBooksCreate(kind) {
   toggleBooksCreateMenu(false);
-  if (kind === 'invoice') {
-    try {
-      if (typeof newInvoice === 'function') newInvoice();
-      else switchTo('editor');
-    } catch {
-      try { switchTo('invoices'); } catch {}
+  // Defer open so create-portal unmounts before modal paints (avoids overlap)
+  const run = () => {
+    if (kind === 'invoice') {
+      try {
+        if (typeof newInvoice === 'function') newInvoice();
+        else switchTo('editor');
+      } catch {
+        try { switchTo('invoices'); } catch {}
+      }
     }
-  }
-  else if (kind === 'payment') runBooksAction('payment');
-  else if (kind === 'expense') openCashModal();
-  else if (kind === 'bill') openBillModal();
-  else if (kind === 'journal') openJournalModal();
-  else if (kind === 'journal-csv') {
-    setBooksPage('home', 'journal');
-    setTimeout(() => document.getElementById('journalCsvFile')?.click(), 80);
-  }
-  else if (kind === 'transfer') openTransferModal();
-  else if (kind === 'recurring-journal' || kind === 'recurringj') {
-    setBooksPage('recurring', 'recurringj');
-    setTimeout(() => openRecurringJournalModal(), 120);
-  }
+    else if (kind === 'payment') runBooksAction('payment');
+    else if (kind === 'expense') openCashModal();
+    else if (kind === 'bill') openBillModal();
+    else if (kind === 'journal') openJournalModal();
+    else if (kind === 'journal-csv') {
+      setBooksPage('home', 'journal');
+      setTimeout(() => document.getElementById('journalCsvFile')?.click(), 80);
+    }
+    else if (kind === 'transfer') openTransferModal();
+    else if (kind === 'recurring-journal' || kind === 'recurringj') {
+      setBooksPage('recurring', 'recurringj');
+      setTimeout(() => openRecurringJournalModal(), 120);
+    }
+  };
+  requestAnimationFrame(() => setTimeout(run, 30));
 }
 
 /* ========== Bank transfer ========== */
@@ -30797,10 +30817,12 @@ function openTransferModal() {
   document.getElementById('xferAmount').value = '';
   document.getElementById('xferDate').value = today;
   document.getElementById('xferMemo').value = '';
-  m.classList.add('show');
+  if (typeof showModal === 'function') showModal('transferModal');
+  else { m.classList.add('show'); m.style.display = 'grid'; m.style.zIndex = '280'; }
 }
 function closeTransferModal() {
-  document.getElementById('transferModal')?.classList.remove('show');
+  if (typeof hideModal === 'function') hideModal('transferModal');
+  else document.getElementById('transferModal')?.classList.remove('show');
 }
 function postBankTransfer() {
   const from = document.getElementById('xferFrom')?.value;
