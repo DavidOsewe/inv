@@ -62,9 +62,9 @@
   /* Layout shell */
   --side-width: 240px;
   --side-width-compact: 72px;
-  --main-pad-x: clamp(20px, 4vw, 56px);
-  --main-pad-y: 32px;
-  --content-max: 1100px;
+  --main-pad-x: clamp(20px, 3.5vw, 48px);
+  --main-pad-y: 28px;
+  --content-max: 1320px;
   --bottom-nav-height: 64px;
 
   /* Touch targets */
@@ -561,10 +561,13 @@ input:focus:not(:focus-visible) {
   line-height: 1.12;
 }
 #dashboard .dash-sub {
-  max-width: 36ch;
+  max-width: 48ch;
   font-size: 14.5px;
   margin-top: 10px;
   color: color-mix(in srgb, var(--muted) 90%, var(--text));
+}
+#dashboard .dash-hero {
+  max-width: var(--content-max, 1320px);
 }
 #dashboard .dash-hero-actions .button {
   border-radius: 999px;
@@ -573,8 +576,36 @@ input:focus:not(:focus-visible) {
 }
 
 .eco-home {
-  margin: 0 auto 8px;
-  max-width: 920px;
+  margin: 0 0 8px;
+  max-width: var(--content-max, 1320px);
+  width: 100%;
+}
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+  color: var(--text);
+}
+.brand-mark em {
+  color: var(--blue);
+  font-style: normal;
+}
+.brand-mark .brand-chip {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: -0.5px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
 }
 .eco-home-bar {
   display: flex;
@@ -697,6 +728,10 @@ input:focus:not(:focus-visible) {
 }
 @media (min-width: 900px) {
   .eco-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
+}
+@media (min-width: 1200px) {
+  .eco-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
+  .eco-tile { min-height: 140px; padding: 24px 16px 20px; }
 }
 .eco-tile {
   appearance: none;
@@ -1890,21 +1925,29 @@ body:has(.modalback.show) .notif-panel {
   font-size: 0;
   padding: 0;
   text-align: center;
-  height: 36px;
-  width: 36px;
-  margin: 0 auto 12px;
+  height: 40px;
+  width: 40px;
+  margin: 0 auto 14px;
   display: grid;
   place-items: center;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--blue) 18%, transparent), color-mix(in srgb, var(--blue) 8%, transparent));
+  border: 1px solid color-mix(in srgb, var(--blue) 22%, transparent);
   letter-spacing: 0;
+  position: relative;
+  cursor: default;
 }
-.side.compact .logo::first-letter {
-  font-size: 18px;
-  font-weight: 800;
+/* Compact rail: show "id" monogram instead of full wordmark */
+.side.compact .logo::after {
+  content: 'id';
+  font-size: 13px;
+  font-weight: 900;
   color: var(--blue);
+  letter-spacing: -0.6px;
   line-height: 1;
+  text-transform: lowercase;
 }
+.side.compact .logo em { display: none; }
 .side.compact .nav {
   width: 100%;
   gap: 4px;
@@ -3618,9 +3661,20 @@ body:has(.modalback.show) .notif-panel {
    BOOKS — cleaner IA chrome
    ========================================================= */
 .books-shell {
-  max-width: var(--content-max, 1100px);
+  max-width: var(--content-max, 1320px);
+  width: 100%;
+  margin: 0;
   container-type: inline-size;
   container-name: books;
+}
+/* Fill the main column — avoid a large empty right gutter on wide screens */
+#books.view.active,
+#pulse.view.active,
+#dashboard.view.active,
+#invoices.view.active,
+#inventory.view.active {
+  max-width: var(--content-max, 1320px);
+  width: 100%;
 }
 
 /* Books chrome — density from shell width, not only viewport */
@@ -4424,9 +4478,13 @@ body:has(.modalback.show) .notif-panel {
     <section class="view active" id="dashboard">
       <div class="dash-hero" id="dashHero">
         <div class="dash-hero-text">
+          <div class="brand-mark" aria-label="invoicedey">
+            <span class="brand-chip" aria-hidden="true">id</span>
+            <span>invoice<em>dey</em></span>
+          </div>
           <div class="dash-greeting" id="dashGreeting">Welcome back</div>
           <h1 class="dash-title" id="dashTitle">Your business OS</h1>
-          <p class="dash-sub" id="dashSub">One organisation · invoices, books, shops, and team — open what you need.</p>
+          <p class="dash-sub" id="dashSub">invoicedey · invoices, books, shops, and team — open what you need.</p>
         </div>
         <div class="dash-hero-actions">
           <button class="button" type="button" id="homeExpenseRequestBtn" data-role-gate="expenses.request">+ Expense request</button>
@@ -4434,7 +4492,9 @@ body:has(.modalback.show) .notif-panel {
         </div>
       </div>
       <div class="eco-home" id="ecoHome" aria-label="Invoicedey apps">
-        <p class="eco-home-label">Your apps</p>
+        <div class="eco-home-bar">
+          <p class="eco-home-label">Your apps</p>
+        </div>
         <div class="eco-grid" id="ecoGrid"></div>
       </div>
     </section>
