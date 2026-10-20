@@ -339,13 +339,24 @@ input:focus:not(:focus-visible) {
   align-items: center;
   gap: 6px;
   margin-bottom: 12px;
-  padding: 8px 0;
+  padding: 10px 14px;
+  min-height: 44px;
   color: var(--blue);
   font-weight: 700;
   font-size: 14px;
-  background: none;
-  border: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
   cursor: pointer;
+  box-shadow: var(--shadow);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.editor-back.is-visible {
+  display: inline-flex;
+}
+.editor-back:active {
+  background: var(--blue-soft);
 }
 [data-theme="dark"] .bottom-nav {
   box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
@@ -2026,15 +2037,22 @@ body:has(.modalback.show) .notif-panel {
 
 @media (max-width: 640px) {
   #editor.view.active .form {
-    padding-bottom: 96px;
+    padding-bottom: 140px;
+  }
+  #editor.view.active {
+    padding-bottom: 8px;
   }
   .editor-sticky-bar {
     position: fixed;
     left: 10px;
     right: 10px;
-    bottom: calc(64px + var(--safe-bottom));
+    bottom: calc(72px + var(--safe-bottom, 0px));
     margin: 0;
     z-index: 35;
+  }
+  .editor-sticky-actions .button {
+    min-height: 44px;
+    font-size: 13px;
   }
   /* On phone, keep inline preview rail collapsed; sheet handles preview */
   #editorLayout:not(.preview-collapsed) .preview-rail {
@@ -2665,6 +2683,23 @@ body:has(.modalback.show) .notif-panel {
 }
 .editor-toolbar .editor-back {
   margin: 0;
+}
+@media (max-width: 640px) {
+  .editor-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    margin: 0 0 12px;
+    padding: 8px 0 10px;
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  .editor-toolbar .editor-back {
+    flex: 1 1 auto;
+    justify-content: center;
+    font-size: 15px;
+  }
 }
 .editor-toolbar-actions {
   display: flex;
@@ -3819,22 +3854,44 @@ body:has(.modalback.show) .notif-panel {
 #booksCreateWrap.is-open {
   z-index: 80;
 }
-/* Dim page while create menu is open (desktop + mobile) */
-.books-create-backdrop {
+/* Portal host lives on document.body so menu is never under Books stacking context */
+#booksCreatePortal {
   display: none;
   position: fixed;
   inset: 0;
-  z-index: 70;
-  background: rgba(15, 23, 42, 0.35);
+  z-index: 240;
+  pointer-events: none;
+}
+#booksCreatePortal.show {
+  display: block;
+  pointer-events: auto;
+}
+#booksCreatePortal .books-create-backdrop {
+  display: block;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: rgba(15, 23, 42, 0.45);
   -webkit-tap-highlight-color: transparent;
 }
-.books-create-backdrop.show {
-  display: block;
+#booksCreatePortal .books-create-menu {
+  position: absolute;
+  z-index: 1;
+  pointer-events: auto;
+  background: var(--panel) !important;
+  opacity: 1 !important;
+  filter: none !important;
 }
+/* Desktop: anchor near Create button (JS sets top/left) */
+@media (min-width: 641px) {
+  #booksCreatePortal .books-create-menu {
+    min-width: 240px;
+    max-width: 320px;
+  }
+}
+/* Phone: bottom sheet above bottom nav */
 @media (max-width: 640px) {
-  /* Phone: bottom sheet instead of clipped dropdown under tabs */
-  .books-create-menu:not([hidden]) {
-    position: fixed !important;
+  #booksCreatePortal .books-create-menu {
     left: 12px !important;
     right: 12px !important;
     top: auto !important;
@@ -3842,11 +3899,10 @@ body:has(.modalback.show) .notif-panel {
     width: auto !important;
     max-height: min(70vh, 480px);
     overflow: auto;
-    z-index: 80 !important;
     padding: 12px;
     border-radius: 16px;
   }
-  .books-create-menu .button {
+  #booksCreatePortal .books-create-menu .button {
     min-height: 48px;
     justify-content: flex-start;
     width: 100%;
@@ -6111,6 +6167,7 @@ body:has(.modalback.show) .notif-panel {
     <span class="bal">Balance <b id="stickyBalance">—</b></span>
   </div>
   <div class="editor-sticky-actions">
+    <button class="button" type="button" id="stickyBack" title="Back to invoices">← Back</button>
     <button class="button" type="button" id="stickySave">Save draft</button>
     <button class="button primary" type="button" id="stickySend">Mark as sent</button>
   </div>
@@ -10298,11 +10355,20 @@ function switchTo(v) {
   } catch (_) {}
   const bottomNav = document.querySelector('.bottom-nav');
   if (bottomNav) {
-    bottomNav.classList.toggle('nav-hidden', v === 'editor');
+    // Keep bottom nav visible in editor so users can always leave to Home / More
+    bottomNav.classList.remove('nav-hidden');
     bottomNav.style.display = '';
   }
   const backBtn = document.getElementById('editorBack');
-  if (backBtn) backBtn.style.display = v === 'editor' ? '' : 'none';
+  if (backBtn) {
+    if (v === 'editor') {
+      backBtn.classList.add('is-visible');
+      backBtn.style.display = 'inline-flex';
+    } else {
+      backBtn.classList.remove('is-visible');
+      backBtn.style.display = 'none';
+    }
+  }
   updateHeaderActions(v);
   if (v !== 'editor') {
     document.getElementById('editorStickyBar')?.classList.remove('show');
@@ -30511,36 +30577,86 @@ async function pullBooksFromCloud() {
 
 
 
-/* ========== + Create menu ========== */
-function ensureBooksCreateBackdrop() {
-  let bd = document.getElementById('booksCreateBackdrop');
-  if (!bd) {
-    bd = document.createElement('div');
-    bd.id = 'booksCreateBackdrop';
+/* ========== + Create menu (portal to body — avoids Books z-index trap) ========== */
+function ensureBooksCreatePortal() {
+  let portal = document.getElementById('booksCreatePortal');
+  if (!portal) {
+    portal = document.createElement('div');
+    portal.id = 'booksCreatePortal';
+    const bd = document.createElement('div');
     bd.className = 'books-create-backdrop';
     bd.addEventListener('click', () => toggleBooksCreateMenu(false));
-    document.body.appendChild(bd);
+    portal.appendChild(bd);
+    document.body.appendChild(portal);
   }
-  return bd;
+  return portal;
+}
+function positionBooksCreateMenu(menu) {
+  if (!menu) return;
+  const btn = document.getElementById('btnBooksCreate');
+  const isPhone = window.matchMedia('(max-width: 640px)').matches;
+  if (isPhone) {
+    menu.style.left = '';
+    menu.style.right = '';
+    menu.style.top = '';
+    menu.style.bottom = '';
+    return;
+  }
+  // Desktop: pin under the Create button
+  if (btn) {
+    const r = btn.getBoundingClientRect();
+    const width = Math.max(240, menu.offsetWidth || 240);
+    let left = r.right - width;
+    if (left < 12) left = 12;
+    if (left + width > window.innerWidth - 12) left = window.innerWidth - width - 12;
+    menu.style.left = left + 'px';
+    menu.style.top = (r.bottom + 8) + 'px';
+    menu.style.right = 'auto';
+    menu.style.bottom = 'auto';
+  }
 }
 function toggleBooksCreateMenu(show) {
   const menu = document.getElementById('booksCreateMenu');
   if (!menu) return;
-  const open = typeof show === 'boolean' ? show : menu.hidden;
-  menu.hidden = !open;
-  // hard-clear inline display in case older markup left display:flex
-  if (!open) menu.style.display = 'none';
-  else menu.style.display = 'flex';
   const wrap = document.getElementById('booksCreateWrap');
+  const portal = ensureBooksCreatePortal();
+  const open = typeof show === 'boolean' ? show : menu.hidden;
   const hero = document.querySelector('#books .books-hero');
-  if (wrap) wrap.classList.toggle('is-open', open);
-  if (hero) hero.classList.toggle('create-open', open);
-  const bd = ensureBooksCreateBackdrop();
-  bd.classList.toggle('show', open);
+  if (open) {
+    // Move menu into body portal so backdrop cannot cover it
+    if (menu.parentElement !== portal) {
+      menu.dataset.homeParent = 'booksCreateWrap';
+      portal.appendChild(menu);
+    }
+    menu.hidden = false;
+    menu.style.display = 'flex';
+    portal.classList.add('show');
+    if (wrap) wrap.classList.add('is-open');
+    if (hero) hero.classList.add('create-open');
+    // layout then measure
+    requestAnimationFrame(() => positionBooksCreateMenu(menu));
+  } else {
+    menu.hidden = true;
+    menu.style.display = 'none';
+    portal.classList.remove('show');
+    if (wrap) wrap.classList.remove('is-open');
+    if (hero) hero.classList.remove('create-open');
+    // Return menu to original wrap for next open
+    if (wrap && menu.parentElement !== wrap) {
+      wrap.appendChild(menu);
+    }
+  }
 }
 function handleBooksCreate(kind) {
   toggleBooksCreateMenu(false);
-  if (kind === 'invoice') { try { switchTo('editor'); } catch { try { switchTo('invoices'); } catch {} } }
+  if (kind === 'invoice') {
+    try {
+      if (typeof newInvoice === 'function') newInvoice();
+      else switchTo('editor');
+    } catch {
+      try { switchTo('invoices'); } catch {}
+    }
+  }
   else if (kind === 'payment') runBooksAction('payment');
   else if (kind === 'expense') openCashModal();
   else if (kind === 'bill') openBillModal();
@@ -34947,9 +35063,23 @@ $('#addLine').onclick = () => {
   preview();
 };
 const editorBackBtn = document.getElementById('editorBack');
-if (editorBackBtn) editorBackBtn.onclick = () => switchTo('invoices');
+if (editorBackBtn) {
+  editorBackBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try { switchTo('invoices'); } catch (_) {
+      try { switchTo('dashboard'); } catch (_) {}
+    }
+  };
+}
 $('#save').onclick = () => persist('Draft');
 $('#send').onclick = () => persist('Sent');
+document.getElementById('stickyBack')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  try { switchTo('invoices'); } catch (_) {
+    try { switchTo('dashboard'); } catch (_) {}
+  }
+});
 document.getElementById('stickySave')?.addEventListener('click', () => persist('Draft'));
 document.getElementById('stickySend')?.addEventListener('click', () => persist('Sent'));
 document.getElementById('makeRecurringBtn')?.addEventListener('click', () => openRecurringModal());
