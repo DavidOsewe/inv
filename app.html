@@ -1390,6 +1390,9 @@ body:has(.modalback.show) .notif-panel {
   opacity: 0.85;
 }
 #books.view.active > * { position: relative; z-index: 1; }
+/* Hero must sit above books-nav when + Create is open (siblings share z-index:1 otherwise) */
+#books.view.active > .books-hero { z-index: 5; }
+#books.view.active > .books-hero.create-open { z-index: 60; }
 [data-theme="dark"] #books.view.active::before { opacity: 0.5; }
 
 #books .books-hero {
@@ -3798,9 +3801,60 @@ body:has(.modalback.show) .notif-panel {
   display: none;
   flex-direction: column;
   gap: 2px;
+  background: var(--panel) !important;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg, 0 12px 40px rgba(0,0,0,.18));
+  padding: 8px;
+  min-width: 220px;
+  z-index: 80;
 }
 .books-create-menu:not([hidden]) {
   display: flex;
+}
+#booksCreateWrap {
+  position: relative;
+  z-index: 2;
+}
+#booksCreateWrap.is-open {
+  z-index: 80;
+}
+/* Dim page while create menu is open (desktop + mobile) */
+.books-create-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(15, 23, 42, 0.35);
+  -webkit-tap-highlight-color: transparent;
+}
+.books-create-backdrop.show {
+  display: block;
+}
+@media (max-width: 640px) {
+  /* Phone: bottom sheet instead of clipped dropdown under tabs */
+  .books-create-menu:not([hidden]) {
+    position: fixed !important;
+    left: 12px !important;
+    right: 12px !important;
+    top: auto !important;
+    bottom: calc(72px + var(--safe-bottom, 0px)) !important;
+    width: auto !important;
+    max-height: min(70vh, 480px);
+    overflow: auto;
+    z-index: 80 !important;
+    padding: 12px;
+    border-radius: 16px;
+  }
+  .books-create-menu .button {
+    min-height: 48px;
+    justify-content: flex-start;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    font-size: 15px;
+    padding: 12px 14px;
+  }
 }
 
 /* Searchable select (combobox) */
@@ -5010,7 +5064,7 @@ body:has(.modalback.show) .notif-panel {
           <button class="button" type="button" onclick="switchTo('dashboard')">← Apps</button>
           <div style="position:relative" id="booksCreateWrap">
             <button class="button primary" type="button" id="btnBooksCreate">+ Create</button>
-            <div id="booksCreateMenu" class="books-create-menu" hidden style="position:absolute;right:0;top:calc(100% + 6px);z-index:40;min-width:220px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-lg);padding:8px">
+            <div id="booksCreateMenu" class="books-create-menu" hidden style="position:absolute;right:0;top:calc(100% + 6px)">
               <button type="button" class="button small" data-create="invoice" style="justify-content:flex-start;border:0;background:transparent">Invoice</button>
               <button type="button" class="button small" data-create="payment" data-role-gate="books.write" style="justify-content:flex-start;border:0;background:transparent">Receive payment</button>
               <button type="button" class="button small" data-create="expense" data-role-gate="expenses.request" style="justify-content:flex-start;border:0;background:transparent">Expense request</button>
@@ -7078,6 +7132,7 @@ function hideAllModals() {
     try { m.style.display = ''; m.style.zIndex = ''; } catch (_) {}
   });
   try { closeMoreSheet(); } catch (_) {}
+  try { toggleBooksCreateMenu(false); } catch (_) {}
 }
 // Escape key closes any stuck overlay
 document.addEventListener('keydown', (e) => {
@@ -30457,6 +30512,17 @@ async function pullBooksFromCloud() {
 
 
 /* ========== + Create menu ========== */
+function ensureBooksCreateBackdrop() {
+  let bd = document.getElementById('booksCreateBackdrop');
+  if (!bd) {
+    bd = document.createElement('div');
+    bd.id = 'booksCreateBackdrop';
+    bd.className = 'books-create-backdrop';
+    bd.addEventListener('click', () => toggleBooksCreateMenu(false));
+    document.body.appendChild(bd);
+  }
+  return bd;
+}
 function toggleBooksCreateMenu(show) {
   const menu = document.getElementById('booksCreateMenu');
   if (!menu) return;
@@ -30464,7 +30530,13 @@ function toggleBooksCreateMenu(show) {
   menu.hidden = !open;
   // hard-clear inline display in case older markup left display:flex
   if (!open) menu.style.display = 'none';
-  else menu.style.display = '';
+  else menu.style.display = 'flex';
+  const wrap = document.getElementById('booksCreateWrap');
+  const hero = document.querySelector('#books .books-hero');
+  if (wrap) wrap.classList.toggle('is-open', open);
+  if (hero) hero.classList.toggle('create-open', open);
+  const bd = ensureBooksCreateBackdrop();
+  bd.classList.toggle('show', open);
 }
 function handleBooksCreate(kind) {
   toggleBooksCreateMenu(false);
