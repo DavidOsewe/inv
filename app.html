@@ -62,9 +62,9 @@
   /* Layout shell */
   --side-width: 240px;
   --side-width-compact: 72px;
-  --main-pad-x: clamp(16px, 2.5vw, 36px);
-  --main-pad-y: 22px;
-  --content-max: 1360px;
+  --main-pad-x: clamp(16px, 2.2vw, 40px);
+  --main-pad-y: 20px;
+  --content-max: min(100%, 1680px);
   --bottom-nav-height: 64px;
 
   /* Touch targets */
@@ -565,7 +565,8 @@ input:focus:not(:focus-visible) {
   color: color-mix(in srgb, var(--muted) 90%, var(--text));
 }
 #dashboard .dash-hero {
-  max-width: var(--content-max, 1320px);
+  max-width: none;
+  width: 100%;
 }
 #dashboard .dash-hero-actions .button {
   border-radius: 999px;
@@ -575,7 +576,7 @@ input:focus:not(:focus-visible) {
 
 .eco-home {
   margin: 0 0 8px;
-  max-width: var(--content-max, 1320px);
+  max-width: none;
   width: 100%;
 }
 .brand-mark {
@@ -718,15 +719,22 @@ input:focus:not(:focus-visible) {
 .eco-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
   justify-items: stretch;
+  width: 100%;
 }
 @media (min-width: 560px) {
-  .eco-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .eco-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 }
 @media (min-width: 900px) {
-  .eco-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-  .eco-tile { min-height: 118px; padding: 16px 12px 14px; border-radius: 16px; }
+  .eco-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .eco-tile { min-height: 108px; padding: 14px 12px 12px; border-radius: 14px; }
+}
+@media (min-width: 1280px) {
+  .eco-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+}
+@media (min-width: 1600px) {
+  .eco-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
 }
 .eco-tile {
   appearance: none;
@@ -784,9 +792,9 @@ input:focus:not(:focus-visible) {
   outline-offset: 3px;
 }
 .eco-tile-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3662,19 +3670,30 @@ body:has(.modalback.show) .notif-panel {
    BOOKS — cleaner IA chrome
    ========================================================= */
 .books-shell {
-  max-width: var(--content-max, 1320px);
+  max-width: none;
   width: 100%;
   margin: 0;
   container-type: inline-size;
   container-name: books;
 }
-/* Fill the main column — avoid a large empty right gutter on wide screens */
+/* Fill the main column; center when viewport is wider than content-max */
 #books.view.active,
 #pulse.view.active,
-#dashboard.view.active,
 #invoices.view.active,
-#inventory.view.active {
-  max-width: var(--content-max, 1320px);
+#inventory.view.active,
+#clients.view.active,
+#approvals.view.active,
+#receipts.view.active,
+#recurring.view.active,
+#chat.view.active {
+  max-width: var(--content-max, 1680px);
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+/* Home uses full main width so app tiles don't leave a dead right gutter */
+#dashboard.view.active {
+  max-width: none;
   width: 100%;
 }
 
@@ -4457,7 +4476,7 @@ body:has(.modalback.show) .notif-panel {
   .insight h3 { font-size: 12.5px !important; margin-bottom: 10px !important; }
   .section-head { margin: 16px 0 8px !important; }
   .eco-tile {
-    min-height: 104px !important;
+    min-height: 100px !important;
     padding: 12px 10px 10px !important;
     border-radius: 14px !important;
   }
