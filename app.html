@@ -4842,6 +4842,7 @@ body:has(.modalback.show) .notif-panel {
         </div>
       </div>
       <div id="inventoryNeedsAttention" class="insight" style="margin-bottom:14px;display:none"></div>
+      <div id="inventoryGlRecon" class="insight" style="margin-bottom:14px;display:none"></div>
       <div id="inventoryReplenish" class="insight" style="margin-bottom:14px;display:none"></div>
       <div class="client-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <div class="search-bar" style="margin:0;flex:1;max-width:420px">
@@ -10343,6 +10344,7 @@ function inventoryView(tab) {
       /* static panel */
     }
   } catch (e) { console.warn('inventory tab', e); }
+  try { renderInventoryGlReconStrip(); } catch (_) {}
   try { updateInventoryNavBadge(); } catch (_) {}
 }
 
@@ -13026,7 +13028,11 @@ async function confirmReceiveGoods() {
       if (recvLocId) {
         const { mov } = adjustLocationStock(p.id, recvLocId, qty, {
           reason: 'purchase',
-          reference: po.purchase_number
+          reference: po.purchase_number,
+          unit_cost: Number(line.unit_cost) || Number(p.cost) || 0,
+          skipGl: true, // PO receive posts Dr Inventory / Cr AP once for the receipt total
+          source_type: 'purchase_receive',
+          source_id: po.id
         });
         try {
           pushProductToCloud(p);
@@ -13034,7 +13040,18 @@ async function confirmReceiveGoods() {
           pushStockMovementToCloud(mov);
         } catch (e) { console.warn(e); }
       } else {
-        p.stock_qty = (Number(p.stock_qty) || 0) + qty;
+        // L1: still require a location — fall back to default rather than naked stock_qty edit
+        const fallbackLoc = getActiveLocation() || (db.locations || []).find(l => l.active !== false);
+        if (fallbackLoc) {
+          adjustLocationStock(p.id, fallbackLoc.id, qty, {
+            reason: 'purchase',
+            reference: po.purchase_number,
+            unit_cost: Number(line.unit_cost) || Number(p.cost) || 0,
+            skipGl: true,
+            source_type: 'purchase_receive',
+            source_id: po.id
+          });
+        }
         try { pushProductToCloud(p); } catch (e) { console.warn(e); }
       }
     }
@@ -17626,7 +17643,11 @@ async function saveStockAdjust() {
   const note = (document.getElementById('stockAdjustNote').value || '').trim() || null;
   const { mov } = adjustLocationStock(id, loc.id, change, {
     reason: 'adjustment',
-    note: note || ('Set at ' + loc.name)
+    note: note || ('Set at ' + loc.name),
+    unit_cost: Number(p.cost) || 0,
+    postGl: true,
+    source_type: 'adjustment',
+    source_id: id
   });
   try {
     await pushProductToCloud(p);
@@ -17636,10 +17657,11 @@ async function saveStockAdjust() {
   try {
     appendInventoryAudit('stock.adjusted', 'inventory', id,
       'Stock adjust ' + (p.name || '') + ' @ ' + (loc.name || '') + ' · ' + (change > 0 ? '+' : '') + change,
-      { location_id: loc.id, change, prev, next });
+      { location_id: loc.id, change, prev, next, gl_posted: !!(mov && mov.gl_posted) });
   } catch (e) {}
   persistDb();
   try { runLowStockAlertEngine({ reason: 'adjustment' }); } catch (_) {}
+  try { renderInventoryGlReconStrip(); } catch (_) {}
   closeStockAdjustModal();
   const bits = (db.locations || []).filter(l => l.active !== false).map(l =>
     locationStockQty(id, l.id) + ' ' + l.name
@@ -17963,7 +17985,11 @@ async function postStockCountSession() {
     const { mov } = adjustLocationStock(ch.line.product_id, loc.id, ch.delta, {
       reason: 'stock_count',
       reference: 'COUNT',
-      note: noteBase + ' · counted ' + ch.cnt
+      note: noteBase + ' · counted ' + ch.cnt,
+      unit_cost: Number(p.cost) || 0,
+      postGl: true,
+      source_type: 'stock_count',
+      source_id: session.id || 'COUNT'
     });
     try {
       if (p) await pushProductToCloud(p);
@@ -18073,18 +18099,52 @@ async function pushProductToCloud(product) {
 }
 
 async function pushStockMovementToCloud(mov) {
-  if (!cloud?.client || !cloud?.organizationId) return;
+  if (!cloud?.client || !cloud?.organizationId || !mov) return;
   const product = db.products.find(p => p.id === mov.product_id);
   const productUuid = product?.cloudId;
   if (!productUuid) return;
-  await cloud.client.from('stock_movements').insert({
+  let locationUuid = null;
+  try {
+    const loc = (db.locations || []).find(l => l.id === mov.location_id);
+    locationUuid = loc?.cloudId || null;
+  } catch (_) {}
+  const row = {
     organization_id: cloud.organizationId,
     product_id: productUuid,
+    location_id: locationUuid,
     qty_change: mov.qty_change,
     reason: mov.reason,
     reference: mov.reference,
-    note: mov.note
-  });
+    note: mov.note,
+    local_id: mov.id,
+    unit_cost: mov.unit_cost != null ? Number(mov.unit_cost) : null,
+    value: mov.value != null ? Number(mov.value) : null,
+    qty_before: mov.qty_before != null ? Number(mov.qty_before) : null,
+    qty_after: mov.qty_after != null ? Number(mov.qty_after) : null,
+    source_type: mov.source_type || mov.reason || null,
+    source_id: mov.source_id || mov.reference || null,
+    created_by: mov.created_by || null,
+    journal_id: mov.journal_id || null,
+    gl_posted: !!mov.gl_posted
+  };
+  const { error } = await cloud.client.from('stock_movements').insert(row);
+  if (error) {
+    // Older schema without L1 columns — fall back to minimal insert
+    if (/column|schema/i.test(error.message || '')) {
+      await cloud.client.from('stock_movements').insert({
+        organization_id: cloud.organizationId,
+        product_id: productUuid,
+        location_id: locationUuid,
+        qty_change: mov.qty_change,
+        reason: mov.reason,
+        reference: mov.reference,
+        note: mov.note,
+        local_id: mov.id
+      });
+    } else {
+      console.warn('stock_movements insert', error.message || error);
+    }
+  }
 }
 
 async function pullProductsFromCloud() {
@@ -18369,7 +18429,7 @@ function stockGetQty(productId, locationId) {
   return 0;
 }
 
-/** Set absolute qty at a store (posts movement for the delta). */
+/** Set absolute qty at a store (posts movement for the delta). Never write qty without a movement. */
 function stockSetQty(productId, locationId, qty, meta) {
   const lid = resolveLocationId(locationId);
   const prev = stockGetQty(productId, lid);
@@ -18377,7 +18437,134 @@ function stockSetQty(productId, locationId, qty, meta) {
   return stockApplyDelta(productId, lid, next - prev, meta);
 }
 
-/** Apply +/- qty at a store. Only write path for stock. */
+/** L1: Inventory control account (balance sheet). */
+function stockInventoryAccountId() {
+  try {
+    if (typeof resolveBooksControlAccount === 'function') {
+      const id = resolveBooksControlAccount('inventory');
+      if (id) return id;
+    }
+  } catch (_) {}
+  const coa = (typeof getCoa === 'function' ? getCoa() : (db.coa || []));
+  const hit = coa.find(a => a && (a.fsLine === 'inventory' || /inventory/i.test(a.name || '')));
+  return (hit && hit.id) || '1300';
+}
+/** L1: COGS / cost of sales. */
+function stockCogsAccountId() {
+  const coa = (typeof getCoa === 'function' ? getCoa() : (db.coa || []));
+  const hit = coa.find(a => a && (a.fsLine === 'cogs' || /^cost of/i.test(a.name || '')));
+  return (hit && hit.id) || '5000';
+}
+/** L1: Inventory adjustment (P&L or other expense). */
+function stockAdjustmentAccountId() {
+  const coa = (typeof getCoa === 'function' ? getCoa() : (db.coa || []));
+  const hit = coa.find(a => a && /inventory adjust|stock adjust|shrink|write.?off/i.test(a.name || ''));
+  if (hit) return hit.id;
+  return stockCogsAccountId(); // fallback: variance through COGS until dedicated account exists
+}
+
+/**
+ * L1 posting engine — one movement → optional journal.
+ * Reasons that post value:
+ *   sale / pos_sale     → Dr COGS, Cr Inventory (unit cost × |qty|)
+ *   purchase / receive  → skipped here if caller already posts PO receive journal (meta.skipGl)
+ *   adjustment / count / opening (value change) → Dr/Cr Inventory vs adjustment
+ *   transfer_*          → no GL (same company, cost follows qty)
+ * Set meta.skipGl = true when the caller posts books itself (legacy POS/PO paths).
+ * Set meta.postGl = true to force.
+ */
+function postStockMovementToBooks(mov, product, meta) {
+  meta = meta || {};
+  if (!mov || !mov.qty_change) return null;
+  if (meta.skipGl) return null;
+  const reason = String(mov.reason || meta.reason || '').toLowerCase();
+  // Transfers: physical only
+  if (reason.indexOf('transfer') >= 0) return null;
+  // Purchase receive: existing PO path posts Dr Inventory / Cr AP — avoid double
+  if ((reason === 'purchase' || reason === 'receive' || reason === 'goods_receipt') && meta.postGl !== true) return null;
+  // Sale: POS completeSale already posts COGS — skip unless forced
+  if ((reason === 'sale' || reason === 'pos_sale') && meta.postGl !== true) return null;
+
+  const qty = Number(mov.qty_change) || 0;
+  const unitCost = Number(mov.unit_cost != null ? mov.unit_cost : (product && product.cost)) || 0;
+  const value = Math.round(Math.abs(qty) * unitCost * 100) / 100;
+  if (!(value > 0.0001)) return null;
+
+  try { ensureBooksDb(); } catch (_) {}
+  const invId = stockInventoryAccountId();
+  const date = String(mov.created_at || '').slice(0, 10) || (typeof today !== 'undefined' ? today : new Date().toISOString().slice(0, 10));
+  const sourceKey = 'j:stock:' + mov.id;
+  if ((db.journals || []).some(j => j && j.sourceKey === sourceKey)) return null;
+
+  let lines = null;
+  let memo = '';
+  const ref = mov.reference || '';
+  const pname = (product && product.name) || mov.product_id || 'item';
+
+  if (reason === 'sale' || reason === 'pos_sale') {
+    // Issue stock: Dr COGS, Cr Inventory
+    const cogsId = stockCogsAccountId();
+    lines = [
+      { accountId: cogsId, debit: value, credit: 0 },
+      { accountId: invId, debit: 0, credit: value }
+    ];
+    memo = 'COGS · stock issue ' + (ref || pname);
+  } else if (reason === 'purchase' || reason === 'receive' || reason === 'goods_receipt') {
+    // Only when postGl forced (e.g. no PO path): Dr Inventory, Cr AP
+    const apId = (typeof resolveBooksControlAccount === 'function' && resolveBooksControlAccount('ap')) || '2000';
+    lines = [
+      { accountId: invId, debit: value, credit: 0 },
+      { accountId: apId, debit: 0, credit: value }
+    ];
+    memo = 'Goods received · ' + (ref || pname);
+  } else if (reason === 'opening') {
+    // Opening stock: Dr Inventory, Cr Opening equity / adjustment
+    const equity = (typeof getCoa === 'function' ? getCoa() : []).find(a => a && (a.id === '3000' || /owner|equity|capital|opening/i.test(a.name || '')));
+    const creditId = (equity && equity.id) || stockAdjustmentAccountId();
+    lines = [
+      { accountId: invId, debit: value, credit: 0 },
+      { accountId: creditId, debit: 0, credit: value }
+    ];
+    memo = 'Opening stock · ' + (ref || pname);
+  } else {
+    // adjustment / stock_count / shrinkage: qty up → Dr Inv Cr Adj; qty down → Dr Adj Cr Inv
+    const adjId = stockAdjustmentAccountId();
+    if (qty > 0) {
+      lines = [
+        { accountId: invId, debit: value, credit: 0 },
+        { accountId: adjId, debit: 0, credit: value }
+      ];
+      memo = 'Stock gain · ' + (reason || 'adjustment') + (ref ? ' · ' + ref : '') + ' · ' + pname;
+    } else {
+      lines = [
+        { accountId: adjId, debit: value, credit: 0 },
+        { accountId: invId, debit: 0, credit: value }
+      ];
+      memo = 'Stock loss · ' + (reason || 'adjustment') + (ref ? ' · ' + ref : '') + ' · ' + pname;
+    }
+  }
+
+  if (!lines || typeof postJournal !== 'function') return null;
+  const entry = postJournal({
+    date,
+    memo: (mov.note ? memo + ' · ' + mov.note : memo).slice(0, 200),
+    source: 'stock_movement',
+    sourceKey,
+    lines
+  });
+  if (entry) {
+    mov.journal_id = entry.id || entry.sourceKey || sourceKey;
+    mov.gl_posted = true;
+    mov.gl_value = value;
+  }
+  return entry;
+}
+
+/**
+ * L1: Only legal write path for stock quantity.
+ * Updates balance cache + appends immutable movement (+ optional GL).
+ * Never call product.stock_qty = … or map[lid] = … outside this function.
+ */
 function stockApplyDelta(productId, locationId, qtyChange, meta) {
   meta = meta || {};
   ensurePosDb();
@@ -18385,27 +18572,148 @@ function stockApplyDelta(productId, locationId, qtyChange, meta) {
   if (!lid) throw new Error('No store selected for stock change');
   const p = (db.products || []).find(x => x.id === productId);
   if (!p) throw new Error('Product not found');
+  if (p.track_stock === false) {
+    return { row: null, mov: null, product: p, prev: 0, next: 0, skipped: true };
+  }
   const map = ensureProductStockMap(p);
   const prev = Number(map[lid]) || 0;
   const delta = Number(qtyChange) || 0;
+  if (!delta) {
+    return { row: stockMirrorRow(productId, lid, prev), mov: null, product: p, prev, next: prev };
+  }
   const next = prev + delta;
+  // Balance cache (derived operationally from last movement)
   map[lid] = next;
   const row = stockMirrorRow(productId, lid, next);
   stockRecalcTotal(p);
+
+  let unitCost = meta.unit_cost;
+  if (unitCost == null || unitCost === '') unitCost = Number(p.cost) || 0;
+  unitCost = Number(unitCost) || 0;
+
+  const actor = (typeof cloud !== 'undefined' && cloud && cloud.user && (cloud.user.email || cloud.user.id))
+    || (db.profile && (db.profile.email || db.profile.name))
+    || null;
+
   const mov = {
     id: crypto.randomUUID(),
     product_id: productId,
     location_id: lid,
     qty_change: delta,
+    qty_before: prev,
+    qty_after: next,
+    unit_cost: unitCost,
+    value: Math.round(Math.abs(delta) * unitCost * 100) / 100,
     reason: meta.reason || 'adjustment',
     reference: meta.reference || null,
+    source_type: meta.source_type || meta.reason || 'adjustment',
+    source_id: meta.source_id || meta.reference || null,
     note: meta.note || null,
-    created_at: new Date().toISOString()
+    created_by: actor,
+    created_at: new Date().toISOString(),
+    gl_posted: false
   };
   if (!Array.isArray(db.stockMovements)) db.stockMovements = [];
   db.stockMovements.push(mov);
+
+  // Posting engine (may no-op for sale/purchase/transfer unless forced)
+  try {
+    postStockMovementToBooks(mov, p, meta);
+  } catch (e) {
+    console.warn('stock GL post', e.message || e);
+  }
+
   try { persistDb(); } catch (_) {}
   return { row, mov, product: p, prev, next };
+}
+
+/**
+ * L1: Inventory valuation (balance cache × product cost) vs Inventory GL.
+ * Returns { stockValue, glBalance, difference, byLocation, ok }.
+ */
+function inventoryGlReconciliation() {
+  ensurePosDb();
+  try { ensureBooksDb(); } catch (_) {}
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  const byLocation = [];
+  let stockValue = 0;
+  (db.products || []).forEach(p => {
+    if (!p || p.track_stock === false) return;
+    const cost = Number(p.cost) || 0;
+    if (locs.length) {
+      locs.forEach(loc => {
+        const qty = stockGetQty(p.id, loc.id);
+        const val = Math.round(qty * cost * 100) / 100;
+        if (Math.abs(qty) > 0.0001 || Math.abs(val) > 0.0001) {
+          byLocation.push({ product_id: p.id, name: p.name, location_id: loc.id, location: loc.name, qty, cost, value: val });
+        }
+        stockValue += val;
+      });
+    } else {
+      const qty = Number(p.stock_qty) || 0;
+      const val = Math.round(qty * cost * 100) / 100;
+      stockValue += val;
+      if (Math.abs(qty) > 0.0001) byLocation.push({ product_id: p.id, name: p.name, location_id: null, location: '—', qty, cost, value: val });
+    }
+  });
+  stockValue = Math.round(stockValue * 100) / 100;
+
+  let glBalance = 0;
+  try {
+    const invId = stockInventoryAccountId();
+    if (typeof accountBalances === 'function') {
+      const bals = accountBalances();
+      glBalance = Number(bals[invId]) || 0;
+    } else {
+      (db.journals || []).forEach(j => {
+        (j.lines || []).forEach(l => {
+          if (String(l.accountId) === String(invId)) {
+            glBalance += (Number(l.debit) || 0) - (Number(l.credit) || 0);
+          }
+        });
+      });
+    }
+  } catch (_) {}
+  glBalance = Math.round(glBalance * 100) / 100;
+  const difference = Math.round((stockValue - glBalance) * 100) / 100;
+  return {
+    stockValue,
+    glBalance,
+    difference,
+    byLocation,
+    ok: Math.abs(difference) < 0.02,
+    inventoryAccountId: stockInventoryAccountId()
+  };
+}
+
+function renderInventoryGlReconStrip() {
+  const el = document.getElementById('inventoryGlRecon');
+  if (!el) return;
+  let r;
+  try { r = inventoryGlReconciliation(); } catch (e) {
+    el.style.display = 'none';
+    return;
+  }
+  const moneyFn = (typeof money === 'function') ? money : (n => String(n));
+  const ok = r.ok;
+  el.style.display = '';
+  el.innerHTML =
+    '<div style="display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between">' +
+      '<div>' +
+        '<div style="font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)">Inventory ↔ GL (L1)</div>' +
+        '<div style="font-size:13px;margin-top:4px">Stock valuation <b>' + moneyFn(r.stockValue) + '</b>' +
+        ' · GL ' + (r.inventoryAccountId || '1300') + ' <b>' + moneyFn(r.glBalance) + '</b>' +
+        ' · Difference <b style="color:' + (ok ? 'var(--green-text, #047857)' : 'var(--red-text, #b91c1c)') + '">' + moneyFn(r.difference) + '</b></div>' +
+        '<div class="client-meta" style="margin-top:4px">' + (ok
+          ? 'Balances match — stock ledger and books are aligned.'
+          : 'Mismatch: check unposted adjustments, missing COGS on sales, or opening stock without a journal.') + '</div>' +
+      '</div>' +
+      '<button type="button" class="button small" id="inventoryGlReconRefresh">Refresh</button>' +
+    '</div>';
+  document.getElementById('inventoryGlReconRefresh')?.addEventListener('click', () => {
+    renderInventoryGlReconStrip();
+    try { toast(ok ? 'Inventory and GL match' : 'Difference ' + moneyFn(r.difference)); } catch (_) {}
+  });
 }
 
 // ---- Compatibility aliases (existing call sites) ----
