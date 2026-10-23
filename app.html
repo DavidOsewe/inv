@@ -4836,6 +4836,7 @@ body:has(.modalback.show) .notif-panel {
           <button class="button" type="button" id="btnManageLocations">Locations</button>
           <button class="button" type="button" id="btnPushAllStock" title="Upload every product × store qty to the cloud so other devices match">Push stock to cloud</button>
           <button class="button" type="button" id="btnPullAllStock" title="Download org stock ledger from cloud (overwrites local store qtys for synced products)">Pull stock from cloud</button>
+          <button class="button" type="button" id="btnRebuildFromMovements" title="L1.1: set store quantities from sum of stock movements">Rebuild from movements</button>
           <button class="button" type="button" id="btnStockCount">Count stock</button>
           <a class="button" href="/pos.html" id="btnOpenPosFromProducts">Open POS</a>
           <button class="button primary" type="button" id="addProduct">+ Add product</button>
@@ -6633,8 +6634,8 @@ body:has(.modalback.show) .notif-panel {
     <div class="field" style="margin-top:4px">
       <label>If posting Books, credit</label>
       <select id="receivePayMode">
-        <option value="ap">Accounts payable (pay later)</option>
-        <option value="cash">Cash (paid now)</option>
+        <option value="ap">GRNI — goods received, invoice later (3-way)</option>
+        <option value="cash">Cash (paid now at receipt)</option>
       </select>
     </div>
     <div class="buttons" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
@@ -13075,29 +13076,32 @@ async function confirmReceiveGoods() {
   };
   db.purchaseReceipts.push(receipt);
 
-  // Books: Dr Inventory 1300 / Cr AP 2000 (default) or Cr Cash 1000
+  // L2 Books: Dr Inventory / Cr GRNI (on account) or Cr Cash (paid at receipt)
   if (document.getElementById('receivePostBooks')?.checked && receiptValue > 0) {
     try {
+      ensureGrniCoaAccounts();
       const key = 'po_recv:' + receipt.id;
       const mode = document.getElementById('receivePayMode')?.value || 'ap';
-      const creditAccount = mode === 'cash' ? '1000' : (typeof AP_CONTROL_ID !== 'undefined' ? AP_CONTROL_ID : '2000');
+      const invId = (typeof stockInventoryAccountId === 'function') ? stockInventoryAccountId() : '1300';
+      const creditAccount = mode === 'cash' ? '1000' : getGrniAccountId();
       const sup = (db.suppliers || []).find(s => s.id === po.supplier_id);
       const party = mode === 'cash' ? null : {
         partyType: 'supplier',
         partyId: String(po.supplier_id || ''),
-        partyName: String((sup && sup.name) || '').slice(0, 120)
+        partyName: String((sup && sup.name) || po.supplier_name || '').slice(0, 120)
       };
-      const apLine = { accountId: creditAccount, debit: 0, credit: receiptValue };
+      const creditLine = { accountId: creditAccount, debit: 0, credit: receiptValue };
       postJournal({
         date: now.slice(0, 10),
-        memo: 'Goods received · ' + po.purchase_number + (mode === 'cash' ? ' (paid)' : ' (on account)') +
+        memo: 'Goods received · ' + po.purchase_number +
+          (mode === 'cash' ? ' (paid)' : ' · GRNI') +
           (party && party.partyName ? ' · ' + party.partyName : ''),
         source: 'purchase_receive',
         sourceKey: 'j:' + key,
         currency: po.currency || posCurrency(),
         lines: [
-          { accountId: '1300', debit: receiptValue, credit: 0 },
-          (party && typeof withPartyOnArApLine === 'function') ? withPartyOnArApLine(apLine, party) : apLine
+          { accountId: invId, debit: receiptValue, credit: 0 },
+          creditLine
         ]
       });
       if (mode === 'cash' && !db.cashEntries.some(e => e.sourceKey === key)) {
@@ -13113,7 +13117,8 @@ async function confirmReceiveGoods() {
           sourceKey: key
         });
       }
-      receipt.books_mode = mode;
+      receipt.books_mode = mode === 'cash' ? 'cash' : 'grni';
+      receipt.grni_posted = mode !== 'cash';
     } catch (e) { console.warn('receive books', e); }
   }
 
@@ -13828,27 +13833,79 @@ function purchaseMatchTotal(po) {
     s + (Number(l.qty) || 0) * (Number(l.unit_cost) || Number(l.rate) || 0), 0);
 }
 
+/** L2: GRNI and purchase-price-variance account ids. */
+const GRNI_ACCOUNT_ID = '2010';
+const PPV_ACCOUNT_ID = '5050';
+
+function ensureGrniCoaAccounts() {
+  try { ensureBooksDb(); } catch (_) {}
+  if (!Array.isArray(db.coa)) db.coa = (typeof COA !== 'undefined' ? COA.map(a => Object.assign({}, a)) : []);
+  const need = [
+    { id: GRNI_ACCOUNT_ID, name: 'Goods received not invoiced (GRNI)', type: 'liability', statement: 'bs', fsLine: 'payables', cfSection: 'operating' },
+    { id: PPV_ACCOUNT_ID, name: 'Purchase price variance', type: 'expense', statement: 'pl', fsLine: 'cogs', cfSection: 'operating' }
+  ];
+  need.forEach(spec => {
+    if (!db.coa.some(a => String(a.id) === String(spec.id))) db.coa.push(Object.assign({}, spec));
+  });
+}
+
+function getGrniAccountId() {
+  ensureGrniCoaAccounts();
+  return GRNI_ACCOUNT_ID;
+}
+function getPpvAccountId() {
+  ensureGrniCoaAccounts();
+  return PPV_ACCOUNT_ID;
+}
+
+/** Sum of goods receipts for a PO (inventory value already on GRNI). */
+function purchaseReceivedValue(purchaseId) {
+  if (!purchaseId) return 0;
+  return (db.purchaseReceipts || []).filter(r => r && r.purchase_id === purchaseId)
+    .reduce((s, r) => s + (Number(r.total_value) || 0), 0);
+}
+
+function purchaseHasInventoryReceipts(purchaseId) {
+  return purchaseReceivedValue(purchaseId) > 0.0001;
+}
+
 /**
- * 2-way match: bill amount vs PO total within tolerance.
- * Returns { ok, variancePct, poTotal, status: 'match'|'variance'|'no_po' }
+ * L2 three-way match: PO ↔ goods receipts ↔ supplier bill.
+ * Returns { ok, status, variancePct, poTotal, receivedTotal, billAmount, priceVariance, qtyGap }
+ * status: match | variance | no_po | no_receipt
  */
 function matchBillToPurchase(amount, purchaseId) {
-  if (!purchaseId) return { ok: true, status: 'no_po', variancePct: 0, poTotal: 0 };
+  if (!purchaseId) return { ok: true, status: 'no_po', variancePct: 0, poTotal: 0, receivedTotal: 0, billAmount: Number(amount) || 0 };
   const po = (db.purchases || []).find(p => p.id === purchaseId);
-  if (!po) return { ok: false, status: 'variance', variancePct: 100, poTotal: 0, note: 'PO not found' };
+  if (!po) return { ok: false, status: 'variance', variancePct: 100, poTotal: 0, receivedTotal: 0, billAmount: Number(amount) || 0, note: 'PO not found' };
   const poTotal = purchaseMatchTotal(po);
+  const receivedTotal = purchaseReceivedValue(purchaseId);
   const amt = Number(amount) || 0;
-  if (!(poTotal > 0)) return { ok: false, status: 'variance', variancePct: 100, poTotal: 0, note: 'PO has no total' };
-  const variancePct = Math.abs(amt - poTotal) / poTotal * 100;
-  const tol = getApAutomationSettings().poTolerancePct;
+  const tol = (typeof getApAutomationSettings === 'function' ? getApAutomationSettings().poTolerancePct : 5) || 5;
+
+  if (!(poTotal > 0) && !(receivedTotal > 0)) {
+    return { ok: false, status: 'variance', variancePct: 100, poTotal: 0, receivedTotal: 0, billAmount: amt, note: 'PO has no total', purchase_number: po.purchase_number || po.id, supplier: po.supplier_name || '' };
+  }
+
+  // Prefer received value for inventory match; fall back to PO total if nothing received yet
+  const base = receivedTotal > 0.0001 ? receivedTotal : poTotal;
+  const variancePct = base > 0 ? Math.abs(amt - base) / base * 100 : 100;
   const ok = variancePct <= tol + 1e-9;
+  let status = ok ? 'match' : 'variance';
+  if (!(receivedTotal > 0.0001) && amt > 0) status = ok ? 'match' : 'no_receipt';
+
   return {
     ok,
-    status: ok ? 'match' : 'variance',
+    status,
     variancePct: Math.round(variancePct * 100) / 100,
     poTotal,
+    receivedTotal: Math.round(receivedTotal * 100) / 100,
+    billAmount: amt,
+    priceVariance: Math.round((amt - (receivedTotal > 0.0001 ? receivedTotal : poTotal)) * 100) / 100,
+    qtyGap: Math.round((poTotal - receivedTotal) * 100) / 100,
     purchase_number: po.purchase_number || po.id,
-    supplier: po.supplier_name || ''
+    supplier: po.supplier_name || '',
+    three_way: receivedTotal > 0.0001
   };
 }
 
@@ -18482,7 +18539,7 @@ function postStockMovementToBooks(mov, product, meta) {
   if (reason.indexOf('transfer') >= 0) return null;
   // Purchase receive: existing PO path posts Dr Inventory / Cr AP — avoid double
   if ((reason === 'purchase' || reason === 'receive' || reason === 'goods_receipt') && meta.postGl !== true) return null;
-  // Sale: POS completeSale already posts COGS — skip unless forced
+  // Sale: post COGS when postGl true (L1.1 unified path). Legacy callers omit postGl.
   if ((reason === 'sale' || reason === 'pos_sale') && meta.postGl !== true) return null;
 
   const qty = Number(mov.qty_change) || 0;
@@ -18508,7 +18565,7 @@ function postStockMovementToBooks(mov, product, meta) {
       { accountId: cogsId, debit: value, credit: 0 },
       { accountId: invId, debit: 0, credit: value }
     ];
-    memo = 'COGS · stock issue ' + (ref || pname);
+    memo = 'COGS · POS sale ' + (ref || pname);
   } else if (reason === 'purchase' || reason === 'receive' || reason === 'goods_receipt') {
     // Only when postGl forced (e.g. no PO path): Dr Inventory, Cr AP
     const apId = (typeof resolveBooksControlAccount === 'function' && resolveBooksControlAccount('ap')) || '2000';
@@ -18782,7 +18839,68 @@ function migrateProductStockToLocations() {
 }
 
 /** Repair: force map ↔ locationStock alignment and recompute totals (no double-count). */
+/**
+ * L1.1: Rebuild balance cache from append-only movements.
+ * Products with no movements keep their current map (opening may predate ledger).
+ * Pass { force: true } to zero products that have zero movement history.
+ */
+function rebuildStockBalancesFromMovements(opts) {
+  opts = opts || {};
+  ensurePosDb();
+  if (!Array.isArray(db.stockMovements)) db.stockMovements = [];
+  const locs = (db.locations || []).filter(l => l.active !== false);
+  const activeIds = new Set(locs.map(l => l.id));
+  const sums = {}; // product_id -> { location_id -> qty }
+  let movCount = 0;
+  db.stockMovements.forEach(m => {
+    if (!m || !m.product_id) return;
+    let lid = m.location_id;
+    try { lid = resolveLocationId(lid) || lid; } catch (_) {}
+    if (!lid) return;
+    if (activeIds.size && !activeIds.has(lid) && !opts.includeInactive) return;
+    if (!sums[m.product_id]) sums[m.product_id] = {};
+    sums[m.product_id][lid] = (Number(sums[m.product_id][lid]) || 0) + (Number(m.qty_change) || 0);
+    movCount++;
+  });
+  let productsTouched = 0;
+  let cells = 0;
+  (db.products || []).forEach(p => {
+    if (!p || p.track_stock === false) return;
+    const byLoc = sums[p.id];
+    if (!byLoc) {
+      if (opts.force) {
+        const map = ensureProductStockMap(p);
+        locs.forEach(l => {
+          map[l.id] = 0;
+          stockMirrorRow(p.id, l.id, 0);
+        });
+        stockRecalcTotal(p);
+        productsTouched++;
+      }
+      return;
+    }
+    const map = ensureProductStockMap(p);
+    locs.forEach(l => {
+      const q = Number(byLoc[l.id]) || 0;
+      map[l.id] = q;
+      stockMirrorRow(p.id, l.id, q);
+      cells++;
+    });
+    // Drop map keys for inactive/unknown locations when forcing clean
+    if (opts.pruneKeys) {
+      Object.keys(map).forEach(k => {
+        if (!activeIds.has(k)) delete map[k];
+      });
+    }
+    stockRecalcTotal(p);
+    productsTouched++;
+  });
+  try { persistDb(); } catch (_) {}
+  return { movements: movCount, products: productsTouched, cells, ok: true };
+}
+
 function repairStockIntegrity() {
+
   ensurePosDb();
   try { consolidateStockOntoCanonicalLocations(); } catch (_) {}
   try { migrateProductStockToLocations(); } catch (_) {}
@@ -18796,10 +18914,18 @@ function repairStockIntegrity() {
     });
     stockRecalcTotal(p);
   });
+  // L1.1: when movements exist, prefer ledger sum over map drift
+  let fromMovements = null;
+  try {
+    if ((db.stockMovements || []).length > 0) {
+      fromMovements = rebuildStockBalancesFromMovements({ pruneKeys: true });
+    }
+  } catch (e) { console.warn('rebuild from movements', e); }
   try { persistDb(); } catch (_) {}
   return {
     products: (db.products || []).length,
     locations: locs.length,
+    fromMovements,
     totalUnits: locs.reduce((n, loc) => {
       return n + (db.products || []).reduce((m, p) => {
         if (!p || p.track_stock === false) return m;
@@ -20663,24 +20789,26 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
   }
   sale.location_id = saleLoc.id || null;
   sale.location_name = String(saleLoc.name).trim();
+  // L1.1: stock issue + COGS via movement engine (postGl); no naked stock_qty edit
   for (const line of lines) {
     const p = db.products.find(x => x.id === line.product_id);
     if (!p || p.track_stock === false) continue;
-    if (saleLoc) {
-      const { mov } = adjustLocationStock(p.id, saleLoc.id, -line.qty, {
-        reason: 'sale',
-        reference: saleNumber
-      });
-      try {
-        await pushProductToCloud(p);
-        await pushLocationStockToCloud(p.id, saleLoc.id);
-        await pushStockMovementToCloud(mov);
-      } catch (e) { console.warn(e); }
-    } else {
-      p.stock_qty = (Number(p.stock_qty) || 0) - line.qty;
-      p.updated_at = now;
-      try { await pushProductToCloud(p); } catch (e) { console.warn(e); }
-    }
+    const unitCost = Number(line.cost) || Number(p.cost) || 0;
+    const locId = saleLoc.id;
+    const { mov } = adjustLocationStock(p.id, locId, -line.qty, {
+      reason: 'sale',
+      reference: saleNumber,
+      unit_cost: unitCost,
+      postGl: true,
+      source_type: 'pos_sale',
+      source_id: saleId,
+      note: saleLoc.name || null
+    });
+    try {
+      await pushProductToCloud(p);
+      await pushLocationStockToCloud(p.id, locId);
+      if (mov) await pushStockMovementToCloud(mov);
+    } catch (e) { console.warn(e); }
   }
 
   db.posSales.push(sale);
@@ -20740,28 +20868,22 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
     } else {
       console.warn('POS revenue journal not posted', saleLabel, total);
     }
+    // L1.1: COGS posted per stock movement (postGl on sale lines) — avoid double journal
     let cogs = null;
-    if (costTotal > 0.0001) {
-      cogs = postJournal({
-        date,
-        memo: 'COGS · POS sale ' + saleLabel,
-        source: 'pos_cogs',
-        sourceKey: 'j:pos_cogs:' + saleId,
-        currency,
-        lines: [
-          { accountId: '5000', debit: costTotal, credit: 0 },
-          { accountId: '1300', debit: 0, credit: costTotal }
-        ]
-      });
-      if (cogs) {
-        cogs.location_id = saleLoc.id || null;
-        cogs.location_name = outletName;
-      }
-    }
-    // Local ledger is instant; push these two rows to cloud immediately (no bulk lag)
+    try {
+      cogs = (db.journals || []).filter(j =>
+        j && j.source === 'stock_movement' && String(j.memo || '').indexOf(saleNumber) >= 0
+      ).slice(-1)[0] || null;
+    } catch (_) {}
     try {
       if (rev) await pushJournalToCloudImmediate(rev);
-      if (cogs) await pushJournalToCloudImmediate(cogs);
+      // Push any stock_movement COGS journals for this sale
+      const stockCogs = (db.journals || []).filter(j =>
+        j && j.source === 'stock_movement' && j.sourceKey && String(j.memo || '').indexOf(saleNumber) >= 0
+      );
+      for (const j of stockCogs) {
+        try { await pushJournalToCloudImmediate(j); } catch (_) {}
+      }
     } catch (e) { console.warn('pos books immediate push', e); }
     try { queueBooksCloudSync(); } catch (_) {}
     // Refresh Books UI if user is looking at it
@@ -22066,6 +22188,7 @@ const COA = [
   { id: '1300', name: 'Inventory', type: 'asset', statement: 'bs', fsLine: 'inventory', cfSection: 'operating' },
   // Liabilities
   { id: '2000', name: 'Accounts payable', type: 'liability', statement: 'bs', fsLine: 'payables', cfSection: 'operating' },
+  { id: '2010', name: 'Goods received not invoiced (GRNI)', type: 'liability', statement: 'bs', fsLine: 'payables', cfSection: 'operating' },
   { id: '2100', name: 'Output VAT / tax payable', type: 'liability', statement: 'bs', fsLine: 'tax_payable', cfSection: 'operating' },
   { id: '2200', name: 'Loans payable', type: 'liability', statement: 'bs', fsLine: 'loans', cfSection: 'financing' },
   // Equity
@@ -22077,6 +22200,7 @@ const COA = [
   { id: '4100', name: 'Other income', type: 'income', statement: 'pl', fsLine: 'other_income', cfSection: 'operating' },
   // Expenses
   { id: '5000', name: 'Cost of sales / supplies', type: 'expense', statement: 'pl', fsLine: 'cogs', cfSection: 'operating' },
+  { id: '5050', name: 'Purchase price variance', type: 'expense', statement: 'pl', fsLine: 'cogs', cfSection: 'operating' },
   { id: '5100', name: 'Rent & workspace', type: 'expense', statement: 'pl', fsLine: 'operating_expense', cfSection: 'operating' },
   { id: '5200', name: 'Utilities, data & airtime', type: 'expense', statement: 'pl', fsLine: 'operating_expense', cfSection: 'operating' },
   { id: '5300', name: 'Transport & logistics', type: 'expense', statement: 'pl', fsLine: 'operating_expense', cfSection: 'operating' },
@@ -25688,6 +25812,7 @@ function rejectExpenseBill(billId) {
 
 function accrueSupplierBill(bill) {
   ensureBooksDb();
+  ensureGrniCoaAccounts();
   const key = 'bill:' + bill.id;
   const totalAmt = Number(bill.amount) || 0;
   const taxAmt = Number(bill.tax) || 0;
@@ -25695,7 +25820,73 @@ function accrueSupplierBill(bill) {
   const totalRep = toRep(totalAmt, bill.currency);
   const taxRep = toRep(taxAmt, bill.currency);
   const netRep = toRep(net, bill.currency);
-  // category must be a real COA account id chosen by the accountant at post time.
+  const party = partyFromBill(bill);
+  const apId = (typeof partyControlAccountForPost === 'function')
+    ? partyControlAccountForPost('supplier', party.partyId, party.partyName)
+    : ((typeof getApControlId === 'function') ? getApControlId() : AP_CONTROL_ID);
+
+  // L2: inventory PO with goods receipts → clear GRNI + AP + price variance (not expense)
+  const purchaseId = bill.purchase_id || null;
+  const receivedTotal = purchaseId ? purchaseReceivedValue(purchaseId) : 0;
+  const isInventoryMatch = purchaseId && receivedTotal > 0.0001;
+
+  if (isInventoryMatch) {
+    const match = matchBillToPurchase(totalAmt, purchaseId);
+    const grniId = getGrniAccountId();
+    const ppvId = getPpvAccountId();
+    const clearGrni = Math.min(receivedTotal, totalRep > 0 ? totalRep : receivedTotal);
+    // Use full received GRNI clear when bill covers the receipt; residual GRNI stays if under-billed
+    const grniClear = Math.round(Math.min(receivedTotal, totalRep || receivedTotal) * 100) / 100;
+    const lines = [];
+    if (grniClear > 0.0001) {
+      lines.push({ accountId: grniId, debit: grniClear, credit: 0 });
+    }
+    // Price variance: bill net vs GRNI cleared (excluding tax on bill for variance vs inventory cost)
+    const invCompare = grniClear;
+    const billNetForVar = netRep;
+    const variance = Math.round((billNetForVar - invCompare) * 100) / 100;
+    if (Math.abs(variance) > 0.009) {
+      if (variance > 0) {
+        // Invoice higher than receipt cost → extra expense
+        lines.push({ accountId: ppvId, debit: variance, credit: 0 });
+      } else {
+        // Invoice lower → credit PPV (favourable)
+        lines.push({ accountId: ppvId, debit: 0, credit: Math.abs(variance) });
+      }
+    }
+    if (taxRep > 0.001) {
+      const inTax = (typeof resolveBooksControlAccount === 'function') ? resolveBooksControlAccount('input_tax') : '1200';
+      lines.push({ accountId: inTax, debit: taxRep, credit: 0 });
+    }
+    lines.push(withPartyOnArApLine({ accountId: apId, debit: 0, credit: totalRep }, party));
+    // Balance check: Dr should equal Cr
+    const dr = lines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
+    const cr = lines.reduce((s, l) => s + (Number(l.credit) || 0), 0);
+    const gap = Math.round((dr - cr) * 100) / 100;
+    if (Math.abs(gap) > 0.02) {
+      // Plug residual to PPV so the journal balances
+      if (gap > 0) lines.push({ accountId: ppvId, debit: 0, credit: gap });
+      else lines.push({ accountId: ppvId, debit: Math.abs(gap), credit: 0 });
+    }
+    bill.category = grniId;
+    bill.match_status = match.status;
+    bill.match_variance_pct = match.variancePct;
+    bill.three_way = true;
+    bill.received_total = receivedTotal;
+    postJournal({
+      date: bill.date || today,
+      memo: 'Bill · 3-way · ' + (match.purchase_number || '') + ' · ' +
+        (party.partyName || bill.supplier || 'Supplier') +
+        (bill.note ? ' · ' + bill.note : ''),
+      source: 'bill_accrual',
+      sourceKey: 'j:' + key,
+      lines,
+      documents: Array.isArray(bill.documents) ? bill.documents : []
+    });
+    return;
+  }
+
+  // Standard expense / service bill
   let expenseAccount = (bill.category || '').trim();
   if (typeof EXPENSE_ACCOUNT_BY_CATEGORY !== 'undefined' && EXPENSE_ACCOUNT_BY_CATEGORY[expenseAccount]) {
     expenseAccount = EXPENSE_ACCOUNT_BY_CATEGORY[expenseAccount];
@@ -25717,10 +25908,6 @@ function accrueSupplierBill(bill) {
     const inTax = (typeof resolveBooksControlAccount === 'function') ? resolveBooksControlAccount('input_tax') : '1200';
     lines.push({ accountId: inTax, debit: taxRep, credit: 0 });
   }
-  const party = partyFromBill(bill);
-  const apId = (typeof partyControlAccountForPost === 'function')
-    ? partyControlAccountForPost('supplier', party.partyId, party.partyName)
-    : ((typeof getApControlId === 'function') ? getApControlId() : AP_CONTROL_ID);
   lines.push(withPartyOnArApLine({ accountId: apId, debit: 0, credit: totalRep }, party));
   postJournal({
     date: bill.date || today,
@@ -34985,6 +35172,19 @@ document.getElementById('btnPullAllStock')?.addEventListener('click', () => {
       if (btn) { btn.disabled = false; btn.textContent = 'Pull stock from cloud'; }
     }
   })();
+});
+
+document.getElementById('btnRebuildFromMovements')?.addEventListener('click', () => {
+  try {
+    const r = rebuildStockBalancesFromMovements({ pruneKeys: true });
+    try { repairStockIntegrity(); } catch (_) {}
+    try { fillProductLocationFilter(); } catch (_) {}
+    try { renderProductsList(); } catch (_) {}
+    try { renderInventoryGlReconStrip(); } catch (_) {}
+    toast('Rebuilt from ' + (r.movements || 0) + ' movements · ' + (r.products || 0) + ' products');
+  } catch (e) {
+    toast(e.message || 'Rebuild failed');
+  }
 });
 
 document.getElementById('btnNewTransfer')?.addEventListener('click', openStockTransferModal);
