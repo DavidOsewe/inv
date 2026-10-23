@@ -6647,6 +6647,32 @@ body:has(.modalback.show) .notif-panel {
   </div>
 </div>
 
+<div class="modalback" id="purchaseDetailModal">
+  <div class="modal" style="max-width:560px;max-height:92vh;overflow:auto">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div>
+        <h2 id="purchaseDetailTitle" style="margin:0">Purchase order</h2>
+        <p class="section-sub" id="purchaseDetailSub" style="margin:6px 0 0">—</p>
+      </div>
+      <button type="button" class="button small" id="purchaseDetailClose" aria-label="Close">✕</button>
+    </div>
+    <div id="purchaseDetailChips" style="display:flex;flex-wrap:wrap;gap:6px;margin:12px 0"></div>
+    <div id="purchaseDetailSummary" class="insight" style="padding:10px 12px;margin-bottom:12px"></div>
+    <div id="purchaseDetailLines" style="margin-bottom:14px"></div>
+    <h3 style="font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">Timeline</h3>
+    <div id="purchaseDetailTimeline" style="margin-bottom:14px"></div>
+    <h3 style="font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">Documents</h3>
+    <div id="purchaseDetailDocs" class="client-meta" style="margin-bottom:14px">—</div>
+    <div class="buttons" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end">
+      <button type="button" class="button" id="purchaseDetailShare">Share with supplier</button>
+      <button type="button" class="button" id="purchaseDetailCopy">Copy</button>
+      <button type="button" class="button" id="purchaseDetailPrint">Print / PDF</button>
+      <span id="purchaseDetailActions" style="display:flex;flex-wrap:wrap;gap:8px"></span>
+    </div>
+    <input type="hidden" id="purchaseDetailId">
+  </div>
+</div>
+
 <div class="modalback" id="productModal">
   <div class="modal" style="max-width:480px">
     <h2 id="productModalTitle">Add product</h2>
@@ -17062,6 +17088,302 @@ function purchasesView() {
   try { renderPurchaseGrniStrip(); } catch (_) {}
 }
 
+/* ---------- PO detail (Phase 1 P0): status · timeline · share ---------- */
+
+function purchaseLinkedBills(purchaseId) {
+  return (db.bills || []).filter(b => b && b.purchase_id === purchaseId);
+}
+
+function purchasePaymentsForPo(purchaseId) {
+  // Payments on bills linked to this PO
+  const billIds = new Set(purchaseLinkedBills(purchaseId).map(b => b.id));
+  const pays = [];
+  (db.journals || []).forEach(j => {
+    if (!j || j.reversed) return;
+    const sk = String(j.sourceKey || '');
+    if (j.source === 'bill_payment' || sk.indexOf('j:billpay:') === 0) {
+      const billId = sk.replace(/^j:billpay:/, '') || (j.meta && j.meta.bill_id);
+      if (billId && billIds.has(billId)) pays.push(j);
+    }
+  });
+  // Also cash outs tagged to those bills
+  (db.cashEntries || []).forEach(e => {
+    if (!e) return;
+    if (e.bill_id && billIds.has(e.bill_id)) pays.push(e);
+  });
+  return pays;
+}
+
+function purchaseStatusSteps(po) {
+  if (!po) return [];
+  const st = String(po.status || '');
+  const received = purchaseReceivedValue(po.id);
+  const openGrni = purchaseOpenGrni(po.id);
+  const bills = purchaseLinkedBills(po.id);
+  const billed = bills.some(b => b.status === 'open' || b.status === 'approved' || b.status === 'paid');
+  const paid = bills.some(b => b.status === 'paid') || purchasePaymentsForPo(po.id).length > 0;
+  const steps = [
+    { id: 'draft', label: 'Draft', done: true },
+    { id: 'approval', label: 'Approved', done: st !== 'draft' && st !== 'pending_approval' && st !== 'cancelled', active: st === 'pending_approval' },
+    { id: 'ordered', label: 'Ordered', done: ['ordered', 'partial', 'received'].indexOf(st) >= 0 || received > 0, active: st === 'ordered' && !(received > 0) },
+    { id: 'grn', label: 'Received', done: received > 0.009, active: (st === 'partial' || st === 'ordered') && received > 0 && openGrni > 0.009 },
+    { id: 'invoice', label: 'Billed', done: billed && openGrni < 0.01, active: openGrni > 0.009 || (billed && openGrni >= 0.01) },
+    { id: 'paid', label: 'Paid', done: paid, active: billed && !paid }
+  ];
+  if (st === 'cancelled') {
+    return [{ id: 'cancelled', label: 'Cancelled', done: true, active: true }];
+  }
+  return steps;
+}
+
+function buildPurchaseTimeline(po) {
+  const events = [];
+  const push = (at, title, detail, kind) => {
+    events.push({ at: at || po.created_at || po.order_date || '', title, detail: detail || '', kind: kind || 'info' });
+  };
+  push(po.created_at || po.order_date, 'PO created', po.purchase_number || '', 'po');
+  if (po.status === 'pending_approval' || po.submitted_at) {
+    push(po.submitted_at || po.updated_at, 'Submitted for approval', '', 'approval');
+  }
+  if (po.approved_at || (po.status !== 'draft' && po.status !== 'pending_approval' && po.status !== 'cancelled')) {
+    push(po.approved_at || po.ordered_at || po.updated_at, 'Approved / ordered', po.approval_note || '', 'approval');
+  }
+  if (po.status === 'cancelled') {
+    push(po.cancelled_at || po.updated_at, 'Cancelled', po.cancel_note || '', 'cancel');
+  }
+  (db.purchaseReceipts || []).filter(r => r && r.purchase_id === po.id).forEach(r => {
+    const n = (r.lines || []).length;
+    push(r.received_at, 'Goods received (GRN)',
+      formatPosMoney(r.total_value || 0) + (n ? ' · ' + n + ' line' + (n === 1 ? '' : 's') : '') +
+      (r.note ? ' · ' + r.note : ''), 'grn');
+  });
+  purchaseLinkedBills(po.id).forEach(b => {
+    push(b.date || b.requested_at || b.created_at, 'Supplier invoice / bill',
+      formatPosMoney(b.amount || 0) + (b.status ? ' · ' + b.status : '') + (b.note ? ' · ' + b.note : ''), 'invoice');
+  });
+  purchasePaymentsForPo(po.id).forEach(p => {
+    const amt = Number(p.amount) || (p.lines || []).reduce((s, l) => s + (Number(l.debit) || 0), 0);
+    push(p.date || p.created_at || p.createdAt, 'Payment', formatPosMoney(amt) + (p.memo ? ' · ' + p.memo : ''), 'pay');
+  });
+  // Audit log entries for this PO
+  try {
+    const audits = (db.auditEvents || []).filter(a =>
+      a && (a.entityId === po.id || (a.meta && a.meta.purchase_id === po.id)) &&
+      (a.entityType === 'purchase' || a.entityType === 'inventory' || /purchase/i.test(String(a.action || '')))
+    );
+    audits.forEach(a => {
+      push(a.at, a.summary || a.action || 'Audit', a.actorEmail || '', 'audit');
+    });
+  } catch (_) {}
+  events.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  return events;
+}
+
+function buildPurchaseShareText(po) {
+  ensurePosDb();
+  const sup = (db.suppliers || []).find(s => s.id === po.supplier_id);
+  const biz = (db.profile && db.profile.name) || 'Buyer';
+  const lines = (po.lines || []).map(l => {
+    const name = l.product_name || (db.products || []).find(p => p.id === l.product_id)?.name || 'Item';
+    const qty = Number(l.qty) || 0;
+    const cost = Number(l.unit_cost) || 0;
+    return '• ' + name + ' × ' + qty + (cost ? ' @ ' + formatPosMoney(cost) : '');
+  }).join('\n');
+  let t = 'PURCHASE ORDER ' + (po.purchase_number || '') + '\n';
+  t += 'From: ' + biz + '\n';
+  t += 'To: ' + ((sup && sup.name) || po.supplier_name || 'Supplier') + '\n';
+  if (po.order_date) t += 'Date: ' + po.order_date + '\n';
+  t += 'Status: ' + purchasePipelineLabel(po) + '\n';
+  t += 'Total: ' + formatPosMoney(po.total || 0) + '\n';
+  if (lines) t += '\nItems:\n' + lines + '\n';
+  if (po.note) t += '\nNote: ' + po.note + '\n';
+  t += '\n— Sent via Invoicedey';
+  return t;
+}
+
+function openPurchaseDetailModal(purchaseId) {
+  ensurePosDb();
+  const po = (db.purchases || []).find(p => p.id === purchaseId);
+  if (!po) { toast('Purchase order not found'); return; }
+  const sup = (db.suppliers || []).find(s => s.id === po.supplier_id);
+  const m = document.getElementById('purchaseDetailModal');
+  if (!m) return;
+  document.getElementById('purchaseDetailId').value = po.id;
+  document.getElementById('purchaseDetailTitle').textContent = po.purchase_number || 'Purchase order';
+  document.getElementById('purchaseDetailSub').textContent =
+    ((sup && sup.name) || po.supplier_name || 'Supplier') + ' · ' + formatPosMoney(po.total || 0);
+
+  const chips = document.getElementById('purchaseDetailChips');
+  const steps = purchaseStatusSteps(po);
+  chips.innerHTML = steps.map(s => {
+    const bg = s.done ? 'color-mix(in srgb,#10b981 18%,var(--panel))' :
+      (s.active ? 'color-mix(in srgb,#6366f1 16%,var(--panel))' : 'var(--panel-2)');
+    const color = s.done ? '#047857' : (s.active ? '#4338ca' : 'var(--muted)');
+    const border = s.done ? '#6ee7b7' : (s.active ? '#a5b4fc' : 'var(--line)');
+    return '<span class="badge" style="background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';font-weight:600">' +
+      (s.done ? '✓ ' : (s.active ? '● ' : '')) + s.label + '</span>';
+  }).join('');
+
+  const received = purchaseReceivedValue(po.id);
+  const openGrni = purchaseOpenGrni(po.id);
+  const bills = purchaseLinkedBills(po.id);
+  document.getElementById('purchaseDetailSummary').innerHTML =
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;font-size:13px">' +
+      '<div><div class="client-meta">Ordered</div><b>' + formatPosMoney(po.total || 0) + '</b></div>' +
+      '<div><div class="client-meta">Received</div><b>' + formatPosMoney(received) + '</b></div>' +
+      '<div><div class="client-meta">Unbilled</div><b>' + formatPosMoney(openGrni) + '</b></div>' +
+      '<div><div class="client-meta">Bills</div><b>' + bills.length + '</b></div>' +
+    '</div>';
+
+  const linesEl = document.getElementById('purchaseDetailLines');
+  const lines = po.lines || [];
+  if (!lines.length) {
+    linesEl.innerHTML = '<div class="client-meta">No lines</div>';
+  } else {
+    linesEl.innerHTML = '<table class="table" style="font-size:13px"><thead><tr><th>Item</th><th class="right">Qty</th><th class="right">Cost</th><th class="right">Line</th></tr></thead><tbody>' +
+      lines.map(l => {
+        const name = l.product_name || (db.products || []).find(p => p.id === l.product_id)?.name || '—';
+        const qty = Number(l.qty) || 0;
+        const cost = Number(l.unit_cost) || 0;
+        return '<tr><td>' + name + '</td><td class="right">' + qty + '</td><td class="right">' +
+          formatPosMoney(cost) + '</td><td class="right">' + formatPosMoney(qty * cost) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  const tl = buildPurchaseTimeline(po);
+  const tlEl = document.getElementById('purchaseDetailTimeline');
+  if (!tl.length) {
+    tlEl.innerHTML = '<div class="client-meta">No events yet</div>';
+  } else {
+    tlEl.innerHTML = tl.map(ev => {
+      const when = ev.at ? String(ev.at).replace('T', ' ').slice(0, 16) : '';
+      return '<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">' +
+        '<div style="min-width:110px;color:var(--muted);font-size:12px">' + when + '</div>' +
+        '<div><div style="font-weight:600">' + (ev.title || '') + '</div>' +
+        (ev.detail ? '<div class="client-meta">' + ev.detail + '</div>' : '') + '</div></div>';
+    }).join('');
+  }
+
+  // Documents: bill attachments
+  const docsEl = document.getElementById('purchaseDetailDocs');
+  const docs = [];
+  docs.push('PO ' + (po.purchase_number || ''));
+  (db.purchaseReceipts || []).filter(r => r.purchase_id === po.id).forEach((r, i) => {
+    docs.push('GRN ' + (i + 1) + ' · ' + formatPosMoney(r.total_value || 0));
+  });
+  bills.forEach(b => {
+    docs.push('Bill ' + formatPosMoney(b.amount || 0) + (b.status ? ' (' + b.status + ')' : ''));
+    (b.documents || []).forEach(d => {
+      if (d && (d.name || d.fileName)) docs.push('📎 ' + (d.name || d.fileName));
+    });
+  });
+  docsEl.innerHTML = docs.map(d => '<div>' + d + '</div>').join('') || '—';
+
+  // Context actions
+  const canRecv = po.status === 'ordered' || po.status === 'partial' || po.status === 'draft';
+  const canBill = openGrni > 0.009;
+  const canOrder = po.status === 'draft';
+  const canApprovePo = po.status === 'pending_approval' && (typeof canApproveApprovals === 'function' ? canApproveApprovals() : true);
+  const actions = document.getElementById('purchaseDetailActions');
+  actions.innerHTML = [
+    canRecv ? '<button type="button" class="button small" data-receive-po="' + po.id + '">Receive</button>' : '',
+    canBill ? '<button type="button" class="button small primary" data-bill-po="' + po.id + '">Bill supplier</button>' : '',
+    canOrder ? '<button type="button" class="button small" data-order-po="' + po.id + '">' +
+      (typeof approvalsEnabledPurchases === 'function' && approvalsEnabledPurchases() ? 'Submit' : 'Order') + '</button>' : '',
+    canApprovePo ? '<button type="button" class="button small primary" data-approve-po="' + po.id + '">Approve</button>' : '',
+    canApprovePo ? '<button type="button" class="button small danger" data-reject-po="' + po.id + '">Reject</button>' : ''
+  ].filter(Boolean).join('');
+
+  if (typeof showModal === 'function') showModal('purchaseDetailModal');
+  else { m.classList.add('show'); m.style.display = 'grid'; }
+}
+
+function closePurchaseDetailModal() {
+  if (typeof hideModal === 'function') hideModal('purchaseDetailModal');
+  else {
+    const m = document.getElementById('purchaseDetailModal');
+    if (m) { m.classList.remove('show'); m.style.display = ''; }
+  }
+}
+
+async function sharePurchaseOrder(purchaseId, mode) {
+  ensurePosDb();
+  const po = (db.purchases || []).find(p => p.id === purchaseId);
+  if (!po) { toast('PO not found'); return; }
+  const text = buildPurchaseShareText(po);
+  const sup = (db.suppliers || []).find(s => s.id === po.supplier_id);
+  const phone = (sup && (sup.phone || sup.whatsapp)) || '';
+
+  if (mode === 'copy') {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('PO copied — paste to WhatsApp or email');
+    } catch (_) {
+      window.prompt('Copy purchase order:', text);
+    }
+    try { logStockAudit('share', 'purchase', po.id, 'Copied PO ' + (po.purchase_number || ''), {}); } catch (_) {}
+    return;
+  }
+
+  if (mode === 'whatsapp' || mode === 'share') {
+    try {
+      if (mode === 'share' && navigator.share) {
+        await navigator.share({ title: po.purchase_number || 'Purchase order', text });
+        try { logStockAudit('share', 'purchase', po.id, 'Shared PO ' + (po.purchase_number || ''), {}); } catch (_) {}
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+    }
+    try {
+      const href = typeof whatsappHref === 'function'
+        ? whatsappHref(phone, text)
+        : ('https://wa.me/?text=' + encodeURIComponent(text));
+      window.open(href, '_blank', 'noopener');
+      try { logStockAudit('share', 'purchase', po.id, 'WhatsApp PO ' + (po.purchase_number || ''), {}); } catch (_) {}
+    } catch (_) {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('Copied — open WhatsApp and paste');
+      } catch (__) {
+        window.prompt('Copy for supplier:', text);
+      }
+    }
+    return;
+  }
+
+  if (mode === 'print') {
+    const w = window.open('', '_blank', 'noopener,width=720,height=900');
+    if (!w) { toast('Allow pop-ups to print'); return; }
+    const biz = (db.profile && db.profile.name) || '';
+    const escape = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const rows = (po.lines || []).map(l => {
+      const name = l.product_name || (db.products || []).find(p => p.id === l.product_id)?.name || '—';
+      const qty = Number(l.qty) || 0;
+      const cost = Number(l.unit_cost) || 0;
+      return '<tr><td>' + escape(name) + '</td><td style="text-align:right">' + qty +
+        '</td><td style="text-align:right">' + escape(formatPosMoney(cost)) +
+        '</td><td style="text-align:right">' + escape(formatPosMoney(qty * cost)) + '</td></tr>';
+    }).join('');
+    w.document.write('<!doctype html><html><head><title>' + escape(po.purchase_number) +
+      '</title><style>body{font-family:system-ui,sans-serif;padding:24px;color:#111}h1{font-size:20px;margin:0 0 8px}' +
+      'table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;font-size:13px}' +
+      '.meta{color:#64748b;font-size:13px}</style></head><body>');
+    w.document.write('<h1>Purchase order ' + escape(po.purchase_number) + '</h1>');
+    w.document.write('<div class="meta">' + escape(biz) + '</div>');
+    w.document.write('<div class="meta">Supplier: ' + escape((sup && sup.name) || po.supplier_name || '') + '</div>');
+    w.document.write('<div class="meta">Date: ' + escape(po.order_date || '') + ' · ' + escape(purchasePipelineLabel(po)) + '</div>');
+    w.document.write('<table><thead><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit cost</th><th style="text-align:right">Amount</th></tr></thead><tbody>' +
+      rows + '</tbody></table>');
+    w.document.write('<p style="margin-top:16px;font-weight:700">Total ' + escape(formatPosMoney(po.total || 0)) + '</p>');
+    if (po.note) w.document.write('<p class="meta">Note: ' + escape(po.note) + '</p>');
+    w.document.write('</body></html>');
+    w.document.close();
+    try { w.focus(); w.print(); } catch (_) {}
+    try { logStockAudit('print', 'purchase', po.id, 'Printed PO ' + (po.purchase_number || ''), {}); } catch (_) {}
+  }
+}
+
 function renderPurchasesList() {
   ensurePosDb();
   const q = (document.getElementById('purchaseSearch')?.value || '').trim().toLowerCase();
@@ -17104,6 +17426,7 @@ function renderPurchasesList() {
       const canBill = openGrni > 0.009;
       const pipe = purchasePipelineLabel(p);
       const actions = [
+        `<button class="button small" type="button" data-open-po="${p.id}">Open</button>`,
         canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : '',
         canBill ? `<button class="button small primary" type="button" data-bill-po="${p.id}">Bill supplier</button>` : '',
         canOrder ? `<button class="button small" type="button" data-order-po="${p.id}">${approvalsEnabledPurchases() ? 'Submit' : 'Order'}</button>` : '',
@@ -17112,7 +17435,7 @@ function renderPurchasesList() {
         canCancel ? `<button class="button small" type="button" data-cancel-po="${p.id}">Cancel</button>` : ''
       ].filter(Boolean).join(' ');
       return `<tr>
-        <td><b>${p.purchase_number}</b></td>
+        <td><button type="button" class="button small" data-open-po="${p.id}" style="font-weight:700;padding:4px 8px;background:transparent;border:0;color:var(--text);text-decoration:underline;cursor:pointer">${p.purchase_number}</button></td>
         <td>${sup?.name || '—'}</td>
         <td>${p.order_date || '—'}</td>
         <td><span class="badge" style="font-weight:600">${pipe}</span></td>
@@ -17131,9 +17454,10 @@ function renderPurchasesList() {
       const canBill = openGrni > 0.009;
       const pipe = purchasePipelineLabel(p);
       return `<div class="mobile-card">
-        <div class="mobile-card-title">${p.purchase_number}</div>
+        <div class="mobile-card-title"><button type="button" data-open-po="${p.id}" style="all:unset;cursor:pointer;font-weight:700;text-decoration:underline">${p.purchase_number}</button></div>
         <div class="mobile-card-sub">${sup?.name || '—'} · ${pipe} · ${formatPosMoney(p.total)}${canBill ? ' · Unbilled ' + formatPosMoney(openGrni) : ''}</div>
         <div class="mobile-card-actions">
+          <button class="button small" type="button" data-open-po="${p.id}">Open</button>
           ${canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : ''}
           ${canBill ? `<button class="button small primary" type="button" data-bill-po="${p.id}">Bill supplier</button>` : ''}
           ${canOrder ? `<button class="button small" type="button" data-order-po="${p.id}">${approvalsEnabledPurchases() ? 'Submit' : 'Order'}</button>` : ''}
@@ -35322,6 +35646,29 @@ document.getElementById('supplierPayCancel')?.addEventListener('click', closeSup
 document.getElementById('supplierPaySave')?.addEventListener('click', () => { saveSupplierPayment().catch(e => toast(e.message || 'Payment failed')); });
 document.getElementById('btnNewPurchase')?.addEventListener('click', openPurchaseModal);
 document.getElementById('purchaseModalCancel')?.addEventListener('click', closePurchaseModal);
+document.getElementById('purchaseDetailClose')?.addEventListener('click', closePurchaseDetailModal);
+document.getElementById('purchaseDetailModal')?.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'purchaseDetailModal') closePurchaseDetailModal();
+});
+document.getElementById('purchaseDetailShare')?.addEventListener('click', () => {
+  const id = document.getElementById('purchaseDetailId')?.value;
+  if (id) sharePurchaseOrder(id, 'share');
+});
+document.getElementById('purchaseDetailCopy')?.addEventListener('click', () => {
+  const id = document.getElementById('purchaseDetailId')?.value;
+  if (id) sharePurchaseOrder(id, 'copy');
+});
+document.getElementById('purchaseDetailPrint')?.addEventListener('click', () => {
+  const id = document.getElementById('purchaseDetailId')?.value;
+  if (id) sharePurchaseOrder(id, 'print');
+});
+document.getElementById('purchaseDetailActions')?.addEventListener('click', (e) => {
+  // Actions use same data-* handlers on document; close modal after order/approve via bubbling
+  const t = e.target.closest('[data-receive-po],[data-bill-po],[data-order-po],[data-approve-po],[data-reject-po]');
+  if (t) {
+    // let document click handle it; detail closes in those handlers where needed
+  }
+});
 document.getElementById('purchaseSaveDraft')?.addEventListener('click', () => { savePurchase('draft').catch(e => toast(e.message || 'Save failed')); });
 document.getElementById('purchaseSaveOrdered')?.addEventListener('click', () => { savePurchase('ordered').catch(e => toast(e.message || 'Save failed')); });
 document.getElementById('purchaseAutofillLow')?.addEventListener('click', () => autofillPurchaseLines('low'));
@@ -35616,13 +35963,21 @@ document.addEventListener('click', (e) => {
     openStockAdjustModal(adj.getAttribute('data-adjust-stock'));
     return;
   }
+  const openPo = e.target.closest('[data-open-po]');
+  if (openPo) {
+    try { openPurchaseDetailModal(openPo.getAttribute('data-open-po')); }
+    catch (err) { toast(err && err.message ? err.message : 'Could not open PO'); }
+    return;
+  }
   const recv = e.target.closest('[data-receive-po]');
   if (recv) {
+    try { closePurchaseDetailModal(); } catch (_) {}
     openReceiveModal(recv.getAttribute('data-receive-po'));
     return;
   }
   const billPo = e.target.closest('[data-bill-po]');
   if (billPo) {
+    try { closePurchaseDetailModal(); } catch (_) {}
     try { openBillFromPurchase(billPo.getAttribute('data-bill-po')); }
     catch (err) { toast(err && err.message ? err.message : 'Could not open bill'); }
     return;
