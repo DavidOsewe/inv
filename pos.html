@@ -1203,15 +1203,23 @@ function adjustLocationStockLocal(productId, locationId, qtyChange, meta) {
   p.updated_at = new Date().toISOString();
 
   if (!Array.isArray(db.stockMovements)) db.stockMovements = [];
+  const unitCost = Number(meta.unit_cost != null ? meta.unit_cost : p.cost) || 0;
   const mov = {
     id: crypto.randomUUID(),
     product_id: productId,
     location_id: locationId,
     qty_change: delta,
+    qty_before: prev,
+    qty_after: next,
+    unit_cost: unitCost,
+    value: Math.round(Math.abs(delta) * unitCost * 100) / 100,
     reason: meta.reason || 'sale',
     reference: meta.reference || null,
+    source_type: meta.source_type || meta.reason || 'sale',
+    source_id: meta.source_id || meta.reference || null,
     note: meta.note || null,
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    gl_posted: false
   };
   db.stockMovements.push(mov);
   return { row, mov, product: p };
@@ -1857,20 +1865,24 @@ function postLocalBooks(sale) {
       reversed: false
     });
   }
-  // COGS: only when product cost is set — Dr COGS · Cr Inventory
+  // L1.1: COGS from sale movements (one journal per sale, linked to movement ids)
   const costTotal = Number(sale.cost_total) || saleCostTotal(sale.lines);
   const cogsKey = 'j:pos_cogs:' + sale.id;
   if (costTotal > 0.0001 && !db.journals.some(j => j.sourceKey === cogsKey)) {
+    const movIds = (db.stockMovements || [])
+      .filter(m => m && m.source_id === sale.id && (m.reason === 'sale' || m.source_type === 'pos_sale'))
+      .map(m => m.id);
     db.journals.push({
       id: crypto.randomUUID(),
       date: date,
       entry_date: date,
       memo: 'COGS · POS sale ' + saleLabel,
-      source: 'pos_cogs',
+      source: 'stock_movement',
       sourceKey: cogsKey,
       currency: sale.currency,
       location_id: sale.location_id || null,
       location_name: sale.location_name || null,
+      movement_ids: movIds,
       lines: [
         { accountId: '5000', debit: costTotal, credit: 0 },
         { accountId: '1300', debit: 0, credit: costTotal }
@@ -1878,6 +1890,10 @@ function postLocalBooks(sale) {
       createdAt: new Date().toISOString(),
       created_at: new Date().toISOString(),
       reversed: false
+    });
+    movIds.forEach(id => {
+      const m = (db.stockMovements || []).find(x => x.id === id);
+      if (m) { m.gl_posted = true; m.journal_id = cogsKey; }
     });
   }
 }
@@ -1930,36 +1946,63 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
     synced: false
   };
 
-  // Always apply stock + books locally first (works offline)
+  // L1.1: stock issue only via movements (unit cost on each line)
   for (const line of lines) {
     const p = db.products.find(x => x.id === line.product_id);
     if (!p || p.track_stock === false) continue;
+    const unitCost = Number(line.cost) || Number(p.cost) || 0;
     let mov;
     if (saleLoc) {
       const r = adjustLocationStockLocal(p.id, saleLoc.id, -line.qty, {
         reason: 'sale',
-        reference: saleNumber
+        reference: saleNumber,
+        unit_cost: unitCost,
+        source_type: 'pos_sale',
+        source_id: saleId
       });
       mov = r.mov;
     } else {
-      p.stock_qty = (Number(p.stock_qty) || 0) - line.qty;
-      p.updated_at = now;
-      mov = {
-        id: crypto.randomUUID(),
-        product_id: p.id,
-        qty_change: -line.qty,
-        reason: 'sale',
-        reference: saleNumber,
-        note: null,
-        created_at: now
-      };
-      db.stockMovements.push(mov);
+      const fallback = (db.locations || []).find(l => l.active !== false);
+      if (fallback) {
+        const r = adjustLocationStockLocal(p.id, fallback.id, -line.qty, {
+          reason: 'sale',
+          reference: saleNumber,
+          unit_cost: unitCost,
+          source_type: 'pos_sale',
+          source_id: saleId
+        });
+        mov = r.mov;
+        sale.location_id = fallback.id;
+        sale.location_name = fallback.name || sale.location_name;
+      } else {
+        const prev = Number(p.stock_qty) || 0;
+        p.stock_qty = prev - line.qty;
+        p.updated_at = now;
+        mov = {
+          id: crypto.randomUUID(),
+          product_id: p.id,
+          qty_change: -line.qty,
+          qty_before: prev,
+          qty_after: p.stock_qty,
+          unit_cost: unitCost,
+          value: Math.round(line.qty * unitCost * 100) / 100,
+          reason: 'sale',
+          reference: saleNumber,
+          source_type: 'pos_sale',
+          source_id: saleId,
+          note: null,
+          created_at: now,
+          gl_posted: false
+        };
+        if (!Array.isArray(db.stockMovements)) db.stockMovements = [];
+        db.stockMovements.push(mov);
+      }
     }
     enqueueSync({
       type: 'stock',
       product_id: p.id,
       product_cloud_id: p.cloudId || null,
-      location_id: saleLoc?.id || null,
+      location_id: saleLoc?.id || sale.location_id || null,
       movement: mov
     });
   }
