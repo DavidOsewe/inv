@@ -5117,6 +5117,8 @@ body:has(.modalback.show) .notif-panel {
           <option value="cancelled">Cancelled</option>
         </select>
       </div>
+      <div id="purchaseGrniStrip" class="insight" style="display:none;margin:0 0 12px;padding:10px 12px"></div>
+      <p class="section-sub" style="margin:0 0 10px">Flow: <b>Order</b> → <b>Receive goods</b> (stock in) → <b>Bill supplier</b> (you owe them) → <b>Pay</b>.</p>
       <div id="purchaseList" style="margin-bottom:24px"></div>
       <div class="insight" style="margin-bottom:24px">
         <h3 style="font-size:15px;margin:0 0 8px">Approval log</h3>
@@ -7187,12 +7189,13 @@ body:has(.modalback.show) .notif-panel {
         <textarea id="billNote" rows="4" placeholder="e.g. June rent for Gbagada outlet · POS paper restock · fuel for Lagos delivery run" style="width:100%;min-height:96px;resize:vertical"></textarea>
       </div>
       <div class="field" id="billPoField">
-        <label>Link to purchase order (optional · 2-way match)</label>
+        <label>Link to purchase order (stock buys)</label>
         <select id="billPurchaseId" class="searchable" data-searchable="1">
-          <option value="">— No PO —</option>
+          <option value="">— No PO (ordinary expense) —</option>
         </select>
-        <div class="section-sub" id="billPoHint" style="margin-top:4px">Stock / supplier POs only. Amount is checked against the PO total within your tolerance.</div>
+        <div class="section-sub" id="billPoHint" style="margin-top:4px">Link a PO after you received goods. We clear “unbilled goods” into accounts payable.</div>
       </div>
+      <div id="billGrniBanner" class="insight" style="display:none;margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px solid color-mix(in srgb,#6366f1 35%,var(--line));background:color-mix(in srgb,#6366f1 8%,var(--panel))"></div>
     </div>
     <div class="bill-modal-actions">
       <button class="button primary" type="button" id="billSave">Submit to accountant</button>
@@ -13134,8 +13137,26 @@ async function confirmReceiveGoods() {
   persistDb();
   try { runLowStockAlertEngine({ silent: true, reason: 'purchase_receive' }); } catch (_) {}
   closeReceiveModal();
-  toast(allDone ? 'Fully received' : 'Partial receive saved');
-  purchasesView();
+  const openGrni = purchaseOpenGrni(po.id);
+  const moneyFn = (typeof formatPosMoney === 'function') ? formatPosMoney : String;
+  if (receipt.grni_posted && openGrni > 0.009) {
+    toast((allDone ? 'Goods in stock. ' : 'Partial receive. ') +
+      'Unbilled goods ' + moneyFn(openGrni) + ' — bill the supplier next.');
+    // Offer guided bill after a short beat so toast is visible
+    setTimeout(() => {
+      try {
+        if (confirm('Stock is in. Create supplier bill for ' + moneyFn(openGrni) + ' now?\n\n(This records their invoice — you still pay later.)')) {
+          openBillFromPurchase(po.id);
+          return;
+        }
+      } catch (_) {}
+      purchasesView();
+    }, 200);
+  } else {
+    toast(allDone ? 'Fully received' : 'Partial receive saved');
+    purchasesView();
+  }
+  try { renderPurchaseGrniStrip(); } catch (_) {}
 }
 
 async function pushPurchaseReceiptToCloud(po, receipt) {
@@ -13867,6 +13888,154 @@ function purchaseReceivedValue(purchaseId) {
 
 function purchaseHasInventoryReceipts(purchaseId) {
   return purchaseReceivedValue(purchaseId) > 0.0001;
+}
+
+/** Bills already linked to this PO that were posted (open/paid/approved). */
+function purchaseBilledAmount(purchaseId) {
+  if (!purchaseId) return 0;
+  return (db.bills || []).filter(b =>
+    b && b.purchase_id === purchaseId &&
+    b.status !== 'rejected' && b.status !== 'cancelled' &&
+    b.status !== 'pending_approval' && b.status !== 'pending_review'
+  ).reduce((s, b) => s + (Number(b.amount) || 0), 0);
+}
+
+/** Unbilled goods value still on GRNI for a PO (received − already billed). */
+function purchaseOpenGrni(purchaseId) {
+  const received = purchaseReceivedValue(purchaseId);
+  const billed = purchaseBilledAmount(purchaseId);
+  return Math.max(0, Math.round((received - billed) * 100) / 100);
+}
+
+function totalOpenGrni() {
+  ensurePosDb();
+  const ids = new Set((db.purchaseReceipts || []).map(r => r && r.purchase_id).filter(Boolean));
+  let n = 0;
+  ids.forEach(id => { n += purchaseOpenGrni(id); });
+  return Math.round(n * 100) / 100;
+}
+
+/** Human pipeline chip for a PO. */
+function purchasePipelineLabel(po) {
+  if (!po) return '';
+  const st = String(po.status || '');
+  if (st === 'cancelled') return 'Cancelled';
+  if (st === 'draft') return 'Draft';
+  if (st === 'pending_approval') return 'Awaiting approval';
+  const received = purchaseReceivedValue(po.id);
+  const openGrni = purchaseOpenGrni(po.id);
+  const billed = purchaseBilledAmount(po.id);
+  if (st === 'ordered' && !(received > 0)) return 'Ordered · receive goods';
+  if (openGrni > 0.009) return 'Received · bill supplier';
+  if (billed > 0 && openGrni < 0.01) return 'Billed';
+  if (st === 'partial') return 'Partially received';
+  if (st === 'received') return billed > 0 ? 'Received · billed' : 'Received · bill supplier';
+  return st || '—';
+}
+
+/**
+ * Open bill modal prefilled from a PO (after goods receipt).
+ * Amount defaults to open unbilled goods (GRNI).
+ */
+function openBillFromPurchase(purchaseId) {
+  ensurePosDb();
+  const po = (db.purchases || []).find(p => p.id === purchaseId);
+  if (!po) { toast('Purchase order not found'); return; }
+  const openGrni = purchaseOpenGrni(purchaseId);
+  if (!(openGrni > 0.009) && !(purchaseReceivedValue(purchaseId) > 0)) {
+    toast('Receive goods on this PO first, then bill the supplier');
+    return;
+  }
+  const sup = (db.suppliers || []).find(s => s.id === po.supplier_id);
+  openBillModal({
+    supplier: sup || null,
+    supplierId: po.supplier_id || null,
+    supplierName: (sup && sup.name) || po.supplier_name || '',
+    purchaseId: po.id,
+    amount: openGrni > 0.009 ? openGrni : purchaseReceivedValue(purchaseId),
+    inventoryFlow: true,
+    note: 'Supplier invoice for ' + (po.purchase_number || 'PO') + ' (goods already received)'
+  });
+}
+
+function updateBillModalInventoryMode() {
+  const purchaseId = (document.getElementById('billPurchaseId')?.value || '').trim();
+  const banner = document.getElementById('billGrniBanner');
+  const catField = document.getElementById('billCategoryField');
+  const poHint = document.getElementById('billPoHint');
+  const title = document.getElementById('billModalTitle');
+  const sub = document.getElementById('billModalSub');
+  const received = purchaseId ? purchaseReceivedValue(purchaseId) : 0;
+  const openGrni = purchaseId ? purchaseOpenGrni(purchaseId) : 0;
+  const invMode = purchaseId && received > 0.0001;
+
+  if (banner) {
+    if (invMode) {
+      const po = (db.purchases || []).find(p => p.id === purchaseId);
+      const moneyFn = (typeof money === 'function') ? money : (typeof formatPosMoney === 'function' ? formatPosMoney : String);
+      banner.style.display = '';
+      banner.innerHTML =
+        '<div style="font-size:12px;font-weight:700;color:var(--text)">Stock buy · clear unbilled goods</div>' +
+        '<div style="font-size:13px;margin-top:4px">You already received goods on <b>' + (po?.purchase_number || 'PO') + '</b>. ' +
+        'Posting this bill moves <b>' + moneyFn(openGrni > 0 ? openGrni : received) + '</b> from unbilled goods into accounts payable — not an expense category.</div>' +
+        (openGrni > 0.009
+          ? '<div class="client-meta" style="margin-top:6px">Suggested amount = unbilled goods still open.</div>'
+          : '<div class="client-meta" style="margin-top:6px">This PO may already be fully billed.</div>');
+    } else {
+      banner.style.display = 'none';
+      banner.innerHTML = '';
+    }
+  }
+  if (catField) {
+    // Hide expense ledger when clearing GRNI — system posts GRNI→AP
+    if (invMode) catField.style.display = 'none';
+    else {
+      const isRequesterOnly = catField.dataset.requesterOnly === '1';
+      catField.style.display = isRequesterOnly ? 'none' : '';
+    }
+  }
+  if (poHint) {
+    poHint.textContent = invMode
+      ? 'Linked to goods already in stock. No expense ledger needed.'
+      : 'Link a PO after you received goods. We clear “unbilled goods” into accounts payable.';
+  }
+  if (invMode) {
+    if (title) title.textContent = 'Bill supplier for goods received';
+    if (sub) sub.textContent = 'Step: receive → bill → pay. This records the supplier invoice against stock you already took in.';
+  }
+}
+
+function renderPurchaseGrniStrip() {
+  const el = document.getElementById('purchaseGrniStrip');
+  if (!el) return;
+  const total = totalOpenGrni();
+  if (!(total > 0.009)) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  const moneyFn = (typeof money === 'function') ? money : (typeof formatPosMoney === 'function' ? formatPosMoney : String);
+  const rows = [];
+  const ids = new Set((db.purchaseReceipts || []).map(r => r && r.purchase_id).filter(Boolean));
+  ids.forEach(id => {
+    const open = purchaseOpenGrni(id);
+    if (!(open > 0.009)) return;
+    const po = (db.purchases || []).find(p => p.id === id);
+    rows.push({ id, open, num: po?.purchase_number || id.slice(0, 8) });
+  });
+  el.style.display = '';
+  el.innerHTML =
+    '<div style="display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;justify-content:space-between">' +
+      '<div>' +
+        '<div style="font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)">Unbilled goods (received, not yet invoiced)</div>' +
+        '<div style="font-size:14px;margin-top:4px"><b>' + moneyFn(total) + '</b> still needs a supplier bill</div>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+        rows.slice(0, 4).map(r =>
+          '<button type="button" class="button small primary" data-bill-po="' + r.id + '">Bill ' + r.num + '</button>'
+        ).join('') +
+      '</div>' +
+    '</div>';
 }
 
 /**
@@ -16872,13 +17041,25 @@ function purchasesView() {
   try { applyRoleGates(); } catch (_) {}
   try {
     pullPurchasesBundleFromCloud()
-      .then(() => { renderPurchasesList(); renderSuppliersList(); renderApprovalAuditList('purchaseApprovalAuditList', 'purchase'); })
-      .catch(() => { renderPurchasesList(); renderSuppliersList(); renderApprovalAuditList('purchaseApprovalAuditList', 'purchase'); });
+      .then(() => {
+        renderPurchasesList();
+        renderPurchaseGrniStrip();
+        renderSuppliersList();
+        renderApprovalAuditList('purchaseApprovalAuditList', 'purchase');
+      })
+      .catch(() => {
+        renderPurchasesList();
+        renderPurchaseGrniStrip();
+        renderSuppliersList();
+        renderApprovalAuditList('purchaseApprovalAuditList', 'purchase');
+      });
   } catch {
     renderPurchasesList();
+    try { renderPurchaseGrniStrip(); } catch (_) {}
     renderSuppliersList();
   }
   try { renderApprovalAuditList('purchaseApprovalAuditList', 'purchase'); } catch (_) {}
+  try { renderPurchaseGrniStrip(); } catch (_) {}
 }
 
 function renderPurchasesList() {
@@ -16919,8 +17100,12 @@ function renderPurchasesList() {
       const canOrder = p.status === 'draft';
       const canApprovePo = p.status === 'pending_approval' && (typeof canApproveApprovals === 'function' ? canApproveApprovals() : true);
       const canSubmitPo = p.status === 'draft' && approvalsEnabledPurchases();
+      const openGrni = purchaseOpenGrni(p.id);
+      const canBill = openGrni > 0.009;
+      const pipe = purchasePipelineLabel(p);
       const actions = [
         canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : '',
+        canBill ? `<button class="button small primary" type="button" data-bill-po="${p.id}">Bill supplier</button>` : '',
         canOrder ? `<button class="button small" type="button" data-order-po="${p.id}">${approvalsEnabledPurchases() ? 'Submit' : 'Order'}</button>` : '',
         canApprovePo ? `<button class="button small primary" type="button" data-approve-po="${p.id}">Approve</button>` : '',
         canApprovePo ? `<button class="button small danger" type="button" data-reject-po="${p.id}">Reject</button>` : '',
@@ -16930,8 +17115,8 @@ function renderPurchasesList() {
         <td><b>${p.purchase_number}</b></td>
         <td>${sup?.name || '—'}</td>
         <td>${p.order_date || '—'}</td>
-        <td>${p.status}</td>
-        <td class="right">${formatPosMoney(p.total)}</td>
+        <td><span class="badge" style="font-weight:600">${pipe}</span></td>
+        <td class="right">${formatPosMoney(p.total)}${canBill ? '<div class="client-meta">Unbilled ' + formatPosMoney(openGrni) + '</div>' : ''}</td>
         <td><div class="client-actions">${actions}</div></td>
       </tr>`;
     }).join('')}</tbody></table>
@@ -16942,11 +17127,15 @@ function renderPurchasesList() {
       const canOrder = p.status === 'draft';
       const canApprovePo = p.status === 'pending_approval' && (typeof canApproveApprovals === 'function' ? canApproveApprovals() : true);
       const canSubmitPo = p.status === 'draft' && approvalsEnabledPurchases();
+      const openGrni = purchaseOpenGrni(p.id);
+      const canBill = openGrni > 0.009;
+      const pipe = purchasePipelineLabel(p);
       return `<div class="mobile-card">
         <div class="mobile-card-title">${p.purchase_number}</div>
-        <div class="mobile-card-sub">${sup?.name || '—'} · ${p.status} · ${formatPosMoney(p.total)}</div>
+        <div class="mobile-card-sub">${sup?.name || '—'} · ${pipe} · ${formatPosMoney(p.total)}${canBill ? ' · Unbilled ' + formatPosMoney(openGrni) : ''}</div>
         <div class="mobile-card-actions">
           ${canRecv ? `<button class="button small" type="button" data-receive-po="${p.id}">Receive</button>` : ''}
+          ${canBill ? `<button class="button small primary" type="button" data-bill-po="${p.id}">Bill supplier</button>` : ''}
           ${canOrder ? `<button class="button small" type="button" data-order-po="${p.id}">${approvalsEnabledPurchases() ? 'Submit' : 'Order'}</button>` : ''}
           ${canApprovePo ? `<button class="button small primary" type="button" data-approve-po="${p.id}">Approve</button>
           <button class="button small danger" type="button" data-reject-po="${p.id}">Reject</button>` : ''}
@@ -22254,6 +22443,7 @@ function ensureBooksDb() {
   if (!Array.isArray(db.bills)) db.bills = [];
   if (!Array.isArray(db.coaExtra)) db.coaExtra = [];
   if (!db.booksSettings) db.booksSettings = { invoiceFeed: true };
+  try { ensureGrniCoaAccounts(); } catch (_) {}
   if (!Array.isArray(db.reconciliations)) db.reconciliations = [];
   if (!db.clearedJournalLines) db.clearedJournalLines = {};
   if (!Array.isArray(db.recurringJournals)) db.recurringJournals = [];
@@ -26139,6 +26329,7 @@ function openBillModal(opts) {
   const saveBtn = document.getElementById('billSave');
   const catLabel = document.getElementById('billCategoryLabel');
   const catHint = document.getElementById('billCategoryHint');
+  opts = opts || {};
   if (title) title.textContent = isRequesterOnly ? 'Expense request' : 'Supplier bill';
   if (sub) {
     sub.textContent = isRequesterOnly
@@ -26158,8 +26349,11 @@ function openBillModal(opts) {
   }
   // Hide COA pickers from pure requesters (SoD)
   try {
-    const catField = document.getElementById('billCategory')?.closest('.field') || document.getElementById('billCategory')?.parentElement;
-    if (catField) catField.style.display = isRequesterOnly ? 'none' : '';
+    const catField = document.getElementById('billCategoryField') || document.getElementById('billCategory')?.closest('.field');
+    if (catField) {
+      catField.dataset.requesterOnly = isRequesterOnly ? '1' : '0';
+      catField.style.display = isRequesterOnly ? 'none' : '';
+    }
   } catch (_) {}
   const cat = document.getElementById('billCategory');
   if (cat) {
@@ -26183,21 +26377,40 @@ function openBillModal(opts) {
   const preName = opts.supplierName || opts.supplier?.name || window._pendingBillSupplierName || '';
   const preId = opts.supplierId || opts.supplier?.id || window._pendingBillSupplierId || '';
   set('billSupplier', preName || '');
-  set('billAmount', '');
-  set('billTax', '');
+  set('billAmount', opts.amount != null && opts.amount !== '' ? String(opts.amount) : '');
+  set('billTax', opts.tax != null ? String(opts.tax) : '');
   set('billCurrency', (db.profile && db.profile.reporting) || 'NGN');
   set('billDate', typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
   set('billDue', typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
-  set('billNote', '');
+  set('billNote', opts.note || '');
   try {
     window._pendingBillSupplierId = preId || '';
     window._pendingBillSupplierName = preName || '';
   } catch (_) {}
   try { fillBillPurchaseOptions(); } catch (_) {}
+  // Prefill PO link for stock buy flow
+  try {
+    const poSel = document.getElementById('billPurchaseId');
+    if (poSel && opts.purchaseId) {
+      poSel.value = opts.purchaseId;
+      // Ensure option exists
+      if (poSel.value !== opts.purchaseId) {
+        const po = (db.purchases || []).find(p => p.id === opts.purchaseId);
+        if (po) {
+          const opt = document.createElement('option');
+          opt.value = po.id;
+          opt.textContent = (po.purchase_number || 'PO') + ' · goods received';
+          poSel.appendChild(opt);
+          poSel.value = po.id;
+        }
+      }
+    }
+  } catch (_) {}
+  try { updateBillModalInventoryMode(); } catch (_) {}
   if (typeof showModal === 'function') showModal('billModal');
   else { m.classList.add('show'); m.style.display = 'grid'; }
   try { initSearchableSelects(m); } catch (_) {}
-  if (preName) {
+  if (preName || opts.purchaseId) {
     try { document.getElementById('billAmount')?.focus(); } catch (_) {}
   }
 }
@@ -34477,6 +34690,23 @@ document.getElementById('accSave')?.addEventListener('click', () => {
 document.getElementById('btnAddCashEntry')?.addEventListener('click', openCashModal);
 document.getElementById('btnAddBill')?.addEventListener('click', openBillModal);
 document.getElementById('billCancel')?.addEventListener('click', closeBillModal);
+document.getElementById('billPurchaseId')?.addEventListener('change', () => {
+  try {
+    const purchaseId = (document.getElementById('billPurchaseId')?.value || '').trim();
+    if (purchaseId) {
+      const open = purchaseOpenGrni(purchaseId);
+      const amtEl = document.getElementById('billAmount');
+      if (amtEl && open > 0.009 && !(Number(amtEl.value) > 0)) {
+        amtEl.value = String(open);
+      }
+      const po = (db.purchases || []).find(p => p.id === purchaseId);
+      const sup = po && (db.suppliers || []).find(s => s.id === po.supplier_id);
+      const supEl = document.getElementById('billSupplier');
+      if (supEl && sup && !String(supEl.value || '').trim()) supEl.value = sup.name || '';
+    }
+    updateBillModalInventoryMode();
+  } catch (_) {}
+});
 document.getElementById('billSave')?.addEventListener('click', async () => {
   ensureBooksDb();
   if (typeof canRequestExpense === 'function' && !canRequestExpense()) {
@@ -34555,9 +34785,34 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
     try { track('bill_accrued', { category: bill.category, status: bill.status || status, auto_posted: !!path.autoPosted }); } catch (_) {}
   };
 
-  // Direct / fast-lane post: accountant must pick the expense ledger (never silent default)
+  // Direct / fast-lane post
   if (status === 'open') {
     closeBillModal();
+    const invMatch = bill.purchase_id && purchaseHasInventoryReceipts(bill.purchase_id);
+    const doAccrue = (code) => {
+      if (code) bill.category = code;
+      try {
+        accrueSupplierBill(bill);
+      } catch (err) {
+        console.warn(err);
+        db.bills = (db.bills || []).filter(b => b.id !== bill.id);
+        toast('Could not post bill to ledger — ' + (err.message || 'error'));
+        try { save(); } catch (_) {}
+        return;
+      }
+      try { persistDb(); save(); } catch (_) {}
+      try { afterBillQueuedOrPosted(); } catch (_) {}
+      try { renderPurchaseGrniStrip(); } catch (_) {}
+      try { purchasesView(); } catch (_) {}
+      toast(invMatch
+        ? 'Supplier bill posted — unbilled goods cleared to accounts payable'
+        : 'Bill posted to ledger');
+    };
+    if (invMatch) {
+      // L2 UX: no expense ledger picker — GRNI → AP
+      doAccrue(typeof GRNI_ACCOUNT_ID !== 'undefined' ? GRNI_ACCOUNT_ID : '2010');
+      return;
+    }
     pickExpenseLedgerFromCoa({
       defaultCode: bill.category && bill.category !== 'other_out' ? bill.category : '',
       forceDefault: false,
@@ -34576,14 +34831,11 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
         toast('Post cancelled — choose a ledger to post the bill');
         return;
       }
-      bill.category = code;
       try {
-        accrueSupplierBill(bill);
+        doAccrue(code);
       } catch (err) {
         console.warn(err);
-        db.bills = (db.bills || []).filter(b => b.id !== bill.id);
         toast('Could not post bill to ledger — ' + (err.message || 'error'));
-        try { save(); } catch (_) {}
         return;
       }
       try {
@@ -34603,10 +34855,7 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
           { documents: bill.documents || [], documentCount: (bill.documents || []).length, status: bill.status, category: bill.category, auto_posted: !!path.autoPosted, reasons: path.reasons || [] }
         );
       } catch (_) {}
-      save();
       try { queueBooksCloudSync(); } catch (_) {}
-      toast('Posted to AP · ' + (typeof coaName === 'function' ? coaName(bill.category) : bill.category) + ' · pay when due from Money out');
-      afterBillQueuedOrPosted();
     });
     return;
   }
@@ -35370,6 +35619,12 @@ document.addEventListener('click', (e) => {
   const recv = e.target.closest('[data-receive-po]');
   if (recv) {
     openReceiveModal(recv.getAttribute('data-receive-po'));
+    return;
+  }
+  const billPo = e.target.closest('[data-bill-po]');
+  if (billPo) {
+    try { openBillFromPurchase(billPo.getAttribute('data-bill-po')); }
+    catch (err) { toast(err && err.message ? err.message : 'Could not open bill'); }
     return;
   }
   const orderPo = e.target.closest('[data-order-po]');
