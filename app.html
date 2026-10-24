@@ -6664,8 +6664,10 @@ body:has(.modalback.show) .notif-panel {
     <h3 style="font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">Documents</h3>
     <div id="purchaseDetailDocs" class="client-meta" style="margin-bottom:14px">—</div>
     <div id="purchaseDetailLinkBox" class="client-meta" style="margin:0 0 10px;word-break:break-all;display:none"></div>
+    <div id="purchaseDetailSupplierFeedback" style="display:none;margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px solid color-mix(in srgb,#10b981 35%,var(--line));background:color-mix(in srgb,#10b981 8%,var(--panel))"></div>
     <div class="buttons" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end">
       <button type="button" class="button primary" id="purchaseDetailPublicLink">Copy supplier link</button>
+      <button type="button" class="button" id="purchaseDetailRevokeLink" style="display:none">Revoke link</button>
       <button type="button" class="button" id="purchaseDetailShare">Share with supplier</button>
       <button type="button" class="button" id="purchaseDetailCopy">Copy text</button>
       <button type="button" class="button" id="purchaseDetailPrint">Print / PDF</button>
@@ -13163,6 +13165,7 @@ async function confirmReceiveGoods() {
   } catch (e) {}
 
   persistDb();
+  try { await refreshPublicPurchaseLinkIfEnabled(po.id); } catch (_) {}
   try { runLowStockAlertEngine({ silent: true, reason: 'purchase_receive' }); } catch (_) {}
   closeReceiveModal();
   const openGrni = purchaseOpenGrni(po.id);
@@ -13257,6 +13260,7 @@ function markPurchaseOrdered(purchaseId) {
   po.updated_at = new Date().toISOString();
   try { updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
   persistDb();
+  try { refreshPublicPurchaseLinkIfEnabled(po.id); } catch (_) {}
   toast('Marked as ordered');
   purchasesView();
 }
@@ -16200,6 +16204,7 @@ async function approvePurchaseOrder(purchaseId, note) {
   try { await pushPurchaseToCloud(po); } catch (e) { console.warn(e); }
   logStockAudit('approve', 'purchase', po.id, 'Approved PO ' + (po.purchase_number || ''), { note: po.approval_note || null });
   persistDb();
+  try { await refreshPublicPurchaseLinkIfEnabled(po.id); } catch (_) {}
   toast('Purchase approved (ordered)');
   purchasesView();
 }
@@ -16219,6 +16224,7 @@ function rejectPurchaseOrder(purchaseId, note) {
   try { updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
   logStockAudit('reject', 'purchase', po.id, 'Rejected PO ' + (po.purchase_number || '') + ': ' + n, { note: n });
   persistDb();
+  try { refreshPublicPurchaseLinkIfEnabled(po.id); } catch (_) {}
   toast('Purchase returned to draft');
   purchasesView();
 }
@@ -16234,6 +16240,7 @@ function submitPurchaseForApproval(purchaseId) {
   try { updatePurchaseCloudStatus(po); } catch (e) { console.warn(e); }
   logStockAudit('submit_approval', 'purchase', po.id, 'PO ' + (po.purchase_number || '') + ' submitted for approval', {});
   persistDb();
+  try { refreshPublicPurchaseLinkIfEnabled(po.id); } catch (_) {}
   toast('Submitted for approval');
   purchasesView();
 }
@@ -17285,6 +17292,10 @@ async function enablePurchasePublicLink(purchaseId) {
   if (!po) throw new Error('Purchase order not found');
   const token = ensurePurchasePublicToken(po);
   const payload = buildPublicPurchasePayload(po);
+  // Preserve any supplier feedback already on the link
+  try {
+    if (po.supplier_public_feedback) payload.supplier_feedback = po.supplier_public_feedback;
+  } catch (_) {}
   savePublicPurchaseLocal(token, payload, true);
   try { persistDb(); } catch (_) {}
   try { save(); } catch (_) {}
@@ -17309,6 +17320,82 @@ async function enablePurchasePublicLink(purchaseId) {
     console.warn('public_purchase_links upsert', e);
   }
   return { url: purchasePublicUrl(po), token, cloud: cloudOk, po };
+}
+
+/** Re-publish snapshot if a public link is already enabled (after line/status changes). */
+async function refreshPublicPurchaseLinkIfEnabled(purchaseId) {
+  try {
+    ensurePosDb();
+    const po = (db.purchases || []).find(p => p.id === purchaseId);
+    if (!po || !po.publicShareToken || po.publicShareEnabled === false) return null;
+    return await enablePurchasePublicLink(purchaseId);
+  } catch (e) {
+    console.warn('refreshPublicPurchaseLinkIfEnabled', e);
+    return null;
+  }
+}
+
+async function revokePurchasePublicLink(purchaseId) {
+  ensurePosDb();
+  const po = (db.purchases || []).find(p => p.id === purchaseId);
+  if (!po) throw new Error('Purchase order not found');
+  const token = po.publicShareToken;
+  po.publicShareEnabled = false;
+  po.public_revoked_at = new Date().toISOString();
+  if (token) {
+    try {
+      let map = {};
+      try { map = JSON.parse(localStorage.getItem(PUBLIC_PO_LS_KEY) || '{}') || {}; } catch (_) { map = {}; }
+      if (map[token]) {
+        map[token].enabled = false;
+        map[token].updated_at = new Date().toISOString();
+        localStorage.setItem(PUBLIC_PO_LS_KEY, JSON.stringify(map));
+      }
+    } catch (_) {}
+    try {
+      if (cloud?.client) {
+        await cloud.client.from('public_purchase_links')
+          .update({ enabled: false, updated_at: new Date().toISOString() })
+          .eq('token', token);
+      }
+    } catch (e) {
+      console.warn('revoke cloud link', e);
+    }
+  }
+  try { persistDb(); } catch (_) {}
+  try { save(); } catch (_) {}
+  try {
+    logStockAudit('public_link_revoked', 'purchase', purchaseId, 'Revoked public link ' + (po.purchase_number || ''), {});
+  } catch (_) {}
+  return po;
+}
+
+async function pullPurchaseSupplierFeedback(purchaseId) {
+  ensurePosDb();
+  const po = (db.purchases || []).find(p => p.id === purchaseId);
+  if (!po || !po.publicShareToken) return null;
+  const token = po.publicShareToken;
+  // Local snapshot first
+  try {
+    const map = JSON.parse(localStorage.getItem(PUBLIC_PO_LS_KEY) || '{}') || {};
+    const fb = map[token] && map[token].payload && map[token].payload.supplier_feedback;
+    if (fb) po.supplier_public_feedback = fb;
+  } catch (_) {}
+  try {
+    if (cloud?.client) {
+      const { data } = await cloud.client
+        .from('public_purchase_links')
+        .select('payload')
+        .eq('token', token)
+        .maybeSingle();
+      const fb = data && data.payload && data.payload.supplier_feedback;
+      if (fb) {
+        po.supplier_public_feedback = fb;
+        try { persistDb(); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  return po.supplier_public_feedback || null;
 }
 
 async function copyPurchasePublicLink(purchaseId) {
@@ -17405,19 +17492,68 @@ function openPurchaseDetailModal(purchaseId) {
   });
   docsEl.innerHTML = docs.map(d => '<div>' + d + '</div>').join('') || '—';
 
-  // Public supplier link preview
+  // Public supplier link preview + revoke
   try {
     const linkBox = document.getElementById('purchaseDetailLinkBox');
+    const revokeBtn = document.getElementById('purchaseDetailRevokeLink');
+    const live = !!(po.publicShareToken && po.publicShareEnabled !== false);
     if (linkBox) {
-      if (po.publicShareToken && po.publicShareEnabled !== false) {
+      if (live) {
         const url = purchasePublicUrl(po);
         linkBox.style.display = '';
-        linkBox.innerHTML = 'Supplier link: <a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>';
+        linkBox.innerHTML = 'Supplier link (live): <a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>';
+      } else if (po.publicShareToken && po.publicShareEnabled === false) {
+        linkBox.style.display = '';
+        linkBox.innerHTML = 'Supplier link <b>revoked</b> — copy again to re-enable.';
       } else {
         linkBox.style.display = 'none';
         linkBox.innerHTML = '';
       }
     }
+    if (revokeBtn) revokeBtn.style.display = live ? '' : 'none';
+  } catch (_) {}
+
+  // Supplier confirm / invoice from public page
+  try {
+    const fbBox = document.getElementById('purchaseDetailSupplierFeedback');
+    const fb = po.supplier_public_feedback;
+    if (fbBox && fb && (fb.confirmed || fb.note || fb.invoice_name)) {
+      fbBox.style.display = '';
+      let html = '<div style="font-size:12px;font-weight:700;color:var(--text)">Supplier response</div>';
+      if (fb.confirmed) html += '<div style="margin-top:4px">✓ Confirmed order' + (fb.confirmed_at ? ' · ' + String(fb.confirmed_at).replace('T', ' ').slice(0, 16) : '') + '</div>';
+      if (fb.note) html += '<div class="client-meta" style="margin-top:4px">' + String(fb.note).replace(/</g, '&lt;') + '</div>';
+      if (fb.invoice_name) {
+        html += '<div style="margin-top:6px">📎 Invoice: <b>' + String(fb.invoice_name).replace(/</g, '&lt;') + '</b>';
+        if (fb.invoice_data_url) {
+          html += ' · <a href="' + fb.invoice_data_url + '" download="' + String(fb.invoice_name).replace(/"/g, '') + '">Download</a>';
+        }
+        html += '</div>';
+      }
+      fbBox.innerHTML = html;
+    } else if (fbBox) {
+      fbBox.style.display = 'none';
+      fbBox.innerHTML = '';
+    }
+  } catch (_) {}
+  // Soft pull latest feedback from cloud/local
+  try {
+    pullPurchaseSupplierFeedback(purchaseId).then(() => {
+      const po2 = (db.purchases || []).find(p => p.id === purchaseId);
+      const fbBox = document.getElementById('purchaseDetailSupplierFeedback');
+      const fb = po2 && po2.supplier_public_feedback;
+      if (!fbBox || !fb) return;
+      if (!(fb.confirmed || fb.note || fb.invoice_name)) return;
+      fbBox.style.display = '';
+      let html = '<div style="font-size:12px;font-weight:700;color:var(--text)">Supplier response</div>';
+      if (fb.confirmed) html += '<div style="margin-top:4px">✓ Confirmed order' + (fb.confirmed_at ? ' · ' + String(fb.confirmed_at).replace('T', ' ').slice(0, 16) : '') + '</div>';
+      if (fb.note) html += '<div class="client-meta" style="margin-top:4px">' + String(fb.note).replace(/</g, '&lt;') + '</div>';
+      if (fb.invoice_name) {
+        html += '<div style="margin-top:6px">📎 Invoice: <b>' + String(fb.invoice_name).replace(/</g, '&lt;') + '</b>';
+        if (fb.invoice_data_url) html += ' · <a href="' + fb.invoice_data_url + '" download="' + String(fb.invoice_name).replace(/"/g, '') + '">Download</a>';
+        html += '</div>';
+      }
+      fbBox.innerHTML = html;
+    }).catch(() => {});
   } catch (_) {}
 
   // Context actions
@@ -35813,6 +35949,18 @@ document.getElementById('purchaseDetailPublicLink')?.addEventListener('click', a
     try { openPurchaseDetailModal(id); } catch (_) {}
   } catch (e) {
     toast(e.message || 'Could not create link');
+  }
+});
+document.getElementById('purchaseDetailRevokeLink')?.addEventListener('click', async () => {
+  const id = document.getElementById('purchaseDetailId')?.value;
+  if (!id) return;
+  if (!confirm('Revoke the supplier link? Anyone with the old URL will no longer see this PO.')) return;
+  try {
+    await revokePurchasePublicLink(id);
+    toast('Supplier link revoked');
+    try { openPurchaseDetailModal(id); } catch (_) {}
+  } catch (e) {
+    toast(e.message || 'Could not revoke link');
   }
 });
 document.getElementById('purchaseDetailActions')?.addEventListener('click', (e) => {
