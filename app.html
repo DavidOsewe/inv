@@ -17370,11 +17370,161 @@ async function revokePurchasePublicLink(purchaseId) {
   return po;
 }
 
+/** Build a downloadable plain-text supporting doc for audit packs. */
+function makeAuditTextDoc(name, body, role) {
+  const text = String(body || '');
+  const dataUrl = 'data:text/plain;charset=utf-8,' + encodeURIComponent(text);
+  return {
+    name: name || 'document.txt',
+    type: 'text/plain',
+    size: text.length,
+    dataUrl,
+    at: new Date().toISOString(),
+    role: role || null,
+    note: role || null,
+    source: 'system'
+  };
+}
+
+/** Supplier invoice file from public PO link feedback → standard document shape. */
+function supplierInvoiceDocFromFeedback(fb) {
+  if (!fb) return null;
+  const dataUrl = fb.invoice_data_url || fb.invoiceDataUrl || null;
+  if (!dataUrl && !fb.invoice_name) return null;
+  return {
+    name: fb.invoice_name
+      ? ('Supplier invoice · ' + fb.invoice_name)
+      : 'Supplier invoice (PO link)',
+    type: fb.invoice_mime || 'application/octet-stream',
+    size: dataUrl ? Math.round(String(dataUrl).length * 0.75) : 0,
+    dataUrl: dataUrl || null,
+    at: fb.submitted_at || fb.confirmed_at || new Date().toISOString(),
+    role: 'supplier_invoice',
+    note: 'Uploaded by supplier via public PO link',
+    source: 'supplier_po_link'
+  };
+}
+
+/**
+ * Three-way audit pack for a purchase: PO + GRN(s) + supplier invoice (+ optional bill files).
+ * Auditors should always be able to open these from the ledger/audit trail.
+ */
+function purchaseThreeWaySupportingDocs(purchaseId, extraDocs) {
+  ensurePosDb();
+  const po = (db.purchases || []).find(p => p.id === purchaseId);
+  if (!po) return Array.isArray(extraDocs) ? extraDocs.slice() : [];
+  const out = [];
+  const seen = new Set();
+  const push = (d) => {
+    if (!d) return;
+    const key = (d.role || '') + '|' + (d.name || '') + '|' + (d.dataUrl ? d.dataUrl.slice(0, 48) : '');
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(d);
+  };
+
+  // 1) PO
+  try {
+    const text = (typeof buildPurchaseShareText === 'function')
+      ? buildPurchaseShareText(po)
+      : ('PO ' + (po.purchase_number || '') + '\nTotal ' + (po.total || 0));
+    push(makeAuditTextDoc(
+      'PO-' + (po.purchase_number || po.id.slice(0, 8)) + '.txt',
+      text,
+      'po'
+    ));
+  } catch (_) {}
+
+  // 2) GRN / goods receipts
+  (db.purchaseReceipts || []).filter(r => r && r.purchase_id === purchaseId).forEach((r, i) => {
+    const lines = (r.lines || []).map(l => {
+      const name = l.product_name || l.name || 'Item';
+      return '  - ' + name + ' × ' + (l.qty || 0);
+    }).join('\n');
+    const body =
+      'Goods received note (GRN)\n' +
+      'PO: ' + (po.purchase_number || '') + '\n' +
+      'Received: ' + (r.received_at || '') + '\n' +
+      'Value: ' + (r.total_value != null ? r.total_value : '') + '\n' +
+      (r.note ? ('Note: ' + r.note + '\n') : '') +
+      (lines ? ('Lines:\n' + lines) : '');
+    push(makeAuditTextDoc(
+      'GRN-' + (i + 1) + '-' + (po.purchase_number || 'PO') + '.txt',
+      body,
+      'grn'
+    ));
+  });
+
+  // 3) Supplier invoice from public PO link
+  try {
+    const inv = supplierInvoiceDocFromFeedback(po.supplier_public_feedback);
+    if (inv) push(inv);
+  } catch (_) {}
+
+  // Extra (bill uploads, etc.)
+  (Array.isArray(extraDocs) ? extraDocs : []).forEach(push);
+  return out;
+}
+
+/** Merge three-way pack onto a bill so ledger + audit always carry the full set. */
+function mergeBillThreeWayDocs(bill) {
+  if (!bill || !bill.purchase_id) return bill;
+  const merged = purchaseThreeWaySupportingDocs(bill.purchase_id, bill.documents || []);
+  bill.documents = merged;
+  return bill;
+}
+
+/**
+ * When supplier uploads invoice via public link, attach it to linked bills + journals
+ * and write an audit event so the ledger trail is complete.
+ */
+function attachSupplierInvoiceToLedger(purchaseId) {
+  ensurePosDb();
+  try { ensureBooksDb(); } catch (_) {}
+  const po = (db.purchases || []).find(p => p.id === purchaseId);
+  if (!po || !po.supplier_public_feedback) return 0;
+  const invDoc = supplierInvoiceDocFromFeedback(po.supplier_public_feedback);
+  if (!invDoc) return 0;
+  let n = 0;
+  const bills = (db.bills || []).filter(b => b && b.purchase_id === purchaseId);
+  bills.forEach(bill => {
+    mergeBillThreeWayDocs(bill);
+    n++;
+    // Back-fill journals for this bill
+    const jKeys = ['j:bill:' + bill.id, 'j:billpay:' + bill.id];
+    (db.journals || []).forEach(j => {
+      if (!j || !j.sourceKey) return;
+      if (jKeys.indexOf(String(j.sourceKey)) < 0) return;
+      j.documents = purchaseThreeWaySupportingDocs(purchaseId, j.documents || bill.documents || []);
+    });
+  });
+  try {
+    appendBooksAudit(
+      'supplier.invoice_attached',
+      'purchase',
+      purchaseId,
+      'Supplier invoice via PO link · ' + (po.purchase_number || '') +
+        (invDoc.name ? (' · ' + invDoc.name) : ''),
+      null,
+      { documents: purchaseThreeWaySupportingDocs(purchaseId), purchase_id: purchaseId },
+      {
+        documents: purchaseThreeWaySupportingDocs(purchaseId),
+        documentCount: purchaseThreeWaySupportingDocs(purchaseId).length,
+        source: 'supplier_po_link'
+      }
+    );
+  } catch (_) {}
+  try { persistDb(); } catch (_) {}
+  try { save(); } catch (_) {}
+  return n;
+}
+
 async function pullPurchaseSupplierFeedback(purchaseId) {
   ensurePosDb();
   const po = (db.purchases || []).find(p => p.id === purchaseId);
   if (!po || !po.publicShareToken) return null;
   const token = po.publicShareToken;
+  let hadInvoice = !!(po.supplier_public_feedback && (po.supplier_public_feedback.invoice_data_url || po.supplier_public_feedback.invoice_name));
   // Local snapshot first
   try {
     const map = JSON.parse(localStorage.getItem(PUBLIC_PO_LS_KEY) || '{}') || {};
@@ -17395,7 +17545,14 @@ async function pullPurchaseSupplierFeedback(purchaseId) {
       }
     }
   } catch (_) {}
-  return po.supplier_public_feedback || null;
+  const fb = po.supplier_public_feedback || null;
+  const hasInvoice = !!(fb && (fb.invoice_data_url || fb.invoice_name));
+  if (hasInvoice && !hadInvoice) {
+    try { attachSupplierInvoiceToLedger(purchaseId); } catch (_) {}
+  } else if (hasInvoice) {
+    try { attachSupplierInvoiceToLedger(purchaseId); } catch (_) {}
+  }
+  return fb;
 }
 
 async function copyPurchasePublicLink(purchaseId) {
@@ -25717,15 +25874,32 @@ function resolveSupportingDocs(evOrEntity) {
           .replace(/^billpay:/, '')
           .replace(/^bill:/, '');
         const b = (db.bills || []).find(x => x.id === billId);
+        if (b && b.purchase_id) {
+          try { mergeBillThreeWayDocs(b); } catch (_) {}
+        }
         const bDocs = tryDocs(b && b.documents);
         if (bDocs) {
           // Back-fill journal so both GL legs keep docs on the entry itself
-          if (j && !(j.documents && j.documents.length)) {
+          if (j) {
             j.documents = bDocs;
             try { save(); } catch (_) {}
           }
           return bDocs;
         }
+      }
+      // Goods receive journals — attach PO + GRN pack
+      if (j && j.source === 'purchase_receive') {
+        try {
+          const recvId = String(j.sourceKey || '').replace(/^j:po_recv:/, '');
+          const receipt = (db.purchaseReceipts || []).find(r => r && r.id === recvId);
+          if (receipt && receipt.purchase_id) {
+            const pack = purchaseThreeWaySupportingDocs(receipt.purchase_id, j.documents || []);
+            if (pack.length) {
+              j.documents = pack;
+              return pack;
+            }
+          }
+        } catch (_) {}
       }
       if (sk.indexOf('cash:') >= 0) {
         const cashId = sk.replace(/^j:cash:/, '').replace(/^cash:/, '');
@@ -25772,8 +25946,16 @@ function resolveSupportingDocs(evOrEntity) {
     }
     if (type === 'bill' && id) {
       const b = (db.bills || []).find(x => x.id === id);
+      if (b && b.purchase_id) {
+        try { mergeBillThreeWayDocs(b); } catch (_) {}
+      }
       const bDocs = tryDocs(b && b.documents);
       if (bDocs) return bDocs;
+    }
+    // Purchase entity — always offer three-way pack when available
+    if (type === 'purchase' && id) {
+      const pack = purchaseThreeWaySupportingDocs(id);
+      if (pack && pack.length) return pack;
     }
     if ((type === 'cash' || type === 'cash_entry') && id) {
       const c = (db.cashEntries || []).find(x => x.id === id);
@@ -26664,6 +26846,10 @@ function accrueSupplierBill(bill) {
     bill.match_variance_pct = match.variancePct;
     bill.three_way = true;
     bill.received_total = receivedTotal;
+    // Three-way audit pack: PO + GRN + supplier invoice (from PO link) + any bill uploads
+    try {
+      mergeBillThreeWayDocs(bill);
+    } catch (_) {}
     postJournal({
       date: bill.date || today,
       memo: 'Bill · 3-way · ' + (match.purchase_number || '') + ' · ' +
@@ -26674,6 +26860,17 @@ function accrueSupplierBill(bill) {
       lines,
       documents: Array.isArray(bill.documents) ? bill.documents : []
     });
+    try {
+      appendBooksAudit(
+        'bill.three_way_posted',
+        'bill',
+        bill.id,
+        '3-way match posted · PO + GRN + supplier invoice · ' + (match.purchase_number || ''),
+        null,
+        { documents: bill.documents || [], purchase_id: bill.purchase_id },
+        { documents: bill.documents || [], documentCount: (bill.documents || []).length, three_way: true }
+      );
+    } catch (_) {}
     return;
   }
 
