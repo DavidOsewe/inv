@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Purchase order — invoicedey</title>
+<style>
+  :root { --blue:#2467E3; --text:#0F172A; --muted:#64748B; --line:#E2E8F0; --bg:#F8FAFC; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap { max-width:720px; margin:0 auto; padding:28px 16px 60px; }
+  .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
+  .brand { font-weight:800; font-size:20px; letter-spacing:-.6px; }
+  .brand em { color:var(--blue); font-style:normal; }
+  .button { display:inline-flex; align-items:center; justify-content:center; padding:10px 14px; border:1px solid var(--line); border-radius:9px; background:#fff; color:var(--text); text-decoration:none; font-weight:700; cursor:pointer; font-size:13px; }
+  .button.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:28px; box-shadow:0 8px 30px rgba(15,23,42,.06); }
+  .head { display:flex; justify-content:space-between; gap:24px; padding-bottom:20px; border-bottom:2px solid var(--blue); flex-wrap:wrap; }
+  .issuer { font-size:20px; font-weight:800; }
+  .contact { color:var(--muted); font-size:12px; white-space:pre-line; margin-top:5px; }
+  .doc { text-align:right; }
+  .doc-type { color:var(--blue); font-weight:800; text-transform:uppercase; letter-spacing:1.5px; font-size:11px; }
+  .meta { color:var(--muted); font-size:12px; margin-top:5px; line-height:1.6; }
+  .parties { display:grid; grid-template-columns:1fr 1fr; gap:24px; padding:22px 0 16px; }
+  @media (max-width:560px) { .parties { grid-template-columns:1fr; } .doc { text-align:left; } }
+  .label { color:#64748B; text-transform:uppercase; font-size:10px; font-weight:800; letter-spacing:.8px; margin-bottom:6px; }
+  .party-name { font-weight:750; font-size:15px; }
+  .party-extra { color:var(--muted); font-size:12px; line-height:1.5; margin-top:3px; }
+  .status-badge { display:inline-flex; align-items:center; padding:5px 10px; border-radius:999px; background:#EFF6FF; color:#1D4ED8; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.6px; }
+  .table-wrap { overflow-x:auto; margin-top:12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { padding:10px 8px; border-bottom:1px solid var(--line); text-align:left; }
+  th { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .right { text-align:right; }
+  .totals { margin-top:16px; text-align:right; font-size:15px; font-weight:800; }
+  .note { margin-top:16px; padding:12px; border-radius:10px; background:var(--bg); border:1px solid var(--line); font-size:13px; color:var(--muted); }
+  .footer { margin-top:24px; text-align:center; color:var(--muted); font-size:12px; }
+  .empty { text-align:center; padding:48px 20px; color:var(--muted); }
+  .empty h2 { color:var(--text); margin:0 0 8px; }
+  @media print {
+    body { background:#fff; }
+    .topbar .button, .footer { display:none !important; }
+    .card { box-shadow:none; border:none; padding:0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">invoice<em>dey</em></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button type="button" class="button" id="publicPrintBtn">Print / PDF</button>
+    </div>
+  </div>
+  <div id="root"><div class="card empty"><p>Loading purchase order…</p></div></div>
+  <div class="footer">Shared via Invoicedey · Read-only for the supplier</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = 'https://spzrnnqeshejdmnocvut.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_cI6BHYTzGjADHJIjm8r6ng_2Q8_tlhQ';
+const PUBLIC_PO_LS_KEY = 'invoicedey-public-pos';
+
+function money(n, currency) {
+  const cur = currency || 'NGN';
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, maximumFractionDigits: 2 }).format(Number(n) || 0);
+  } catch {
+    return (cur + ' ' + (Number(n) || 0).toFixed(2));
+  }
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderNotFound(msg) {
+  document.getElementById('root').innerHTML =
+    '<div class="card empty"><h2>Purchase order unavailable</h2><p>' + escapeHtml(msg || 'This link is invalid or was disabled.') + '</p></div>';
+}
+
+function loadLocalSnapshot(token) {
+  try {
+    const raw = localStorage.getItem(PUBLIC_PO_LS_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw);
+    const row = map && map[token];
+    if (!row || row.enabled === false) return null;
+    return row.payload || row;
+  } catch { return null; }
+}
+
+async function loadSupabase() {
+  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+}
+
+async function loadFromCloud(token) {
+  if (!SUPABASE_PUBLISHABLE_KEY || SUPABASE_PUBLISHABLE_KEY.includes('PASTE_YOUR')) return null;
+  try {
+    const client = await loadSupabase();
+    const { data, error } = await client.rpc('get_public_purchase', { p_token: token });
+    if (error) throw error;
+    if (data) return typeof data === 'string' ? JSON.parse(data) : data;
+  } catch (e) {
+    console.warn('get_public_purchase', e);
+  }
+  // Fallback: direct table read if RPC not deployed yet
+  try {
+    const client = await loadSupabase();
+    const { data, error } = await client
+      .from('public_purchase_links')
+      .select('payload, enabled')
+      .eq('token', token)
+      .maybeSingle();
+    if (error) throw error;
+    if (data && data.enabled !== false && data.payload) return data.payload;
+  } catch (e) {
+    console.warn('public_purchase_links', e);
+  }
+  return null;
+}
+
+function render(payload) {
+  if (!payload || !payload.purchase_number) {
+    renderNotFound('This purchase order could not be displayed.');
+    return;
+  }
+  const biz = payload.buyer || {};
+  const sup = payload.supplier || {};
+  const lines = payload.lines || [];
+  const currency = payload.currency || 'NGN';
+  const status = payload.status_label || payload.status || 'Ordered';
+  const rows = lines.map(l => {
+    const qty = Number(l.qty) || 0;
+    const cost = Number(l.unit_cost) || 0;
+    return '<tr><td>' + escapeHtml(l.name || 'Item') + '</td>' +
+      '<td class="right">' + qty + '</td>' +
+      '<td class="right">' + escapeHtml(money(cost, currency)) + '</td>' +
+      '<td class="right">' + escapeHtml(money(qty * cost, currency)) + '</td></tr>';
+  }).join('');
+
+  document.getElementById('root').innerHTML =
+    '<div class="card">' +
+      '<div class="head">' +
+        '<div>' +
+          '<div class="issuer">' + escapeHtml(biz.name || 'Buyer') + '</div>' +
+          (biz.contact ? '<div class="contact">' + escapeHtml(biz.contact) + '</div>' : '') +
+        '</div>' +
+        '<div class="doc">' +
+          '<div class="doc-type">Purchase order</div>' +
+          '<div style="font-size:18px;font-weight:800;margin-top:4px">' + escapeHtml(payload.purchase_number) + '</div>' +
+          '<div class="meta">Date: ' + escapeHtml(payload.order_date || '—') + '</div>' +
+          '<div style="margin-top:8px"><span class="status-badge">' + escapeHtml(status) + '</span></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="parties">' +
+        '<div><div class="label">From (buyer)</div><div class="party-name">' + escapeHtml(biz.name || '—') + '</div>' +
+          (biz.email || biz.phone ? '<div class="party-extra">' + escapeHtml([biz.email, biz.phone].filter(Boolean).join(' · ')) + '</div>' : '') +
+        '</div>' +
+        '<div><div class="label">To (supplier)</div><div class="party-name">' + escapeHtml(sup.name || 'Supplier') + '</div>' +
+          (sup.email || sup.phone ? '<div class="party-extra">' + escapeHtml([sup.email, sup.phone].filter(Boolean).join(' · ')) + '</div>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Item</th><th class="right">Qty</th><th class="right">Unit cost</th><th class="right">Amount</th></tr></thead><tbody>' +
+        (rows || '<tr><td colspan="4">No lines</td></tr>') +
+      '</tbody></table></div>' +
+      '<div class="totals">Total ' + escapeHtml(money(payload.total, currency)) + '</div>' +
+      (payload.note ? '<div class="note"><strong>Note</strong><br>' + escapeHtml(payload.note) + '</div>' : '') +
+    '</div>';
+}
+
+(async function () {
+  const token = new URLSearchParams(location.search).get('token');
+  if (!token) { renderNotFound('No purchase order token was provided.'); return; }
+
+  let payload = loadLocalSnapshot(token);
+  if (!payload) payload = await loadFromCloud(token);
+  if (!payload) {
+    renderNotFound('We could not load this purchase order. The link may be disabled, or cloud sharing is not set up yet.');
+    return;
+  }
+  render(payload);
+  document.getElementById('publicPrintBtn')?.addEventListener('click', () => window.print());
+})();
+</script>
+</body>
+</html>

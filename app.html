@@ -6663,9 +6663,11 @@ body:has(.modalback.show) .notif-panel {
     <div id="purchaseDetailTimeline" style="margin-bottom:14px"></div>
     <h3 style="font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">Documents</h3>
     <div id="purchaseDetailDocs" class="client-meta" style="margin-bottom:14px">—</div>
+    <div id="purchaseDetailLinkBox" class="client-meta" style="margin:0 0 10px;word-break:break-all;display:none"></div>
     <div class="buttons" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end">
+      <button type="button" class="button primary" id="purchaseDetailPublicLink">Copy supplier link</button>
       <button type="button" class="button" id="purchaseDetailShare">Share with supplier</button>
-      <button type="button" class="button" id="purchaseDetailCopy">Copy</button>
+      <button type="button" class="button" id="purchaseDetailCopy">Copy text</button>
       <button type="button" class="button" id="purchaseDetailPrint">Print / PDF</button>
       <span id="purchaseDetailActions" style="display:flex;flex-wrap:wrap;gap:8px"></span>
     </div>
@@ -17197,8 +17199,132 @@ function buildPurchaseShareText(po) {
   t += 'Total: ' + formatPosMoney(po.total || 0) + '\n';
   if (lines) t += '\nItems:\n' + lines + '\n';
   if (po.note) t += '\nNote: ' + po.note + '\n';
+  try {
+    if (po.publicShareToken && po.publicShareEnabled !== false) {
+      t += '\nView online: ' + purchasePublicUrl(po) + '\n';
+    }
+  } catch (_) {}
   t += '\n— Sent via Invoicedey';
   return t;
+}
+
+const PUBLIC_PO_LS_KEY = 'invoicedey-public-pos';
+
+function purchasePublicUrl(po) {
+  const token = po && po.publicShareToken;
+  if (!token) return '';
+  const origin = (typeof window !== 'undefined' && window.location && window.location.origin) || '';
+  return origin + '/po.html?token=' + encodeURIComponent(token);
+}
+
+function ensurePurchasePublicToken(po) {
+  if (!po) return null;
+  if (!po.publicShareToken) {
+    po.publicShareToken = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID().replace(/-/g, '')
+      : (String(Date.now()) + Math.random().toString(36).slice(2, 10));
+  }
+  po.publicShareEnabled = true;
+  if (!po.public_shared_at) po.public_shared_at = new Date().toISOString();
+  return po.publicShareToken;
+}
+
+function buildPublicPurchasePayload(po) {
+  ensurePosDb();
+  const sup = (db.suppliers || []).find(s => s.id === po.supplier_id);
+  const profile = db.profile || {};
+  return {
+    purchase_number: po.purchase_number || '',
+    order_date: po.order_date || '',
+    status: po.status || '',
+    status_label: (typeof purchasePipelineLabel === 'function') ? purchasePipelineLabel(po) : (po.status || ''),
+    currency: po.currency || profile.reporting || 'NGN',
+    total: Number(po.total) || 0,
+    note: po.note || '',
+    buyer: {
+      name: profile.name || profile.businessName || 'Buyer',
+      email: profile.email || '',
+      phone: profile.phone || '',
+      contact: [profile.address, profile.city].filter(Boolean).join(', ')
+    },
+    supplier: {
+      name: (sup && sup.name) || po.supplier_name || 'Supplier',
+      email: (sup && sup.email) || '',
+      phone: (sup && (sup.phone || sup.whatsapp)) || ''
+    },
+    lines: (po.lines || []).map(l => ({
+      name: l.product_name || (db.products || []).find(p => p.id === l.product_id)?.name || 'Item',
+      qty: Number(l.qty) || 0,
+      unit_cost: Number(l.unit_cost) || 0
+    }))
+  };
+}
+
+function savePublicPurchaseLocal(token, payload, enabled) {
+  try {
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem(PUBLIC_PO_LS_KEY) || '{}') || {}; } catch (_) { map = {}; }
+    map[token] = {
+      enabled: enabled !== false,
+      updated_at: new Date().toISOString(),
+      payload
+    };
+    localStorage.setItem(PUBLIC_PO_LS_KEY, JSON.stringify(map));
+  } catch (e) {
+    console.warn('savePublicPurchaseLocal', e);
+  }
+}
+
+/**
+ * Enable public supplier link: local snapshot always; cloud when signed in + SQL applied.
+ * Returns { url, token, cloud: bool }
+ */
+async function enablePurchasePublicLink(purchaseId) {
+  ensurePosDb();
+  const po = (db.purchases || []).find(p => p.id === purchaseId);
+  if (!po) throw new Error('Purchase order not found');
+  const token = ensurePurchasePublicToken(po);
+  const payload = buildPublicPurchasePayload(po);
+  savePublicPurchaseLocal(token, payload, true);
+  try { persistDb(); } catch (_) {}
+  try { save(); } catch (_) {}
+
+  let cloudOk = false;
+  try {
+    if (cloud?.client && cloud?.organizationId) {
+      const row = {
+        token,
+        organization_id: cloud.organizationId,
+        purchase_local_id: po.id,
+        purchase_cloud_id: po.cloudId || null,
+        payload,
+        enabled: true,
+        updated_at: new Date().toISOString()
+      };
+      const { error } = await cloud.client.from('public_purchase_links').upsert(row, { onConflict: 'token' });
+      if (error) throw error;
+      cloudOk = true;
+    }
+  } catch (e) {
+    console.warn('public_purchase_links upsert', e);
+  }
+  return { url: purchasePublicUrl(po), token, cloud: cloudOk, po };
+}
+
+async function copyPurchasePublicLink(purchaseId) {
+  const r = await enablePurchasePublicLink(purchaseId);
+  try {
+    await navigator.clipboard.writeText(r.url);
+    toast(r.cloud
+      ? 'Supplier link copied'
+      : 'Link copied (works on this browser; run public_purchase_links.sql for cloud)');
+  } catch (_) {
+    window.prompt('Supplier PO link:', r.url);
+  }
+  try {
+    logStockAudit('public_link', 'purchase', purchaseId, 'Public link for ' + (r.po.purchase_number || ''), { cloud: r.cloud });
+  } catch (_) {}
+  return r;
 }
 
 function openPurchaseDetailModal(purchaseId) {
@@ -17278,6 +17404,21 @@ function openPurchaseDetailModal(purchaseId) {
     });
   });
   docsEl.innerHTML = docs.map(d => '<div>' + d + '</div>').join('') || '—';
+
+  // Public supplier link preview
+  try {
+    const linkBox = document.getElementById('purchaseDetailLinkBox');
+    if (linkBox) {
+      if (po.publicShareToken && po.publicShareEnabled !== false) {
+        const url = purchasePublicUrl(po);
+        linkBox.style.display = '';
+        linkBox.innerHTML = 'Supplier link: <a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>';
+      } else {
+        linkBox.style.display = 'none';
+        linkBox.innerHTML = '';
+      }
+    }
+  } catch (_) {}
 
   // Context actions
   const canRecv = po.status === 'ordered' || po.status === 'partial' || po.status === 'draft';
@@ -35650,9 +35791,11 @@ document.getElementById('purchaseDetailClose')?.addEventListener('click', closeP
 document.getElementById('purchaseDetailModal')?.addEventListener('click', (e) => {
   if (e.target && e.target.id === 'purchaseDetailModal') closePurchaseDetailModal();
 });
-document.getElementById('purchaseDetailShare')?.addEventListener('click', () => {
+document.getElementById('purchaseDetailShare')?.addEventListener('click', async () => {
   const id = document.getElementById('purchaseDetailId')?.value;
-  if (id) sharePurchaseOrder(id, 'share');
+  if (!id) return;
+  try { await enablePurchasePublicLink(id); } catch (_) {}
+  sharePurchaseOrder(id, 'share');
 });
 document.getElementById('purchaseDetailCopy')?.addEventListener('click', () => {
   const id = document.getElementById('purchaseDetailId')?.value;
@@ -35661,6 +35804,16 @@ document.getElementById('purchaseDetailCopy')?.addEventListener('click', () => {
 document.getElementById('purchaseDetailPrint')?.addEventListener('click', () => {
   const id = document.getElementById('purchaseDetailId')?.value;
   if (id) sharePurchaseOrder(id, 'print');
+});
+document.getElementById('purchaseDetailPublicLink')?.addEventListener('click', async () => {
+  const id = document.getElementById('purchaseDetailId')?.value;
+  if (!id) return;
+  try {
+    await copyPurchasePublicLink(id);
+    try { openPurchaseDetailModal(id); } catch (_) {}
+  } catch (e) {
+    toast(e.message || 'Could not create link');
+  }
 });
 document.getElementById('purchaseDetailActions')?.addEventListener('click', (e) => {
   // Actions use same data-* handlers on document; close modal after order/approve via bubbling
@@ -35984,17 +36137,20 @@ document.addEventListener('click', (e) => {
   }
   const orderPo = e.target.closest('[data-order-po]');
   if (orderPo) {
+    try { closePurchaseDetailModal(); } catch (_) {}
     markPurchaseOrdered(orderPo.getAttribute('data-order-po'));
     return;
   }
   const approvePo = e.target.closest('[data-approve-po]');
   if (approvePo) {
+    try { closePurchaseDetailModal(); } catch (_) {}
     Promise.resolve(approvePurchaseOrder(approvePo.getAttribute('data-approve-po')))
       .catch(err => toast(err && err.message ? err.message : 'Approve failed'));
     return;
   }
   const rejectPo = e.target.closest('[data-reject-po]');
   if (rejectPo) {
+    try { closePurchaseDetailModal(); } catch (_) {}
     const note = window.prompt('Reason for rejection') || '';
     try { rejectPurchaseOrder(rejectPo.getAttribute('data-reject-po'), note); }
     catch (err) { toast(err && err.message ? err.message : 'Reject failed'); }
