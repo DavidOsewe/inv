@@ -13124,6 +13124,8 @@ async function confirmReceiveGoods() {
         partyName: String((sup && sup.name) || po.supplier_name || '').slice(0, 120)
       };
       const creditLine = { accountId: creditAccount, debit: 0, credit: receiptValue };
+      let recvDocs = [];
+      try { recvDocs = purchaseThreeWaySupportingDocs(po.id); } catch (_) {}
       postJournal({
         date: now.slice(0, 10),
         memo: 'Goods received · ' + po.purchase_number +
@@ -13135,7 +13137,8 @@ async function confirmReceiveGoods() {
         lines: [
           { accountId: invId, debit: receiptValue, credit: 0 },
           creditLine
-        ]
+        ],
+        documents: recvDocs
       });
       if (mode === 'cash' && !db.cashEntries.some(e => e.sourceKey === key)) {
         db.cashEntries.push({
@@ -17386,16 +17389,43 @@ function makeAuditTextDoc(name, body, role) {
   };
 }
 
+/** Normalize invoice data URL (RPC/jsonb may wrap the string). */
+function normalizeSupplierInvoiceDataUrl(raw) {
+  if (raw == null || raw === '') return null;
+  if (typeof raw === 'object' && raw !== null) {
+    // accidental nested shape
+    if (raw.dataUrl) return normalizeSupplierInvoiceDataUrl(raw.dataUrl);
+    if (raw.invoice_data_url) return normalizeSupplierInvoiceDataUrl(raw.invoice_data_url);
+  }
+  let s = String(raw);
+  // jsonb sometimes returns quoted JSON string
+  if ((s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') ||
+      (s.charAt(0) === "'" && s.charAt(s.length - 1) === "'")) {
+    try { s = JSON.parse(s); } catch (_) { s = s.slice(1, -1); }
+  }
+  s = String(s || '').trim();
+  if (!s) return null;
+  if (s.indexOf('data:') === 0) return s;
+  // base64 without prefix — assume pdf
+  if (/^[A-Za-z0-9+/=\s]+$/.test(s.slice(0, 80)) && s.length > 100) {
+    return 'data:application/pdf;base64,' + s.replace(/\s/g, '');
+  }
+  return s;
+}
+
 /** Supplier invoice file from public PO link feedback → standard document shape. */
 function supplierInvoiceDocFromFeedback(fb) {
   if (!fb) return null;
-  const dataUrl = fb.invoice_data_url || fb.invoiceDataUrl || null;
-  if (!dataUrl && !fb.invoice_name) return null;
+  const dataUrl = normalizeSupplierInvoiceDataUrl(
+    fb.invoice_data_url != null ? fb.invoice_data_url : fb.invoiceDataUrl
+  );
+  const name = fb.invoice_name || fb.invoiceName || null;
+  if (!dataUrl && !name) return null;
   return {
-    name: fb.invoice_name
-      ? ('Supplier invoice · ' + fb.invoice_name)
+    name: name
+      ? ('Supplier invoice · ' + name)
       : 'Supplier invoice (PO link)',
-    type: fb.invoice_mime || 'application/octet-stream',
+    type: fb.invoice_mime || fb.invoiceMime || (dataUrl && dataUrl.indexOf('image/') >= 0 ? 'image/jpeg' : 'application/pdf'),
     size: dataUrl ? Math.round(String(dataUrl).length * 0.75) : 0,
     dataUrl: dataUrl || null,
     at: fb.submitted_at || fb.confirmed_at || new Date().toISOString(),
@@ -17403,6 +17433,68 @@ function supplierInvoiceDocFromFeedback(fb) {
     note: 'Uploaded by supplier via public PO link',
     source: 'supplier_po_link'
   };
+}
+
+/** Scan local public-PO registry + purchases for supplier invoices (same browser as supplier). */
+function hydrateSupplierFeedbackFromLocalRegistry() {
+  ensurePosDb();
+  let map = {};
+  try { map = JSON.parse(localStorage.getItem(PUBLIC_PO_LS_KEY) || '{}') || {}; } catch (_) { map = {}; }
+  let n = 0;
+  (db.purchases || []).forEach(po => {
+    if (!po || !po.publicShareToken) return;
+    const row = map[po.publicShareToken];
+    const fb = row && row.payload && row.payload.supplier_feedback;
+    if (!fb) return;
+    const prev = po.supplier_public_feedback;
+    const prevHas = prev && (prev.invoice_data_url || prev.invoice_name);
+    const nextHas = fb.invoice_data_url || fb.invoice_name;
+    if (!prevHas || (nextHas && String(fb.submitted_at || '') > String(prev.submitted_at || ''))) {
+      po.supplier_public_feedback = fb;
+      n++;
+      try { attachSupplierInvoiceToLedger(po.id); } catch (_) {}
+    }
+  });
+  if (n) {
+    try { persistDb(); } catch (_) {}
+    try { save(); } catch (_) {}
+  }
+  return n;
+}
+
+/** Pull supplier feedback for all linked POs (cloud). Used before audit trail render. */
+async function hydrateAllSupplierFeedbackFromCloud() {
+  ensurePosDb();
+  if (!cloud?.client) return 0;
+  let n = 0;
+  const tokens = (db.purchases || [])
+    .filter(p => p && p.publicShareToken)
+    .map(p => p.publicShareToken);
+  if (!tokens.length) return 0;
+  try {
+    const { data, error } = await cloud.client
+      .from('public_purchase_links')
+      .select('token, payload, enabled')
+      .in('token', tokens);
+    if (error) throw error;
+    (data || []).forEach(row => {
+      if (!row || !row.payload) return;
+      const po = (db.purchases || []).find(p => p.publicShareToken === row.token);
+      if (!po) return;
+      const fb = row.payload.supplier_feedback;
+      if (!fb) return;
+      po.supplier_public_feedback = fb;
+      n++;
+      try { attachSupplierInvoiceToLedger(po.id); } catch (_) {}
+    });
+    if (n) {
+      try { persistDb(); } catch (_) {}
+      try { save(); } catch (_) {}
+    }
+  } catch (e) {
+    console.warn('hydrateAllSupplierFeedbackFromCloud', e);
+  }
+  return n;
 }
 
 /**
@@ -25844,27 +25936,35 @@ function openJournalActivityModal(journalId, opts) {
 
 function resolveSupportingDocs(evOrEntity) {
   if (!evOrEntity) return [];
+  // Ensure supplier invoices from PO links are on purchase records before resolving
+  try { hydrateSupplierFeedbackFromLocalRegistry(); } catch (_) {}
   const tryDocs = (d) => (Array.isArray(d) && d.length ? d : null);
   let docs = tryDocs(evOrEntity.documents)
     || tryDocs(evOrEntity.meta && evOrEntity.meta.documents)
     || tryDocs(evOrEntity.after && evOrEntity.after.documents)
     || tryDocs(evOrEntity.before && evOrEntity.before.documents);
-  const preferOpenable = (list) => {
-    if (!list || !list.length) return null;
-    return list;
-  };
-  if (docs) docs = preferOpenable(docs);
   const type = evOrEntity.entityType;
   const id = evOrEntity.entityId;
+  const metaPurchaseId = (evOrEntity.meta && evOrEntity.meta.purchase_id)
+    || (evOrEntity.after && evOrEntity.after.purchase_id)
+    || null;
+
+  /** Enrich any doc list with three-way pack when we know the PO. */
+  const enrichWithThreeWay = (list, purchaseId) => {
+    if (!purchaseId) return list || [];
+    try {
+      return purchaseThreeWaySupportingDocs(purchaseId, list || []);
+    } catch (_) {
+      return list || [];
+    }
+  };
+
   try {
     ensureBooksDb();
     if (type === 'journal' || (evOrEntity.lines && (evOrEntity.sourceKey || evOrEntity.id))) {
       const j = type === 'journal'
         ? (db.journals || []).find(x => x.id === id)
         : (evOrEntity.id ? (db.journals || []).find(x => x.id === evOrEntity.id) : null) || evOrEntity;
-      const jDocs = tryDocs(j && j.documents);
-      if (jDocs && jDocs.some(d => d && d.dataUrl)) return jDocs;
-      // Follow sourceKey → parent bill / cash / invoice (accrual, payment, reversal)
       const sk = j && j.sourceKey ? String(j.sourceKey) : '';
       // bill accrual j:bill:ID · bill payment j:billpay:ID
       if (sk.indexOf('bill:') >= 0 || sk.indexOf('billpay:') >= 0) {
@@ -25879,7 +25979,6 @@ function resolveSupportingDocs(evOrEntity) {
         }
         const bDocs = tryDocs(b && b.documents);
         if (bDocs) {
-          // Back-fill journal so both GL legs keep docs on the entry itself
           if (j) {
             j.documents = bDocs;
             try { save(); } catch (_) {}
@@ -25887,7 +25986,7 @@ function resolveSupportingDocs(evOrEntity) {
           return bDocs;
         }
       }
-      // Goods receive journals — attach PO + GRN pack
+      // Goods receive journals — full three-way pack (includes supplier invoice when present)
       if (j && j.source === 'purchase_receive') {
         try {
           const recvId = String(j.sourceKey || '').replace(/^j:po_recv:/, '');
@@ -25900,6 +25999,31 @@ function resolveSupportingDocs(evOrEntity) {
             }
           }
         } catch (_) {}
+      }
+      // Always re-merge three-way if journal already has docs but is PO-linked
+      if (j && Array.isArray(j.documents) && j.documents.length) {
+        const pid = metaPurchaseId
+          || (j.meta && j.meta.purchase_id)
+          || null;
+        if (pid) {
+          const pack = enrichWithThreeWay(j.documents, pid);
+          j.documents = pack;
+          return pack;
+        }
+        // Detect PO from existing PO-*.txt name
+        const poDoc = j.documents.find(d => d && d.role === 'po');
+        if (poDoc && poDoc.name) {
+          const m = String(poDoc.name).match(/PO-([A-Za-z0-9\-]+)/);
+          if (m) {
+            const po = (db.purchases || []).find(p => String(p.purchase_number || '') === m[1] || String(p.purchase_number || '').indexOf(m[1]) === 0);
+            if (po) {
+              const pack = enrichWithThreeWay(j.documents, po.id);
+              j.documents = pack;
+              return pack;
+            }
+          }
+        }
+        return j.documents;
       }
       if (sk.indexOf('cash:') >= 0) {
         const cashId = sk.replace(/^j:cash:/, '').replace(/^cash:/, '');
@@ -25942,6 +26066,7 @@ function resolveSupportingDocs(evOrEntity) {
         const oDocs = tryDocs(orig && orig.documents);
         if (oDocs) return oDocs;
       }
+      const jDocs = tryDocs(j && j.documents);
       if (jDocs) return jDocs;
     }
     if (type === 'bill' && id) {
@@ -25963,6 +26088,26 @@ function resolveSupportingDocs(evOrEntity) {
       if (cDocs) return cDocs;
     }
   } catch (_) {}
+  // Enrich audit-event docs with live three-way pack when purchase_id is known
+  if (metaPurchaseId) {
+    try {
+      const pack = purchaseThreeWaySupportingDocs(metaPurchaseId, docs || []);
+      if (pack.length) return pack;
+    } catch (_) {}
+  }
+  if (docs && docs.length) {
+    // If stored audit docs include a PO role, try live merge
+    const poRole = docs.find(d => d && d.role === 'po');
+    if (poRole && poRole.name) {
+      const m = String(poRole.name).match(/PO-([A-Za-z0-9\-]+)/);
+      if (m) {
+        const po = (db.purchases || []).find(p => String(p.purchase_number || '') === m[1]);
+        if (po) {
+          try { return purchaseThreeWaySupportingDocs(po.id, docs); } catch (_) {}
+        }
+      }
+    }
+  }
   return docs || [];
 }
 
