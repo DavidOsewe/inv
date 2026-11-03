@@ -114,7 +114,15 @@ function saveLocalFeedback(token, feedback) {
 }
 
 async function loadSupabase() {
-  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+    db: { schema: 'public' },
+    global: {
+      headers: {
+        'Accept-Profile': 'public',
+        'Content-Profile': 'public'
+      }
+    }
+  });
 }
 
 async function loadFromCloud(token) {

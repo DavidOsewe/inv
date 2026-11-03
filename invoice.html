@@ -221,7 +221,103 @@ async function loadSupabase() {
       s.onload=resolve; s.onerror=reject; document.head.appendChild(s);
     });
   }
-  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  // Explicit public schema — publishable keys were resolving RPCs under graphql_public
+  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+    db: { schema: 'public' },
+    global: {
+      headers: {
+        'Accept-Profile': 'public',
+        'Content-Profile': 'public'
+      }
+    }
+  });
+}
+
+/** Load public invoice: RPC first, then direct table fallback if RPC is missing. */
+async function fetchPublicInvoice(token) {
+  const client = await loadSupabase();
+  // 1) Preferred: security-definer RPC
+  try {
+    const { data, error } = await client.rpc('get_public_invoice', { p_token: token });
+    if (!error && data) return data;
+    if (error) console.warn('get_public_invoice', error.message || error);
+  } catch (e) {
+    console.warn('get_public_invoice threw', e);
+  }
+  // 2) Fallback: read invoices by public_share_token (requires RLS allow for enabled shares)
+  try {
+    const { data: inv, error: invErr } = await client
+      .from('invoices')
+      .select('*')
+      .eq('public_share_token', token)
+      .eq('public_share_enabled', true)
+      .maybeSingle();
+    if (invErr) throw invErr;
+    if (!inv) return null;
+    let lines = [];
+    try {
+      const { data: lineRows } = await client
+        .from('invoice_lines')
+        .select('*')
+        .eq('invoice_id', inv.id)
+        .order('position', { ascending: true });
+      lines = lineRows || [];
+    } catch (_) {
+      try {
+        const { data: lineRows } = await client
+          .from('invoice_lines')
+          .select('*')
+          .eq('invoice_id', inv.id);
+        lines = lineRows || [];
+      } catch (__) {}
+    }
+    let org = {};
+    try {
+      if (inv.organization_id) {
+        const { data: o } = await client
+          .from('organizations')
+          .select('name, email, phone, address, tax_label, payment_details, settlement_currency, reporting_currency, show_dual_currency')
+          .eq('id', inv.organization_id)
+          .maybeSingle();
+        if (o) org = o;
+      }
+    } catch (_) {}
+    let clientRow = {};
+    try {
+      if (inv.client_id) {
+        const { data: c } = await client
+          .from('clients')
+          .select('name, email, phone, billing_address')
+          .eq('id', inv.client_id)
+          .maybeSingle();
+        if (c) clientRow = c;
+      }
+    } catch (_) {}
+    return {
+      invoice: inv,
+      lines: lines,
+      issuer: {
+        name: org.name || inv.issuer_name || '',
+        email: org.email || '',
+        phone: org.phone || '',
+        address: org.address || null,
+        tax_label: org.tax_label || 'Tax',
+        payment_details: org.payment_details || inv.payment_details || '',
+        settlement_currency: org.settlement_currency || '',
+        reporting_currency: org.reporting_currency || '',
+        show_dual_currency: !!org.show_dual_currency
+      },
+      client: {
+        name: clientRow.name || inv.client_name || '',
+        email: clientRow.email || inv.client_email || '',
+        phone: clientRow.phone || '',
+        billing_address: clientRow.billing_address || null
+      }
+    };
+  } catch (e) {
+    console.warn('public invoice table fallback', e);
+    return null;
+  }
 }
 
 function getPublicSessionId() {
@@ -409,11 +505,13 @@ function render(data) {
   if (!token) { renderNotFound('No invoice token was provided.'); return; }
   if (!SUPABASE_PUBLISHABLE_KEY || SUPABASE_PUBLISHABLE_KEY.includes('PASTE_YOUR')) { renderNotFound('Public invoice viewing is not configured yet.'); return; }
   try {
-    const client=await loadSupabase();
-    const {data,error}=await client.rpc('get_public_invoice',{p_token:token});
-    if (error) throw error;
+    const data = await fetchPublicInvoice(token);
+    if (!data || !data.invoice) {
+      renderNotFound('This invoice link is invalid, expired, or no longer public.');
+      return;
+    }
     render(data);
-    if (data?.invoice) {
+    if (data.invoice) {
       await trackPublic('public_invoice_viewed', {
         invoice_number: data.invoice.invoice_number,
         currency: data.invoice.currency,
@@ -432,7 +530,7 @@ function render(data) {
     document.getElementById('publicFooterCta')?.addEventListener('click', ctaHandler('footer'));
   } catch (e) {
     console.error(e);
-    renderNotFound('We could not load this invoice right now.');
+    renderNotFound('We could not load this invoice right now. ' + (e && e.message ? e.message : ''));
   }
 })();
 </script>

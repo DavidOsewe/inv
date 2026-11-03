@@ -13894,15 +13894,10 @@ const GRNI_ACCOUNT_ID = '2010';
 const PPV_ACCOUNT_ID = '5050';
 
 function ensureGrniCoaAccounts() {
+  // GRNI (2010) and PPV (5050) live on the system COA constant — do not
+  // write a parallel db.coa copy (that orphan list was making the chart
+  // look different from getCoa() after login/sync).
   try { ensureBooksDb(); } catch (_) {}
-  if (!Array.isArray(db.coa)) db.coa = (typeof COA !== 'undefined' ? COA.map(a => Object.assign({}, a)) : []);
-  const need = [
-    { id: GRNI_ACCOUNT_ID, name: 'Goods received not invoiced (GRNI)', type: 'liability', statement: 'bs', fsLine: 'payables', cfSection: 'operating' },
-    { id: PPV_ACCOUNT_ID, name: 'Purchase price variance', type: 'expense', statement: 'pl', fsLine: 'cogs', cfSection: 'operating' }
-  ];
-  need.forEach(spec => {
-    if (!db.coa.some(a => String(a.id) === String(spec.id))) db.coa.push(Object.assign({}, spec));
-  });
 }
 
 function getGrniAccountId() {
@@ -17373,7 +17368,7 @@ async function revokePurchasePublicLink(purchaseId) {
   return po;
 }
 
-/** Build a downloadable plain-text supporting doc for audit packs. */
+/** Build a downloadable supporting doc for audit packs (HTML opens as a formal document). */
 function makeAuditTextDoc(name, body, role) {
   const text = String(body || '');
   const dataUrl = 'data:text/plain;charset=utf-8,' + encodeURIComponent(text);
@@ -17387,6 +17382,95 @@ function makeAuditTextDoc(name, body, role) {
     note: role || null,
     source: 'system'
   };
+}
+
+function makeAuditHtmlDoc(name, html, role) {
+  const body = String(html || '');
+  const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(body);
+  return {
+    name: name || 'document.html',
+    type: 'text/html',
+    size: body.length,
+    dataUrl,
+    at: new Date().toISOString(),
+    role: role || null,
+    note: role || null,
+    source: 'system'
+  };
+}
+
+function escapeAuditHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function purchaseDocNumberLabel(po) {
+  const n = String((po && po.purchase_number) || '').trim() || 'PO';
+  return n.replace(/^PO[-_\s]*/i, '') ? n : ('PO-' + n);
+}
+
+/** Formal HTML purchase order for audit supporting documents. */
+function buildPurchaseOrderAuditHtml(po) {
+  ensurePosDb();
+  const profile = db.profile || {};
+  const sup = (db.suppliers || []).find(s => s.id === po.supplier_id);
+  const biz = profile.name || profile.businessName || 'Buyer';
+  const num = purchaseDocNumberLabel(po);
+  const rows = (po.lines || []).map(l => {
+    const name = l.product_name || (db.products || []).find(p => p.id === l.product_id)?.name || 'Item';
+    const qty = Number(l.qty) || 0;
+    const cost = Number(l.unit_cost) || 0;
+    return '<tr><td>' + escapeAuditHtml(name) + '</td><td style="text-align:right">' + qty +
+      '</td><td style="text-align:right">' + escapeAuditHtml(formatPosMoney(cost)) +
+      '</td><td style="text-align:right">' + escapeAuditHtml(formatPosMoney(qty * cost)) + '</td></tr>';
+  }).join('');
+  return '<!doctype html><html><head><meta charset="utf-8"><title>Purchase order ' + escapeAuditHtml(num) +
+    '</title><style>body{font-family:system-ui,-apple-system,sans-serif;color:#0f172a;padding:28px;max-width:720px;margin:0 auto}' +
+    'h1{font-size:20px;margin:0 0 4px}h2{font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:0 0 16px}' +
+    '.meta{color:#64748b;font-size:13px;margin:4px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}' +
+    'table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}th,td{border-bottom:1px solid #e2e8f0;padding:8px;text-align:left}' +
+    'th{font-size:11px;text-transform:uppercase;color:#64748b}.total{margin-top:16px;font-size:16px;font-weight:800;text-align:right}' +
+    '@media print{body{padding:0}}</style></head><body>' +
+    '<h2>Purchase order</h2><h1>' + escapeAuditHtml(num) + '</h1>' +
+    '<div class="meta">Date: ' + escapeAuditHtml(po.order_date || '') +
+    ' · Status: ' + escapeAuditHtml(typeof purchasePipelineLabel === 'function' ? purchasePipelineLabel(po) : (po.status || '')) + '</div>' +
+    '<div class="grid"><div><div class="meta">From (buyer)</div><strong>' + escapeAuditHtml(biz) + '</strong>' +
+    (profile.email || profile.phone ? '<div class="meta">' + escapeAuditHtml([profile.email, profile.phone].filter(Boolean).join(' · ')) + '</div>' : '') +
+    '</div><div><div class="meta">To (supplier)</div><strong>' + escapeAuditHtml((sup && sup.name) || po.supplier_name || 'Supplier') + '</strong>' +
+    ((sup && (sup.email || sup.phone)) ? '<div class="meta">' + escapeAuditHtml([sup.email, sup.phone || sup.whatsapp].filter(Boolean).join(' · ')) + '</div>' : '') +
+    '</div></div>' +
+    '<table><thead><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit cost</th><th style="text-align:right">Amount</th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="4">No lines</td></tr>') + '</tbody></table>' +
+    '<div class="total">Total ' + escapeAuditHtml(formatPosMoney(po.total || 0)) + '</div>' +
+    (po.note ? '<p class="meta" style="margin-top:16px">Note: ' + escapeAuditHtml(po.note) + '</p>' : '') +
+    '<p class="meta" style="margin-top:24px">Generated for audit · Invoicedey</p></body></html>';
+}
+
+/** Formal HTML GRN for audit supporting documents. */
+function buildGrnAuditHtml(po, receipt, index) {
+  ensurePosDb();
+  const num = purchaseDocNumberLabel(po);
+  const lines = (receipt.lines || []).map(l => {
+    const name = l.product_name || l.name || 'Item';
+    const qty = Number(l.qty) || Number(l.received_qty) || 0;
+    return '<tr><td>' + escapeAuditHtml(name) + '</td><td style="text-align:right">' + qty + '</td></tr>';
+  }).join('');
+  return '<!doctype html><html><head><meta charset="utf-8"><title>GRN ' + (index + 1) + ' · ' + escapeAuditHtml(num) +
+    '</title><style>body{font-family:system-ui,-apple-system,sans-serif;color:#0f172a;padding:28px;max-width:720px;margin:0 auto}' +
+    'h1{font-size:20px;margin:0 0 4px}h2{font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:0 0 16px}' +
+    '.meta{color:#64748b;font-size:13px;margin:4px 0}table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}' +
+    'th,td{border-bottom:1px solid #e2e8f0;padding:8px;text-align:left}th{font-size:11px;text-transform:uppercase;color:#64748b}' +
+    '.total{margin-top:16px;font-weight:800}</style></head><body>' +
+    '<h2>Goods received note</h2><h1>GRN ' + (index + 1) + ' · ' + escapeAuditHtml(num) + '</h1>' +
+    '<div class="meta">Received: ' + escapeAuditHtml(String(receipt.received_at || '').replace('T', ' ').slice(0, 16)) + '</div>' +
+    '<div class="meta">Value: ' + escapeAuditHtml(formatPosMoney(receipt.total_value || 0)) + '</div>' +
+    (receipt.note ? '<div class="meta">Note: ' + escapeAuditHtml(receipt.note) + '</div>' : '') +
+    '<table><thead><tr><th>Item</th><th style="text-align:right">Qty received</th></tr></thead><tbody>' +
+    (lines || '<tr><td colspan="2">No lines</td></tr>') + '</tbody></table>' +
+    '<p class="meta" style="margin-top:24px">Generated for audit · Invoicedey</p></body></html>';
 }
 
 /** Normalize invoice data URL (RPC/jsonb may wrap the string). */
@@ -17515,36 +17599,20 @@ function purchaseThreeWaySupportingDocs(purchaseId, extraDocs) {
     out.push(d);
   };
 
-  // 1) PO
+  // 1) PO (formal HTML — not plain text)
   try {
-    const text = (typeof buildPurchaseShareText === 'function')
-      ? buildPurchaseShareText(po)
-      : ('PO ' + (po.purchase_number || '') + '\nTotal ' + (po.total || 0));
-    push(makeAuditTextDoc(
-      'PO-' + (po.purchase_number || po.id.slice(0, 8)) + '.txt',
-      text,
-      'po'
-    ));
+    const num = purchaseDocNumberLabel(po);
+    const html = buildPurchaseOrderAuditHtml(po);
+    push(makeAuditHtmlDoc('Purchase order ' + num + '.html', html, 'po'));
   } catch (_) {}
 
-  // 2) GRN / goods receipts
+  // 2) GRN / goods receipts (formal HTML)
   (db.purchaseReceipts || []).filter(r => r && r.purchase_id === purchaseId).forEach((r, i) => {
-    const lines = (r.lines || []).map(l => {
-      const name = l.product_name || l.name || 'Item';
-      return '  - ' + name + ' × ' + (l.qty || 0);
-    }).join('\n');
-    const body =
-      'Goods received note (GRN)\n' +
-      'PO: ' + (po.purchase_number || '') + '\n' +
-      'Received: ' + (r.received_at || '') + '\n' +
-      'Value: ' + (r.total_value != null ? r.total_value : '') + '\n' +
-      (r.note ? ('Note: ' + r.note + '\n') : '') +
-      (lines ? ('Lines:\n' + lines) : '');
-    push(makeAuditTextDoc(
-      'GRN-' + (i + 1) + '-' + (po.purchase_number || 'PO') + '.txt',
-      body,
-      'grn'
-    ));
+    try {
+      const num = purchaseDocNumberLabel(po);
+      const html = buildGrnAuditHtml(po, r, i);
+      push(makeAuditHtmlDoc('GRN ' + (i + 1) + ' · ' + num + '.html', html, 'grn'));
+    } catch (_) {}
   });
 
   // 3) Supplier invoice from public PO link
@@ -17553,8 +17621,16 @@ function purchaseThreeWaySupportingDocs(purchaseId, extraDocs) {
     if (inv) push(inv);
   } catch (_) {}
 
-  // Extra (bill uploads, etc.)
-  (Array.isArray(extraDocs) ? extraDocs : []).forEach(push);
+  // Extra (bill uploads, etc.) — drop stale system PO/GRN text stubs so HTML pack wins
+  (Array.isArray(extraDocs) ? extraDocs : []).forEach(d => {
+    if (!d) return;
+    const role = String(d.role || '');
+    const name = String(d.name || '');
+    const src = String(d.source || '');
+    if ((role === 'po' || role === 'grn') && (src === 'system' || /\.txt$/i.test(name) || /^PO-PO-/i.test(name))) return;
+    if (/^PO-PO-/i.test(name) || /^GRN-\d+-PO-/i.test(name)) return;
+    push(d);
+  });
   return out;
 }
 
@@ -24034,7 +24110,14 @@ function resolveBooksControlAccount(role) {
   const visible = (typeof getCoa === 'function' ? getCoa() : all) || [];
   const pool = visible.length ? visible : all;
 
-  if (pinned && pool.some(a => String(a.id) === String(pinned))) return String(pinned);
+  // Stable pin: once chosen, never re-pick by name heuristics on login.
+  // (Heuristics were re-resolving AR/AP/revenue after renames and making the COA look "changed".)
+  if (pinned) {
+    const stillThere = all.some(a => String(a.id) === String(pinned))
+      || pool.some(a => String(a.id) === String(pinned));
+    if (stillThere) return String(pinned);
+    // Pin points at a deleted account — fall through to resolve once, then re-pin.
+  }
 
   const nameOf = (a) => String(a.name || '').toLowerCase();
   const isBadRevenueName = (a) => /depreciat|expense|cogs|cost of|salary|wage|rent|utility|drawings|equity|liability|payable|equipment|accumulat|inventory|cash|bank|loan/.test(nameOf(a));
@@ -24044,18 +24127,20 @@ function resolveBooksControlAccount(role) {
 
   let hit = null;
   if (role === 'ar') {
-    hit = pool.find(a => a.fsLine === 'receivables')
+    hit = pool.find(a => a.fsLine === 'receivables' && isGoodArName(a))
+      || pool.find(a => a.fsLine === 'receivables')
       || pool.find(a => isGoodArName(a) && (a.type === 'asset' || a.statement === 'bs'))
-      || pool.find(a => String(a.id) === AR_CONTROL_ID && a.fsLine === 'receivables');
+      || pool.find(a => String(a.id) === AR_CONTROL_ID);
   } else if (role === 'ap') {
-    hit = pool.find(a => a.fsLine === 'payables')
+    hit = pool.find(a => a.fsLine === 'payables' && isGoodApName(a))
+      || pool.find(a => a.fsLine === 'payables' && String(a.id) === AP_CONTROL_ID)
       || pool.find(a => isGoodApName(a) && (a.type === 'liability' || a.statement === 'bs'))
-      || pool.find(a => String(a.id) === AP_CONTROL_ID && a.fsLine === 'payables');
+      || pool.find(a => String(a.id) === AP_CONTROL_ID);
   } else if (role === 'revenue') {
     hit = pool.find(a => (a.type === 'income' || a.fsLine === 'revenue') && isGoodRevenueName(a) && !isBadRevenueName(a))
       || pool.find(a => a.fsLine === 'revenue' && a.type === 'income' && !isBadRevenueName(a))
-      || pool.find(a => a.type === 'income' && !isBadRevenueName(a))
-      || pool.find(a => String(a.id) === REVENUE_CONTROL_ID && a.type === 'income');
+      || pool.find(a => String(a.id) === REVENUE_CONTROL_ID)
+      || pool.find(a => a.type === 'income' && !isBadRevenueName(a));
   } else if (role === 'output_tax') {
     hit = pool.find(a => a.fsLine === 'tax_payable')
       || pool.find(a => /output.?vat|vat payable|tax payable|sales tax/.test(nameOf(a)))
@@ -24067,15 +24152,26 @@ function resolveBooksControlAccount(role) {
 
   if (hit) {
     const prev = db.booksSettings.controlAccounts[role];
-    db.booksSettings.controlAccounts[role] = String(hit.id);
     if (prev !== String(hit.id)) {
+      db.booksSettings.controlAccounts[role] = String(hit.id);
       try { save(); } catch (_) {}
       try { queueBooksCloudSync(); } catch (_) {}
     }
     return String(hit.id);
   }
 
-  // No suitable account — ensure a dedicated control exists (coaExtra) so posts never hit wrong heads
+  // Prefer system defaults over inventing 1100-AR style duplicates on every login
+  const fallback = { ar: AR_CONTROL_ID, ap: AP_CONTROL_ID, revenue: REVENUE_CONTROL_ID, output_tax: OUTPUT_TAX_ID, input_tax: INPUT_TAX_ID };
+  const fb = fallback[role] || AR_CONTROL_ID;
+  if (all.some(a => String(a.id) === String(fb)) || pool.some(a => String(a.id) === String(fb))) {
+    if (db.booksSettings.controlAccounts[role] !== fb) {
+      db.booksSettings.controlAccounts[role] = fb;
+      try { save(); } catch (_) {}
+    }
+    return fb;
+  }
+
+  // Only create synthetic control if system code truly missing
   const specs = {
     ar: { id: '1100-AR', name: 'Accounts receivable', type: 'asset', statement: 'bs', fsLine: 'receivables', cfSection: 'operating' },
     ap: { id: '2000-AP', name: 'Accounts payable', type: 'liability', statement: 'bs', fsLine: 'payables', cfSection: 'operating' },
@@ -24093,9 +24189,7 @@ function resolveBooksControlAccount(role) {
     db.booksSettings.controlAccounts[role] = spec.id;
     return spec.id;
   }
-  // Last-resort defaults
-  const fallback = { ar: AR_CONTROL_ID, ap: AP_CONTROL_ID, revenue: REVENUE_CONTROL_ID, output_tax: OUTPUT_TAX_ID, input_tax: INPUT_TAX_ID };
-  return fallback[role] || AR_CONTROL_ID;
+  return fb;
 }
 
 function getArControlId() { return resolveBooksControlAccount('ar'); }
@@ -26261,6 +26355,20 @@ function renderBooksAuditTrail() {
   const el = document.getElementById('booksAuditList');
   if (!el) return;
   ensureBooksDb();
+  try { hydrateSupplierFeedbackFromLocalRegistry(); } catch (_) {}
+  // Async cloud hydrate then re-render once (supplier invoice may live only in cloud)
+  if (!renderBooksAuditTrail._hydrating) {
+    renderBooksAuditTrail._hydrating = true;
+    Promise.resolve(hydrateAllSupplierFeedbackFromCloud())
+      .then((n) => {
+        renderBooksAuditTrail._hydrating = false;
+        if (n > 0) {
+          try { renderBooksAuditTrail._skipHydrate = true; renderBooksAuditTrail(); } catch (_) {}
+          renderBooksAuditTrail._skipHydrate = false;
+        }
+      })
+      .catch(() => { renderBooksAuditTrail._hydrating = false; });
+  }
   const list = [...(db.auditEvents || [])].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200);
   if (!list.length) {
     el.innerHTML = '<p class="section-sub">No audit events yet. Post a journal, match a bank line, or change the chart of accounts. Supporting documents on journals and bills appear here.</p>';
@@ -31834,6 +31942,8 @@ async function pushCoaSettingsToCloud(organizationId) {
     coa_overrides: overrides,
     control_accounts: controls,
     books_settings: settingsSlice,
+    // Full custom chart snapshot so login/pull cannot drop names, types, fs lines
+    coa_extra: Array.isArray(db.coaExtra) ? db.coaExtra : [],
     updated_at: new Date().toISOString(),
     updated_by: cloud.user.id || null
   };
@@ -31878,8 +31988,37 @@ async function pullCoaSettingsFromCloud(organizationId) {
           }
         }
       });
+      // hidden: false must also win (un-hide from cloud)
+      if (remote.hidden === false && next.hidden) {
+        delete next.hidden;
+        changed = true;
+      }
       db.coaOverrides[code] = next;
     });
+  }
+  // Full coa_extra snapshot from settings (preferred over thin books_coa_extra rows)
+  if (Array.isArray(data.coa_extra)) {
+    if (!Array.isArray(db.coaExtra)) db.coaExtra = [];
+    const byId = new Map(db.coaExtra.filter(a => a && a.id).map(a => [String(a.id), a]));
+    data.coa_extra.forEach(row => {
+      if (!row || !row.id) return;
+      const id = String(row.id);
+      const prev = byId.get(id);
+      const next = {
+        id,
+        name: row.name || (prev && prev.name) || id,
+        type: row.type || (prev && prev.type) || 'asset',
+        statement: row.statement || (prev && prev.statement) || undefined,
+        fsLine: row.fsLine || (prev && prev.fsLine) || undefined,
+        cfSection: row.cfSection || (prev && prev.cfSection) || undefined,
+        hidden: row.hidden != null ? row.hidden : (prev && prev.hidden),
+        parentControl: row.parentControl != null ? row.parentControl : (prev && prev.parentControl)
+      };
+      Object.keys(next).forEach(k => { if (next[k] === undefined) delete next[k]; });
+      if (!prev || JSON.stringify(prev) !== JSON.stringify(next)) changed = true;
+      byId.set(id, next);
+    });
+    db.coaExtra = Array.from(byId.values());
   }
   if (data.control_accounts && typeof data.control_accounts === 'object') {
     if (!db.booksSettings) db.booksSettings = {};
@@ -32047,7 +32186,7 @@ async function pushBooksToCloud() {
       if (!/does not exist|schema cache/i.test(String(e.message || e))) console.warn('cash push', e.message || e);
     }
   }
-  // COA extra
+  // COA extra (legacy table — name/type only; full snapshot also in books_coa_settings.coa_extra)
   for (const a of db.coaExtra || []) {
     const payload = {
       organization_id: organizationId,
@@ -32282,11 +32421,7 @@ async function pullBooksFromCloud() {
       });
     }
   } catch (_) {}
-  const { data: coa } = await cloud.client.from('books_coa_extra').select('*').eq('organization_id', organizationId);
-  (coa || []).forEach(row => {
-    if (db.coaExtra.some(a => a.id === row.code)) return;
-    db.coaExtra.push({ id: row.code, name: row.name, type: row.account_type || 'asset' });
-  });
+  // Prefer full settings pull first (includes coa_extra + overrides + control pins)
   try {
     await pullCoaSettingsFromCloud(organizationId);
   } catch (e) {
@@ -32294,6 +32429,21 @@ async function pullBooksFromCloud() {
       console.warn('coa settings pull', e.message || e);
     }
   }
+  // Legacy books_coa_extra: only add missing codes; never overwrite richer local/settings rows
+  try {
+    const { data: coa } = await cloud.client.from('books_coa_extra').select('*').eq('organization_id', organizationId);
+    (coa || []).forEach(row => {
+      if (!row || !row.code) return;
+      if (!Array.isArray(db.coaExtra)) db.coaExtra = [];
+      const existing = db.coaExtra.find(a => String(a.id) === String(row.code));
+      if (existing) {
+        if (!existing.name && row.name) existing.name = row.name;
+        if (!existing.type && row.account_type) existing.type = row.account_type;
+        return;
+      }
+      db.coaExtra.push({ id: row.code, name: row.name, type: row.account_type || 'asset' });
+    });
+  } catch (_) {}
   const { data: rjs } = await cloud.client.from('books_recurring_journals').select('*').eq('organization_id', organizationId);
   (rjs || []).forEach(row => {
     if (row.local_id && db.recurringJournals.some(s => s.id === row.local_id)) return;
