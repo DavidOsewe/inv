@@ -23409,16 +23409,52 @@ function defaultFsMeta(type) {
   return { statement: 'bs', fsLine: 'other_current_assets', cfSection: 'operating' };
 }
 
+function applyCoaOverridesAndExtras(map) {
+  const ov = db.coaOverrides || {};
+  // 1) System renames / FS maps live in coaOverrides
+  map.forEach((a, id) => {
+    const o = ov[id] || ov[String(id)];
+    if (!o) return;
+    if (o.name) a.name = o.name;
+    if (o.type) a.type = o.type;
+    if (o.statement) a.statement = o.statement;
+    if (o.fsLine) a.fsLine = o.fsLine;
+    if (o.cfSection) a.cfSection = o.cfSection;
+    if (o.hidden) a.hidden = true;
+  });
+  // 2) Custom accounts (coaExtra) always win over any stale override for the same code
+  (db.coaExtra || []).forEach(raw => {
+    if (!raw || raw.id == null) return;
+    const id = String(raw.id);
+    const cur = map.get(id);
+    if (!cur || cur.system) return;
+    if (raw.name) cur.name = raw.name;
+    if (raw.type) cur.type = raw.type;
+    if (raw.statement) cur.statement = raw.statement;
+    if (raw.fsLine) cur.fsLine = raw.fsLine;
+    if (raw.cfSection) cur.cfSection = raw.cfSection;
+    if (raw.hidden) cur.hidden = true;
+  });
+  map.forEach(a => {
+    if (!a.statement || !a.fsLine) {
+      const d = defaultFsMeta(a.type);
+      a.statement = a.statement || d.statement;
+      a.fsLine = a.fsLine || d.fsLine;
+      a.cfSection = a.cfSection || d.cfSection;
+    }
+  });
+}
+
 function getCoa() {
   ensureBooksDb();
   const map = new Map();
-  COA.forEach(a => map.set(a.id, { ...a, system: true }));
+  COA.forEach(a => map.set(String(a.id), { ...a, id: String(a.id), system: true }));
   (db.coaExtra || []).forEach(a => {
-    if (a && a.id) {
+    if (a && a.id != null) {
       const d = defaultFsMeta(a.type);
       map.set(String(a.id), {
         id: String(a.id),
-        name: a.name || a.id,
+        name: a.name || String(a.id),
         type: a.type || 'asset',
         statement: a.statement || d.statement,
         fsLine: a.fsLine || d.fsLine,
@@ -23427,22 +23463,7 @@ function getCoa() {
       });
     }
   });
-  const ov = db.coaOverrides || {};
-  map.forEach((a, id) => {
-    if (ov[id] && ov[id].name) a.name = ov[id].name;
-    // System accounts: name, type, statement, fsLine, cfSection all overridable
-    if (ov[id] && ov[id].type) a.type = ov[id].type;
-    if (ov[id] && ov[id].statement) a.statement = ov[id].statement;
-    if (ov[id] && ov[id].fsLine) a.fsLine = ov[id].fsLine;
-    if (ov[id] && ov[id].cfSection) a.cfSection = ov[id].cfSection;
-    if (ov[id] && ov[id].hidden) a.hidden = true;
-    if (!a.statement || !a.fsLine) {
-      const d = defaultFsMeta(a.type);
-      a.statement = a.statement || d.statement;
-      a.fsLine = a.fsLine || d.fsLine;
-      a.cfSection = a.cfSection || d.cfSection;
-    }
-  });
+  applyCoaOverridesAndExtras(map);
   return Array.from(map.values())
     .filter(a => !a.hidden)
     .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
@@ -23452,13 +23473,13 @@ function getCoa() {
 function getCoaAll() {
   ensureBooksDb();
   const map = new Map();
-  COA.forEach(a => map.set(a.id, { ...a, system: true }));
+  COA.forEach(a => map.set(String(a.id), { ...a, id: String(a.id), system: true }));
   (db.coaExtra || []).forEach(a => {
-    if (a && a.id) {
+    if (a && a.id != null) {
       const d = defaultFsMeta(a.type);
       map.set(String(a.id), {
         id: String(a.id),
-        name: a.name || a.id,
+        name: a.name || String(a.id),
         type: a.type || 'asset',
         statement: a.statement || d.statement,
         fsLine: a.fsLine || d.fsLine,
@@ -23467,21 +23488,7 @@ function getCoaAll() {
       });
     }
   });
-  const ov = db.coaOverrides || {};
-  map.forEach((a, id) => {
-    if (ov[id] && ov[id].name) a.name = ov[id].name;
-    if (ov[id] && ov[id].type) a.type = ov[id].type;
-    if (ov[id] && ov[id].statement) a.statement = ov[id].statement;
-    if (ov[id] && ov[id].fsLine) a.fsLine = ov[id].fsLine;
-    if (ov[id] && ov[id].cfSection) a.cfSection = ov[id].cfSection;
-    if (ov[id] && ov[id].hidden) a.hidden = true;
-    if (!a.statement || !a.fsLine) {
-      const d = defaultFsMeta(a.type);
-      a.statement = a.statement || d.statement;
-      a.fsLine = a.fsLine || d.fsLine;
-      a.cfSection = a.cfSection || d.cfSection;
-    }
-  });
+  applyCoaOverridesAndExtras(map);
   return Array.from(map.values()).sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
 }
 
@@ -29125,22 +29132,46 @@ function renderBooksCoa() {
   const persistMeta = (id, patch) => {
     ensureBooksDb();
     if (!db.coaOverrides) db.coaOverrides = {};
-    const extra = (db.coaExtra || []).find(x => x.id === id);
+    if (!Array.isArray(db.coaExtra)) db.coaExtra = [];
+    id = String(id || '');
+    if (!id) return;
+    const isSystem = (typeof COA !== 'undefined') && COA.some(a => String(a.id) === id);
+    let extra = db.coaExtra.find(x => x && String(x.id) === id);
     const before = extra
-      ? { name: extra.name, type: extra.type, statement: extra.statement, fsLine: extra.fsLine }
+      ? { name: extra.name, type: extra.type, statement: extra.statement, fsLine: extra.fsLine, cfSection: extra.cfSection }
       : { ...(db.coaOverrides[id] || {}) };
-    if (extra) Object.assign(extra, patch);
-    else db.coaOverrides[id] = { ...(db.coaOverrides[id] || {}), ...patch };
+
+    if (isSystem) {
+      // System accounts: only overrides (base COA is immutable)
+      db.coaOverrides[id] = { ...(db.coaOverrides[id] || {}), ...patch };
+      if (patch.hidden === false) delete db.coaOverrides[id].hidden;
+    } else {
+      // Custom accounts: write onto coaExtra and clear stale override so FS line can't flip back
+      if (!extra) {
+        extra = { id, name: id, type: 'asset' };
+        db.coaExtra.push(extra);
+      }
+      extra.id = id;
+      Object.assign(extra, patch);
+      if (patch.hidden === false) delete extra.hidden;
+      if (db.coaOverrides[id]) {
+        // Drop override keys we just set on extra so getCoa can't prefer old override
+        const o = db.coaOverrides[id];
+        Object.keys(patch).forEach(k => { delete o[k]; });
+        if (!Object.keys(o).length) delete db.coaOverrides[id];
+      }
+    }
     try { persistDb(); } catch (_) {}
     try { save(); } catch (_) {}
     try {
       appendBooksAudit('coa.override', 'coa', id,
         'COA ' + id + (patch.name ? (' → ' + patch.name) : (' · ' + Object.keys(patch).join(','))),
         before,
-        { ...(extra || db.coaOverrides[id]) }
+        isSystem ? { ...(db.coaOverrides[id] || {}) } : { ...(extra || {}) }
       );
     } catch (_) {}
     try { queueBooksCloudSync(); } catch (_) {}
+    try { pushCoaSettingsToCloud().catch(() => {}); } catch (_) {}
   };
 
   document.getElementById('coaShowHidden')?.addEventListener('change', (e) => {
@@ -29176,8 +29207,16 @@ function renderBooksCoa() {
   });
   el.querySelectorAll('[data-coa-fs]').forEach(sel => {
     sel.addEventListener('change', () => {
-      persistMeta(sel.getAttribute('data-coa-fs'), { fsLine: sel.value });
+      const id = sel.getAttribute('data-coa-fs');
+      const fsLine = sel.value;
+      persistMeta(id, { fsLine });
+      // Keep statement consistent with chosen FS line when possible
+      try {
+        const meta = FS_LINES[fsLine];
+        if (meta && meta.statement) persistMeta(id, { statement: meta.statement });
+      } catch (_) {}
       toast('FS line saved');
+      try { renderBooksCoa(); } catch (_) {}
     });
   });
   el.querySelectorAll('[data-coa-cf]').forEach(sel => {
@@ -31937,19 +31976,23 @@ async function pushCoaSettingsToCloud(organizationId) {
     invoiceFeed: db.booksSettings ? db.booksSettings.invoiceFeed !== false : true,
     showHiddenCoa: !!(db.booksSettings && db.booksSettings.showHiddenCoa)
   };
-  const payload = {
+  const base = {
     organization_id: organizationId,
     coa_overrides: overrides,
     control_accounts: controls,
     books_settings: settingsSlice,
-    // Full custom chart snapshot so login/pull cannot drop names, types, fs lines
-    coa_extra: Array.isArray(db.coaExtra) ? db.coaExtra : [],
     updated_at: new Date().toISOString(),
     updated_by: cloud.user.id || null
   };
-  const { error } = await cloud.client.from('books_coa_settings').upsert(payload, {
-    onConflict: 'organization_id'
-  });
+  // Prefer full snapshot; if column missing, still push overrides so FS lines survive
+  let { error } = await cloud.client.from('books_coa_settings').upsert({
+    ...base,
+    coa_extra: Array.isArray(db.coaExtra) ? db.coaExtra : []
+  }, { onConflict: 'organization_id' });
+  if (error && /coa_extra|schema cache|column/i.test(error.message || '')) {
+    const retry = await cloud.client.from('books_coa_settings').upsert(base, { onConflict: 'organization_id' });
+    error = retry.error;
+  }
   if (error) throw error;
 }
 
