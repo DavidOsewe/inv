@@ -32781,7 +32781,12 @@ function proposeBankJournalFromRule(tx, rule) {
   rule = rule || {};
   const amt = Math.abs(Number(tx.amount) || 0);
   const isIn = Number(tx.amount) > 0;
-  const memo = (rule.memo || tx.description || (isIn ? 'Bank deposit' : 'Bank charge')).slice(0, 120);
+  // Memo = this bank line's description (audit-truth). Rule only fills the gap
+  // when the statement line has no text — never freeze the rule's initial memo
+  // onto every future match.
+  const txDesc = String(tx.description || '').trim();
+  const ruleMemo = String(rule.memo || '').trim();
+  const memo = (txDesc || ruleMemo || (isIn ? 'Bank deposit' : 'Bank charge')).slice(0, 200);
   // Always use the rule's post-to account when present
   const coaId = (rule.coaId && String(rule.coaId).trim()) || (isIn ? '4100' : '5700');
   const bankId = tx.accountId || rule.accountId || '1000';
@@ -32805,7 +32810,7 @@ function proposeBankJournalFromRule(tx, rule) {
     action: rule.action || 'add',
     date: dateStr,
     memo,
-    description: tx.description || '',
+    description: txDesc,
     amount: Number(tx.amount) || 0,
     bankId,
     coaId,
