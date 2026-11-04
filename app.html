@@ -32318,10 +32318,10 @@ async function pushBooksToCloud() {
       action: r.action || 'add',
       coa_id: r.coaId || null,
       memo: r.memo || null,
-      auto_apply: !!r.autoApply,
+      auto_apply: r.autoApply !== false,
       active: r.active !== false,
       sort_order: Number(r.order) || 10,
-      updated_at: new Date().toISOString()
+      updated_at: r.updatedAt || new Date().toISOString()
     };
     try {
       const { data: existing } = await cloud.client.from('books_bank_rules')
@@ -32531,14 +32531,16 @@ async function pullBooksFromCloud() {
     }
   } catch (e) { console.warn('pull audit', e.message || e); }
 
-  // Bank rules — merge by local_id (cloud fills gaps; local keeps edits already present)
+  // Bank rules — local edits win; cloud only adds missing rules or wins if clearly newer
   try {
     const { data: rules, error: rErr } = await cloud.client.from('books_bank_rules').select('*').eq('organization_id', organizationId);
     if (!rErr && rules) {
       ensureBooksDb();
+      if (!Array.isArray(db.bankRules)) db.bankRules = [];
       rules.forEach(row => {
-        const lid = row.local_id || row.id;
-        const existing = (db.bankRules || []).find(r => r.id === lid);
+        const lid = String(row.local_id || row.id || '');
+        if (!lid) return;
+        const existing = db.bankRules.find(r => r && String(r.id) === lid);
         const mapped = {
           id: lid,
           name: row.name || '',
@@ -32549,12 +32551,21 @@ async function pullBooksFromCloud() {
           action: row.action || 'add',
           coaId: row.coa_id || '5700',
           memo: row.memo || '',
-          autoApply: !!row.auto_apply,
+          autoApply: row.auto_apply !== false && row.auto_apply !== 0,
           active: row.active !== false,
-          order: Number(row.sort_order) || 10
+          order: Number(row.sort_order) || 10,
+          updatedAt: row.updated_at || null
         };
-        if (existing) Object.assign(existing, mapped);
-        else db.bankRules.push(mapped);
+        if (!existing) {
+          db.bankRules.push(mapped);
+          return;
+        }
+        // Never clobber a fresher local edit (was wiping Save rule on every sync)
+        const localAt = String(existing.updatedAt || '');
+        const cloudAt = String(row.updated_at || '');
+        if (localAt && cloudAt && localAt >= cloudAt) return;
+        if (localAt && !cloudAt) return;
+        Object.assign(existing, mapped);
       });
       db.bankRules.sort((a, b) => (a.order || 0) - (b.order || 0));
     }
@@ -33793,7 +33804,12 @@ function openBankRuleModal(editId, prefills) {
     return;
   }
   try {
-    const rule = editId ? (db.bankRules || []).find(r => r.id === editId) : null;
+    const eid = editId ? String(editId) : '';
+    const rule = eid ? (db.bankRules || []).find(r => r && String(r.id) === eid) : null;
+    if (eid && !rule) {
+      toast('Rule not found — it may have been deleted');
+      return;
+    }
     const selBank = rule?.accountId || prefills?.accountId || '*';
     const selCoa = rule?.coaId || prefills?.coaId || '5700';
 
@@ -33803,17 +33819,19 @@ function openBankRuleModal(editId, prefills) {
     const coaSel = document.getElementById('brCoa');
     if (coaSel) coaSel.innerHTML = bankRuleCoaOptionsHtml(selCoa);
 
-    document.getElementById('bankRuleEditId').value = editId || '';
+    document.getElementById('bankRuleEditId').value = eid;
     document.getElementById('bankRuleModalTitle').textContent = rule ? 'Edit bank rule' : 'New bank rule';
     document.getElementById('brName').value = rule?.name || prefills?.name || '';
     document.getElementById('brDirection').value = rule?.direction || prefills?.direction || 'out';
-    if (accSel) accSel.value = selBank;
+    if (accSel) {
+      try { accSel.value = selBank; } catch (_) {}
+    }
     document.getElementById('brContains').value = rule?.contains || prefills?.contains || '';
     document.getElementById('brAmount').value = rule?.amount != null && rule.amount !== '' ? rule.amount : (prefills?.amount || '');
     document.getElementById('brAction').value = rule?.action || 'add';
     if (coaSel) {
-      // If default 5700 missing, pick first real option
-      if (![...coaSel.options].some(o => o.value === selCoa && o.value)) {
+      const has = [...coaSel.options].some(o => String(o.value) === String(selCoa) && o.value);
+      if (!has) {
         const first = [...coaSel.options].find(o => o.value);
         if (first) coaSel.value = first.value;
       } else {
@@ -33829,6 +33847,15 @@ function openBankRuleModal(editId, prefills) {
       m.style.display = 'grid';
     }
     try { initSearchableSelects(m); } catch (_) {}
+    // Re-sync searchable labels after options + values set
+    try {
+      [accSel, coaSel].forEach(sel => {
+        if (sel && sel._ssInput) {
+          const opt = sel.options[sel.selectedIndex];
+          sel._ssInput.value = opt && !opt.disabled ? String(opt.textContent || '').trim() : '';
+        }
+      });
+    } catch (_) {}
   } catch (err) {
     console.warn('openBankRuleModal', err);
     toast('Could not open rule form — ' + (err.message || 'error'));
@@ -33847,10 +33874,14 @@ function closeBankRuleModal(e) {
 }
 function saveBankRule() {
   ensureBooksDb();
+  if (!Array.isArray(db.bankRules)) db.bankRules = [];
   const name = (document.getElementById('brName')?.value || '').trim();
   const contains = (document.getElementById('brContains')?.value || '').trim();
   if (!name || !contains) { toast('Name and description contains are required'); return; }
-  const editId = document.getElementById('bankRuleEditId')?.value;
+  const editId = String(document.getElementById('bankRuleEditId')?.value || '').trim();
+  const existing = editId
+    ? db.bankRules.find(x => x && String(x.id) === editId)
+    : null;
   const payload = {
     name,
     direction: document.getElementById('brDirection')?.value || 'out',
@@ -33861,11 +33892,23 @@ function saveBankRule() {
     coaId: document.getElementById('brCoa')?.value || '5700',
     memo: (document.getElementById('brMemo')?.value || '').trim(),
     autoApply: document.getElementById('brAuto') ? !!document.getElementById('brAuto').checked : true,
-    active: true
+    // Keep pause state on edit — do not force active:true
+    active: existing ? (existing.active !== false) : true,
+    updatedAt: new Date().toISOString()
   };
-  if (editId) {
-    const r = db.bankRules.find(x => x.id === editId);
-    if (r) Object.assign(r, payload);
+  if (!payload.coaId && payload.action === 'add') {
+    toast('Choose a Post to account');
+    return;
+  }
+  if (editId && existing) {
+    Object.assign(existing, payload);
+  } else if (editId && !existing) {
+    // Edit id present but rule missing (sync race) — recreate with same id
+    db.bankRules.push({
+      id: editId,
+      order: (db.bankRules.length + 1) * 10,
+      ...payload
+    });
   } else {
     db.bankRules.push({
       id: crypto.randomUUID(),
@@ -33873,21 +33916,21 @@ function saveBankRule() {
       ...payload
     });
   }
-  // keep ordered
   db.bankRules.sort((a, b) => (a.order || 0) - (b.order || 0));
+  try { persistDb(); } catch (_) {}
   save();
-  try { queueBooksCloudSync(); } catch {}
+  try { queueBooksCloudSync(); } catch (_) {}
   closeBankRuleModal();
   try {
     appendBooksAudit(editId ? 'bank_rule.updated' : 'bank_rule.created', 'bank_rule', editId || payload.contains,
       (editId ? 'Updated' : 'Created') + ' bank rule · ' + (payload.name || payload.contains || ''),
       null, payload, {});
-  } catch {}
-  toast('Rule saved · synced to your account');
+  } catch (_) {}
+  toast(editId ? 'Rule updated' : 'Rule saved');
   renderBankRules();
-  applyBankRulesToPending();
-  renderBankTransactions();
-  track('bank_rule_saved', { auto: payload.autoApply });
+  try { applyBankRulesToPending(); } catch (_) {}
+  try { renderBankTransactions(); } catch (_) {}
+  try { track('bank_rule_saved', { auto: payload.autoApply, edit: !!editId }); } catch (_) {}
 }
 
 function renderBankRules() {
