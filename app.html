@@ -5567,7 +5567,7 @@ body:has(.modalback.show) .notif-panel {
       <div id="booksPanelBankRules" hidden>
         <div class="insight">
           <h3>Bank rules</h3>
-          <p class="section-sub">Teach Books how your bank describes MTN, rent, Paystack fees. First matching rule wins. Use <b>Edit</b> on a rule to change account or match text.</p>
+          <p class="section-sub">Match text can be short (e.g. just <code>mmf</code>). Longer phrases beat shorter ones when one contains the other (“salon income mmf” beats “income”). Unrelated tags use list order — put specific rules <b>above</b> broad ones. <b>Edit</b> to change account or match text.</p>
           <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center">
             <button type="button" class="button primary" id="btnAddBankRule">New rule</button>
             <span class="section-sub" style="margin:0">Path: Books → Banking → <b>Rules</b></span>
@@ -32788,19 +32788,19 @@ function normalizeBankDesc(s) {
 
 function findMatchingBankRule(tx) {
   ensureBooksDb();
-  const rules = [...(db.bankRules || [])]
-    .filter(r => r.active !== false)
-    .sort((a, b) => (a.order || 0) - (b.order || 0));
+  const rules = (db.bankRules || []).filter(r => r && r.active !== false);
   const desc = normalizeBankDesc(tx.description);
   const descRaw = String(tx.description || '').toLowerCase();
   const amt = Math.abs(Number(tx.amount) || 0);
   const isIn = Number(tx.amount) > 0;
+  const hits = [];
+
   for (const rule of rules) {
     const dir = String(rule.direction || 'either').toLowerCase();
     if (dir === 'in' && !isIn) continue;
     if (dir === 'out' && isIn) continue;
     // 'either' / blank → match both directions
-    if (rule.accountId && rule.accountId !== '*' && rule.accountId !== tx.accountId) continue;
+    if (rule.accountId && rule.accountId !== '*' && String(rule.accountId) !== String(tx.accountId)) continue;
     const needleRaw = String(rule.contains || '').trim().toLowerCase();
     const needle = normalizeBankDesc(rule.contains);
     if (!needle && !needleRaw) continue;
@@ -32810,9 +32810,18 @@ function findMatchingBankRule(tx) {
     if (rule.amount != null && rule.amount !== '' && Number(rule.amount) > 0) {
       if (Math.abs(amt - Number(rule.amount)) > 0.05) continue;
     }
-    return rule;
+    // Specificity = longest matching phrase (prefer "salon income mmf" over "income")
+    const specificity = Math.max(needle.length, needleRaw.length);
+    hits.push({ rule, specificity, order: Number(rule.order) || 0 });
   }
-  return null;
+
+  if (!hits.length) return null;
+  // Most specific match wins; if tied, lower order (↑ in list) wins
+  hits.sort((a, b) => {
+    if (b.specificity !== a.specificity) return b.specificity - a.specificity;
+    return a.order - b.order;
+  });
+  return hits[0].rule;
 }
 
 /**
