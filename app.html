@@ -6931,15 +6931,16 @@ body:has(.modalback.show) .notif-panel {
     <div class="two">
       <div class="field"><label>Action</label>
         <select id="brAction">
-          <option value="add">Add to books (expense / income)</option>
+          <option value="add">Add to books (expense / income / transfer)</option>
           <option value="exclude">Exclude</option>
         </select>
       </div>
       <div class="field"><label>Post to account</label>
         <select id="brCoa"></select>
+        <div class="client-meta" style="margin-top:4px">Includes cash &amp; bank — use for transfers between accounts</div>
       </div>
     </div>
-    <div class="field"><label>Memo (optional)</label><input id="brMemo" placeholder="Overrides bank description when posting"></div>
+    <div class="field"><label>Memo (optional)</label><input id="brMemo" placeholder="Only used if the bank line has no description"></div>
     <div class="field" style="display:flex;align-items:center;gap:8px;margin-top:8px">
       <input type="checkbox" id="brAuto" style="width:auto">
       <label for="brAuto" style="margin:0">Apply automatically on every CSV import (recommended)</label>
@@ -32831,8 +32832,12 @@ function proposeBankJournalFromRule(tx, rule) {
   const ruleMemo = String(rule.memo || '').trim();
   const memo = (txDesc || ruleMemo || (isIn ? 'Bank deposit' : 'Bank charge')).slice(0, 200);
   // Always use the rule's post-to account when present
-  const coaId = (rule.coaId && String(rule.coaId).trim()) || (isIn ? '4100' : '5700');
+  let coaId = (rule.coaId && String(rule.coaId).trim()) || (isIn ? '4100' : '5700');
   const bankId = tx.accountId || rule.accountId || '1000';
+  // Same account on both legs is invalid — fall back to a P&L default
+  if (String(coaId) === String(bankId)) {
+    coaId = isIn ? '4100' : '5700';
+  }
   let lines;
   if (isIn) {
     lines = [
@@ -32913,15 +32918,18 @@ function renderBankRulesReviewList() {
   const hint = document.getElementById('bankRulesReviewHint');
   if (!list) return;
 
-  // Full COA for counterparty (same scope as bank rule "Post to account")
+  // Full COA for counterparty — includes cash/bank for transfers (same as rule modal)
   function coaOptionsForReview(selectedId) {
     let rows = [];
     try {
       const order = { income: 1, expense: 2, liability: 3, equity: 4, asset: 5 };
       rows = (getCoa() || [])
-        .filter(a => a && a.id && !isCashEquivalentAccount(a))
+        .filter(a => a && a.id)
         .slice()
         .sort((a, b) => {
+          const aCash = (typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a)) ? 0 : 1;
+          const bCash = (typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(b)) ? 0 : 1;
+          if (aCash !== bCash) return aCash - bCash;
           const ta = order[a.type] || 9, tb = order[b.type] || 9;
           if (ta !== tb) return ta - tb;
           return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
@@ -32935,17 +32943,19 @@ function renderBankRulesReviewList() {
       ];
     }
     // Ensure rule target is present even if hidden/filtered
-    if (selectedId && !rows.some(a => a.id === selectedId)) {
+    if (selectedId && !rows.some(a => String(a.id) === String(selectedId))) {
       let hit = null;
-      try { hit = (typeof getCoaAll === 'function' ? getCoaAll() : getCoa()).find(a => a.id === selectedId); } catch (_) {}
+      try { hit = (typeof getCoaAll === 'function' ? getCoaAll() : getCoa()).find(a => String(a.id) === String(selectedId)); } catch (_) {}
       rows.unshift(hit || { id: selectedId, name: selectedId, type: 'expense' });
     }
     let html = '<option value="">— choose account —</option>';
-    let lastType = '';
+    let lastGroup = '';
     rows.forEach(a => {
-      if (a.type !== lastType) {
-        lastType = a.type;
-        html += '<option disabled value="">—— ' + String(a.type || 'other').toUpperCase() + ' ——</option>';
+      const isCash = typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a);
+      const group = isCash ? 'CASH & BANK (transfers)' : String(a.type || 'other').toUpperCase();
+      if (group !== lastGroup) {
+        lastGroup = group;
+        html += '<option disabled value="">—— ' + group + ' ——</option>';
       }
       const sel = a.id === selectedId ? ' selected' : '';
       html += '<option value="' + a.id + '"' + sel + '>' + a.id + ' · ' + String(a.name || '').replace(/</g, '') + '</option>';
@@ -33739,33 +33749,37 @@ function bankRuleAccountOptionsHtml(selected) {
     ).join('');
 }
 
-/** Full ledger for "Post to account" — income, expense, liability, equity, non-cash assets */
+/** Full ledger for "Post to account" — includes cash/bank for transfers between accounts */
 function bankRuleCoaOptionsHtml(selected) {
   const coa = getCoa();
   const order = { income: 1, expense: 2, liability: 3, equity: 4, asset: 5 };
+  // Include cash & cash equivalents (bank↔bank / cash movements). Exclude only the
+  // same bank line is handled at post time if bankId === coaId.
   const list = coa
-    .filter(a => !isCashEquivalentAccount(a)) // post the other side of the bank entry
     .slice()
     .sort((a, b) => {
+      const aCash = (typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a)) ? 0 : 1;
+      const bCash = (typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(b)) ? 0 : 1;
+      if (aCash !== bCash) return aCash - bCash; // cash/bank group first for transfers
       const ta = order[a.type] || 9, tb = order[b.type] || 9;
       if (ta !== tb) return ta - tb;
       return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
     });
-  // If everything was cash, fall back to full chart
   const rows = list.length ? list : coa;
-  // Ensure selected exists
-  if (selected && !rows.some(a => a.id === selected)) {
-    const hit = coa.find(a => a.id === selected);
+  if (selected && !rows.some(a => String(a.id) === String(selected))) {
+    const hit = coa.find(a => String(a.id) === String(selected));
     if (hit) rows.unshift(hit);
   }
   let html = '';
-  let lastType = '';
+  let lastGroup = '';
   rows.forEach(a => {
-    if (a.type !== lastType) {
-      lastType = a.type;
-      html += '<option disabled value="">—— ' + (a.type || 'other').toUpperCase() + ' ——</option>';
+    const isCash = typeof isCashEquivalentAccount === 'function' && isCashEquivalentAccount(a);
+    const group = isCash ? 'CASH & BANK (transfers)' : String(a.type || 'other').toUpperCase();
+    if (group !== lastGroup) {
+      lastGroup = group;
+      html += '<option disabled value="">—— ' + group + ' ——</option>';
     }
-    html += '<option value="' + a.id + '"' + (a.id === selected ? ' selected' : '') + '>' +
+    html += '<option value="' + a.id + '"' + (String(a.id) === String(selected) ? ' selected' : '') + '>' +
       a.id + ' · ' + a.name + '</option>';
   });
   return html;
