@@ -5567,8 +5567,11 @@ body:has(.modalback.show) .notif-panel {
       <div id="booksPanelBankRules" hidden>
         <div class="insight">
           <h3>Bank rules</h3>
-          <p class="section-sub">Teach Books how your bank describes MTN, rent, Paystack fees. First matching rule wins.</p>
-          <button type="button" class="button primary" id="btnAddBankRule" style="margin-bottom:12px">New rule</button>
+          <p class="section-sub">Teach Books how your bank describes MTN, rent, Paystack fees. First matching rule wins. Use <b>Edit</b> on a rule to change account or match text.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center">
+            <button type="button" class="button primary" id="btnAddBankRule">New rule</button>
+            <span class="section-sub" style="margin:0">Path: Books → Banking → <b>Rules</b></span>
+          </div>
           <div id="bankRulesList"></div>
         </div>
       </div>
@@ -25422,6 +25425,12 @@ function setBooksTab(tab) {
       if (typeof renderBooksReceivables === 'function') renderBooksReceivables();
     } catch (_) {}
   }
+  if (booksTab === 'bankrules') {
+    try { renderBankRules(); } catch (_) {}
+  }
+  if (booksTab === 'banktx') {
+    try { if (typeof renderBankTransactions === 'function') renderBankTransactions(); } catch (_) {}
+  }
 }
 
 function accountPeriodNet(accountId, act) {
@@ -33942,25 +33951,37 @@ function renderBankRules() {
     el.innerHTML = `<div class="empty" style="padding:16px">
       <h3>No bank rules yet</h3>
       <p>Example: description contains <code>MTN</code> → Utilities. Or use <b>Save as rule</b> after adding a bank line.</p>
+      <button type="button" class="button primary" id="btnAddBankRuleEmpty" style="margin-top:10px">New rule</button>
     </div>`;
+    try {
+      document.getElementById('btnAddBankRuleEmpty')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        openBankRuleModal();
+      });
+    } catch (_) {}
     return;
   }
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   el.innerHTML = rules.map((r, idx) => {
-    const coa = coaName(r.coaId || '');
-    return `<div style="padding:12px 0;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-      <div style="flex:1;min-width:200px">
-        <div style="font-weight:700;font-size:13px">${r.name || 'Rule'} ${r.active === false ? '<span class="mini">paused</span>' : ''} ${r.autoApply === false ? '<span class="badge">manual only</span>' : '<span class="badge">auto on import</span>'}</div>
-        <div style="font-size:12px;color:var(--muted)">
-          ${r.direction || 'out'} · contains “${r.contains || ''}”
-          ${r.amount != null && r.amount !== '' ? ' · amount ' + money(r.amount) : ''}
-          · ${r.action === 'exclude' ? 'exclude' : '→ ' + coa}
+    const coa = esc(coaName(r.coaId || ''));
+    const rid = esc(r.id);
+    return `<div class="bank-rule-row" data-br-row="${rid}" style="padding:14px 12px;margin-bottom:8px;border:1px solid var(--line);border-radius:12px;background:var(--panel);display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start">
+      <div style="flex:1;min-width:180px;cursor:pointer" data-br-edit="${rid}" title="Click to edit">
+        <div style="font-weight:700;font-size:14px">${esc(r.name || 'Rule')} ${r.active === false ? '<span class="mini">paused</span>' : ''} ${r.autoApply === false ? '<span class="badge">manual only</span>' : '<span class="badge">auto on import</span>'}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">
+          ${esc(r.direction || 'out')} · contains “${esc(r.contains || '')}”
+          ${r.amount != null && r.amount !== '' ? ' · amount ' + esc(money(r.amount)) : ''}
+          · ${r.action === 'exclude' ? 'exclude' : ('→ ' + coa)}
         </div>
+        <div style="font-size:11px;color:var(--blue);margin-top:6px">Tap name to edit</div>
       </div>
-      <button type="button" class="button small" data-br-up="${r.id}" ${idx === 0 ? 'disabled' : ''}>↑</button>
-      <button type="button" class="button small" data-br-down="${r.id}" ${idx === rules.length - 1 ? 'disabled' : ''}>↓</button>
-      <button type="button" class="button small" data-br-toggle="${r.id}">${r.active === false ? 'Resume' : 'Pause'}</button>
-      <button type="button" class="button small" data-br-edit="${r.id}">Edit</button>
-      <button type="button" class="button small danger" data-br-del="${r.id}">Delete</button>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+        <button type="button" class="button primary small" data-br-edit="${rid}" style="min-width:72px;min-height:40px">Edit</button>
+        <button type="button" class="button small" data-br-toggle="${rid}" style="min-height:40px">${r.active === false ? 'Resume' : 'Pause'}</button>
+        <button type="button" class="button small" data-br-up="${rid}" ${idx === 0 ? 'disabled' : ''} title="Move up" style="min-height:40px">↑</button>
+        <button type="button" class="button small" data-br-down="${rid}" ${idx === rules.length - 1 ? 'disabled' : ''} title="Move down" style="min-height:40px">↓</button>
+        <button type="button" class="button small danger" data-br-del="${rid}" style="min-height:40px">Delete</button>
+      </div>
     </div>`;
   }).join('');
 }
