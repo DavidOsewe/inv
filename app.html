@@ -1148,26 +1148,28 @@ input[type="radio"] {
 }
 .appr-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 
-/* Notification bell + panel */
+/* Notification bell — in-header on desktop (does not cover Create invoice / Share) */
 .notif-bell {
-  position: fixed;
-  top: 14px;
-  right: 16px;
-  z-index: 120;
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: 5;
   width: 44px;
   height: 44px;
+  min-width: 44px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--panel);
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 10%, transparent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--text) 8%, transparent);
   display: grid;
   place-items: center;
   cursor: pointer;
   padding: 0;
+  flex-shrink: 0;
 }
 .notif-bell:hover {
   transform: translateY(-1px);
-  box-shadow: 0 12px 28px color-mix(in srgb, var(--text) 12%, transparent);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--text) 12%, transparent);
 }
 .notif-bell-icon { font-size: 18px; line-height: 1; }
 .notif-bell .nav-badge {
@@ -1175,6 +1177,15 @@ input[type="radio"] {
   top: -2px;
   right: -2px;
   margin: 0;
+}
+.top .buttons,
+#headerActions {
+  position: relative;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 .notif-panel {
   position: fixed;
@@ -1244,8 +1255,21 @@ body:has(.modalback.show) .notif-panel {
 .notif-item-body { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.45; }
 .notif-item-meta { font-size: 11px; color: var(--muted); margin-top: 4px; opacity: 0.85; }
 @media (max-width: 640px) {
-  .notif-bell { top: auto; bottom: 72px; right: 14px; }
-  .notif-panel { top: auto; bottom: 124px; right: 12px; left: 12px; width: auto; }
+  /* Phone: float above bottom nav so it never covers header CTAs */
+  .notif-bell {
+    position: fixed;
+    top: auto;
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    right: 14px;
+    z-index: 90;
+  }
+  .notif-panel {
+    top: auto;
+    bottom: calc(124px + env(safe-area-inset-bottom, 0px));
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
 }
 .pulse-tooltip b {
   color: #fff;
@@ -3541,11 +3565,13 @@ body:has(.modalback.show) .notif-panel {
     padding: 16px 14px;
     padding-bottom: calc(88px + var(--safe-bottom, 0px));
   }
-  /* Keep notification bell clear of bottom nav */
+  /* Keep notification bell clear of bottom nav (mobile) */
   .notif-bell {
+    position: fixed;
     bottom: calc(76px + var(--safe-bottom, 0px));
     top: auto;
     right: 12px;
+    z-index: 90;
   }
   .notif-panel {
     bottom: calc(128px + var(--safe-bottom, 0px));
@@ -15512,7 +15538,10 @@ function ensureNotifUiShell() {
   btn.setAttribute('aria-label', 'Notifications');
   btn.setAttribute('aria-expanded', 'false');
   btn.innerHTML = '<span class="notif-bell-icon" aria-hidden="true">🔔</span><span class="nav-badge" id="notifBellBadge" hidden></span>';
-  document.body.appendChild(btn);
+  // Prefer header action row so the bell never covers + Create invoice / Share
+  const headerActions = document.getElementById('headerActions');
+  if (headerActions) headerActions.appendChild(btn);
+  else document.body.appendChild(btn);
 
   const panel = document.createElement('div');
   panel.id = 'notifPanel';
