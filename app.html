@@ -1072,16 +1072,38 @@ input:focus:not(:focus-visible) {
 .appr-badge.rejected { background: #fee2e2; color: #991b1b; }
 .appr-badge.posted { background: #dcfce7; color: #166534; }
 .appr-badge.other { background: var(--panel-2); color: var(--muted); }
+/* Never stretch native ticks — .field input { width:100% } was blowing them up */
+input[type="checkbox"],
+input[type="radio"] {
+  width: 18px !important;
+  height: 18px !important;
+  min-width: 18px !important;
+  min-height: 18px !important;
+  max-width: 18px !important;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: #2563eb;
+  vertical-align: middle;
+  box-sizing: border-box;
+}
+.field input[type="checkbox"],
+.field input[type="radio"] {
+  width: 18px !important;
+  max-width: 18px !important;
+}
+
 /* Profile → Approvals switches (clear outline, not a stretched bar) */
 .appr-switch-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-width: 420px;
+  max-width: 480px;
 }
-.appr-switch-row {
+.appr-switch-row,
+.tick-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   margin: 0;
   padding: 10px 12px;
@@ -1089,19 +1111,37 @@ input:focus:not(:focus-visible) {
   border-radius: 10px;
   background: var(--panel-2, #f8fafc);
   cursor: pointer;
+  max-width: 480px;
 }
-.appr-switch-row:hover { border-color: #93c5fd; background: #eff6ff; }
-.appr-switch-row input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  margin: 2px 0 0;
+.appr-switch-row:hover,
+.tick-row:hover { border-color: #93c5fd; background: #eff6ff; }
+.appr-switch-row input[type="checkbox"],
+.tick-row input[type="checkbox"] {
+  width: 18px !important;
+  height: 18px !important;
+  margin: 0;
   flex-shrink: 0;
   accent-color: #2563eb;
 }
-.appr-switch-label {
+.appr-switch-label,
+.tick-row > span {
   font-size: 13px;
   line-height: 1.35;
   color: var(--text, #111);
+  flex: 1;
+  min-width: 0;
+}
+/* Named approver ticks inside matrix levels */
+[data-mx-users-wrap] label {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  margin: 4px 0 !important;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+[data-mx-users-wrap] input[type="checkbox"] {
+  margin: 0 !important;
 }
 #approvalsTabBar [data-profile-appr-tab] {
   cursor: pointer;
@@ -2618,7 +2658,7 @@ body:has(.modalback.show) .notif-panel {
 }
 .feature-chip {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   padding: 12px 14px;
   border-radius: 12px;
@@ -2637,6 +2677,7 @@ body:has(.modalback.show) .notif-panel {
   font-size: 11px;
   font-weight: 800;
   flex-shrink: 0;
+  line-height: 1;
 }
 .feature-chip.on .chip-icon {
   background: var(--green-bg);
@@ -4088,10 +4129,11 @@ body:has(.modalback.show) .notif-panel {
   }
   input[type="checkbox"],
   input[type="radio"] {
-    width: 20px;
-    height: 20px;
-    min-width: 20px;
-    min-height: 20px;
+    width: 20px !important;
+    height: 20px !important;
+    min-width: 20px !important;
+    min-height: 20px !important;
+    max-width: 20px !important;
   }
   .table .button.small,
   .actions .button {
@@ -6043,11 +6085,11 @@ body:has(.modalback.show) .notif-panel {
               <b>Step A</b> — line manager (if Pyramid is on and Team has Reports to).<br>
               <b>Step B</b> — amount levels below. Last level posts the journal.
             </p>
-            <label style="display:flex;align-items:center;gap:10px;margin:0 0 8px;cursor:pointer">
+            <label class="tick-row" style="margin:0 0 8px">
               <input type="checkbox" data-p="expensePyramidLineManager" id="expensePyramidLineManager" checked>
               <span><b>Pyramid</b> — line manager first</span>
             </label>
-            <p class="section-sub" style="margin:0 0 12px 28px">
+            <p class="section-sub" style="margin:0 0 12px">
               Set each person’s manager under <b>Plan → Team → Reports to</b> (sidebar Plan, not Profile).
             </p>
             <div class="field" style="margin:0 0 10px">
@@ -6065,11 +6107,11 @@ body:has(.modalback.show) .notif-panel {
               Example: Level 1 min 0 · Manager · Level 2 min 50,000 · Owner.
               ₦30k stops after manager; ₦120k needs manager then owner (posts).
             </p>
-            <label style="display:flex;align-items:center;gap:10px;margin:12px 0 0;cursor:pointer">
+            <label class="tick-row" style="margin:12px 0 0">
               <input type="checkbox" data-p="expenseBlockSelfApprove" id="expenseBlockSelfApprove" checked>
               <span>Block self-approve</span>
             </label>
-            <label style="display:flex;align-items:center;gap:10px;margin:8px 0 0;cursor:pointer">
+            <label class="tick-row" style="margin:8px 0 0">
               <input type="checkbox" data-p="expenseRequireReceipt" id="expenseRequireReceipt" checked>
               <span>Require receipt when approval is on</span>
             </label>
@@ -6085,11 +6127,11 @@ body:has(.modalback.show) .notif-panel {
               <label>Auto-post max amount (0 = off)</label>
               <input type="number" min="0" step="1" id="expenseAutoPostMax" data-p="expenseAutoPostMax" placeholder="e.g. 25000">
             </div>
-            <label style="display:flex;align-items:center;gap:10px;margin:6px 0;cursor:pointer">
+            <label class="tick-row" style="margin:6px 0">
               <input type="checkbox" data-p="expenseAutoPostRequireReceipt" id="expenseAutoPostRequireReceipt" checked>
               <span>Only with a receipt</span>
             </label>
-            <label style="display:flex;align-items:center;gap:10px;margin:6px 0;cursor:pointer">
+            <label class="tick-row" style="margin:6px 0">
               <input type="checkbox" data-p="expenseAutoPostKnownSupplier" id="expenseAutoPostKnownSupplier" checked>
               <span>Only known suppliers</span>
             </label>
@@ -13524,10 +13566,10 @@ function renderExpenseMatrixEditor() {
           const checked = (l.approver_user_ids || []).some(x => String(x) === id);
           const label = String(m.name || m.email || id).replace(/</g, '');
           const roleBit = m.role ? (' · ' + m.role) : '';
-          return '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:2px 0;cursor:pointer">' +
+          return '<label class="tick-row" style="max-width:100%;padding:8px 10px;font-size:12px">' +
             '<input type="checkbox" data-mx-user="' + id + '" data-mx-email="' +
             String(m.email || '').replace(/"/g, '') + '"' + (checked ? ' checked' : '') + '>' +
-            label + roleBit + '</label>';
+            '<span>' + label + roleBit + '</span></label>';
         }).join('')
       : '<p class="section-sub" style="margin:4px 0">Open Profile → Team (signed in) to load members, or save after invite.</p>';
     return '<div data-matrix-row="' + i + '" style="padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel)">' +
@@ -32810,16 +32852,31 @@ function findMatchingBankRule(tx) {
     if (rule.amount != null && rule.amount !== '' && Number(rule.amount) > 0) {
       if (Math.abs(amt - Number(rule.amount)) > 0.05) continue;
     }
-    // Specificity = longest matching phrase (prefer "salon income mmf" over "income")
-    const specificity = Math.max(needle.length, needleRaw.length);
-    hits.push({ rule, specificity, order: Number(rule.order) || 0 });
+    const primary = needle || needleRaw;
+    hits.push({
+      rule,
+      needle: primary,
+      specificity: primary.length,
+      order: Number(rule.order) || 0
+    });
   }
 
   if (!hits.length) return null;
-  // Most specific match wins; if tied, lower order (↑ in list) wins
+
+  /*
+   * Ranking:
+   * 1) If rule A extends rule B (e.g. "salon income mmf" vs "income"), prefer longer.
+   * 2) Independent tags (e.g. "mmf" vs "income") → list order (↑ higher wins).
+   * 3) Same length → list order.
+   * So you can use just "mmf": put that rule above the broad "income" catch-all.
+   */
   hits.sort((a, b) => {
-    if (b.specificity !== a.specificity) return b.specificity - a.specificity;
-    return a.order - b.order;
+    const aExtendsB = a.needle.length > b.needle.length && a.needle.includes(b.needle);
+    const bExtendsA = b.needle.length > a.needle.length && b.needle.includes(a.needle);
+    if (aExtendsB && !bExtendsA) return -1;
+    if (bExtendsA && !aExtendsB) return 1;
+    if (a.order !== b.order) return a.order - b.order;
+    return b.specificity - a.specificity;
   });
   return hits[0].rule;
 }
@@ -37387,7 +37444,7 @@ document.getElementById('logoFile')?.addEventListener('change', async (e) => {
     $('#accountName').textContent = name;
     $('#accountEmail').textContent = email;
     $('#accountMenuName').textContent = name;
-    $('#accountMenuEmail').textContent = signedIn ? email : 'Not signed in — use magic link';
+    $('#accountMenuEmail').textContent = signedIn ? email : 'Not signed in — email code or password';
     if (lineLogout) lineLogout.style.display = signedIn ? 'block' : 'none';
     if (signInBtn) signInBtn.style.display = signedIn ? 'none' : 'block';
     const manageBtn = document.getElementById('accountManageAppsBtn');
