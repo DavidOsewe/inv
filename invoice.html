@@ -235,12 +235,25 @@ async function loadSupabase() {
 
 /** Load public invoice: RPC first, then direct table fallback if RPC is missing. */
 async function fetchPublicInvoice(token) {
+  token = String(token || '').trim();
+  if (!token) return null;
   const client = await loadSupabase();
-  // 1) Preferred: security-definer RPC
+  // 1) Preferred: security-definer RPC (try both arg names used in older migrations)
   try {
-    const { data, error } = await client.rpc('get_public_invoice', { p_token: token });
-    if (!error && data) return data;
-    if (error) console.warn('get_public_invoice', error.message || error);
+    let res = await client.rpc('get_public_invoice', { p_token: token });
+    if (res.error && /argument|p_token|function/i.test(String(res.error.message || ''))) {
+      res = await client.rpc('get_public_invoice', { token: token });
+    }
+    if (!res.error && res.data) {
+      // Some RPC versions return a JSON string
+      const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+      if (data && (data.invoice || data.id)) {
+        if (data.invoice) return data;
+        // Flat invoice row → normalize
+        return { invoice: data, lines: data.lines || [], issuer: data.issuer || {}, client: data.client || {} };
+      }
+    }
+    if (res.error) console.warn('get_public_invoice', res.error.message || res.error);
   } catch (e) {
     console.warn('get_public_invoice threw', e);
   }

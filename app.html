@@ -10845,31 +10845,55 @@ function whatsappHref(phoneRaw, message) {
   return 'https://wa.me/?text=' + text;
 }
 
+/** Plain amount for WhatsApp/SMS — never NBSP (breaks some clients / Google paste). */
+function shareMoneyPlain(amount, currency) {
+  const code = String(currency || db?.profile?.reporting || 'NGN').toUpperCase();
+  const n = Number(amount);
+  const val = Number.isFinite(n) ? n : 0;
+  const zeroDec = ['JPY', 'NGN', 'KES', 'GHS', 'RWF', 'UGX', 'TZS', 'XOF', 'XAF', 'VND', 'KRW', 'IDR'];
+  const maxFrac = zeroDec.includes(code) ? 0 : 2;
+  const num = val.toLocaleString('en-US', {
+    maximumFractionDigits: maxFrac,
+    minimumFractionDigits: 0
+  }).replace(/\u00a0/g, ' ').replace(/\u202f/g, ' ');
+  return code + ' ' + num;
+}
+
+function publicInvoiceUrl(invoice) {
+  if (!invoice || !invoice.publicShareToken || invoice.publicShareEnabled === false) return '';
+  const origin = (window.location && window.location.origin) ? window.location.origin : 'https://invoicedey.com';
+  return origin.replace(/\/$/, '') + '/invoice.html?token=' + encodeURIComponent(invoice.publicShareToken);
+}
+
 function buildPaymentMessage(invoice, kind) {
   const c = client(invoice.client);
   const name = (c?.name || 'there').split(' ')[0];
   const biz = (db.profile.name || 'us').trim();
-  const bal = balanceDue(invoice);
-  const amt = dualAmountLine(invoice, bal);
+  // Prefer balance due; if 0 but invoice has a total, show total (avoids "NGN 0" on fresh shares)
+  let showAmt = balanceDue(invoice);
+  try {
+    const t = typeof total === 'function' ? total(invoice) : 0;
+    if (!(showAmt > 0) && t > 0) showAmt = t;
+  } catch (_) {}
+  const amt = shareMoneyPlain(showAmt, invoice.currency || db.profile.reporting);
   const due = invoice.due || '';
   const num = invoice.number || 'invoice';
-  let link = '';
-  if (invoice.publicShareToken && invoice.publicShareEnabled) {
-    link = (window.location.origin || '') + '/invoice.html?token=' + encodeURIComponent(invoice.publicShareToken);
-  }
+  // URL alone on its own line so WhatsApp / iMessage linkify correctly
+  const link = publicInvoiceUrl(invoice);
+  const safe = (s) => String(s || '').replace(/\u00a0/g, ' ').replace(/\u202f/g, ' ');
+
   if (kind === 'overdue') {
-    let msg = 'Hi ' + name + ', hope you’re well. This is a gentle reminder that ' + num + ' from ' + biz +
+    let msg = 'Hi ' + name + ', hope you are well. Gentle reminder that ' + num + ' from ' + biz +
       ' for ' + amt + ' was due on ' + due + '.';
-    if (link) msg += ' You can view it here: ' + link;
-    msg += ' Please let me know if you’ve already paid or if you need the payment details again. Thank you.';
-    return msg;
+    if (link) msg += '\n\nView invoice:\n' + link;
+    msg += '\n\nPlease let me know if you have already paid or need payment details. Thank you.';
+    return safe(msg);
   }
-  // share / send
   let msg = 'Hi ' + name + ', please find invoice ' + num + ' from ' + biz + ' for ' + amt + '.';
   if (due) msg += ' Due ' + due + '.';
-  if (link) msg += ' View / download: ' + link;
-  msg += ' Thank you.';
-  return msg;
+  if (link) msg += '\n\nView / download:\n' + link;
+  msg += '\n\nThank you.';
+  return safe(msg);
 }
 
 async function remindInvoice(invoiceId, channel) {
@@ -15530,8 +15554,14 @@ function isNotifPanelOpen() {
 }
 
 function ensureNotifUiShell() {
-  if (document.getElementById('notifBell')) return;
-  const btn = document.createElement('button');
+  const headerActions = document.getElementById('headerActions');
+  let btn = document.getElementById('notifBell');
+  if (btn) {
+    // Re-home a leftover fixed body bell into the header actions row
+    if (headerActions && btn.parentElement !== headerActions) headerActions.appendChild(btn);
+    return;
+  }
+  btn = document.createElement('button');
   btn.type = 'button';
   btn.id = 'notifBell';
   btn.className = 'notif-bell';
@@ -15539,7 +15569,6 @@ function ensureNotifUiShell() {
   btn.setAttribute('aria-expanded', 'false');
   btn.innerHTML = '<span class="notif-bell-icon" aria-hidden="true">🔔</span><span class="nav-badge" id="notifBellBadge" hidden></span>';
   // Prefer header action row so the bell never covers + Create invoice / Share
-  const headerActions = document.getElementById('headerActions');
   if (headerActions) headerActions.appendChild(btn);
   else document.body.appendChild(btn);
 
