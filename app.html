@@ -8585,12 +8585,41 @@ async function shareInvoice() {
     refreshedInvoice.publicShareToken = token;
     refreshedInvoice.publicShareEnabled = true;
     save();
-    const url = window.location.origin + '/invoice.html?token=' + encodeURIComponent(token);
-    try { await navigator.clipboard.writeText(url); } catch {}
+    const url = publicInvoiceUrl(refreshedInvoice) ||
+      ((window.location.origin || '') + '/invoice.html?token=' + encodeURIComponent(token));
     await track('invoice_shared', { invoice_id: refreshedInvoice.cloudId, invoice_number: refreshedInvoice.number });
     const msg = buildPaymentMessage(refreshedInvoice, 'share');
-    try { await navigator.clipboard.writeText(msg); } catch { try { await navigator.clipboard.writeText(url); } catch {} }
-    toast('Share message copied (link included).');
+
+    // Prefer system share sheet with explicit URL (keeps link tappable)
+    let shared = false;
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: (refreshedInvoice.number || 'Invoice') + ' — ' + (db.profile.name || 'invoicedey'),
+          text: msg,
+          url: url
+        });
+        shared = true;
+        toast('Share sheet opened');
+      }
+    } catch (shareErr) {
+      // User cancel is fine; fall through to clipboard
+      if (shareErr && shareErr.name === 'AbortError') shared = true;
+    }
+
+    if (!shared) {
+      try {
+        await navigator.clipboard.writeText(msg);
+        toast('Share message copied — paste into WhatsApp or email');
+      } catch (_) {
+        try {
+          await navigator.clipboard.writeText(url);
+          toast('Invoice link copied');
+        } catch (__) {
+          window.prompt('Copy this invoice link:', url);
+        }
+      }
+    }
     track('invoice_share_message', { invoice_id: refreshedInvoice.cloudId });
     return url;
   } catch (error) {
@@ -9787,7 +9816,7 @@ document.addEventListener('click', (e) => {
   if (cp) { e.preventDefault(); remindInvoice(cp.getAttribute('data-remind-copy'), 'copy'); return; }
 });
 
-const PLAN_RANK = { free: 0, starter: 1, pro: 2 };
+const PLAN_RANK = { free: 0, starter: 1, pro: 2, custom: 3 };
 
 function planRank(plan) {
   return PLAN_RANK[String(plan || 'free').toLowerCase()] ?? 0;
@@ -9795,6 +9824,8 @@ function planRank(plan) {
 
 /** True if target is a real upgrade (strictly higher tier). */
 function canUpgradeTo(targetPlan, currentPlan) {
+  const cur = String(currentPlan || 'free').toLowerCase();
+  if (cur === 'custom') return false; // negotiated package — no self-serve tier change
   return planRank(targetPlan) > planRank(currentPlan);
 }
 
@@ -9807,6 +9838,15 @@ function paintUpgradeButtons(currentPlan) {
     const target = String(btn.dataset.planPageUpgrade || btn.dataset.upgradePlan || '').toLowerCase();
     if (!target) return;
     const label = target === 'pro' ? 'Pro' : 'Starter';
+    // Custom is negotiated offline — no self-serve upgrade/downgrade into Starter/Pro
+    if (cur === 'custom') {
+      btn.disabled = true;
+      btn.textContent = 'Included in Custom';
+      btn.classList.remove('primary');
+      btn.setAttribute('aria-disabled', 'true');
+      btn.title = 'Your Custom package is managed with support — contact support@invoicedey.com to change it';
+      return;
+    }
     if (planRank(cur) >= planRank(target)) {
       btn.disabled = true;
       btn.textContent = cur === target ? 'Current plan' : (target === 'starter' ? 'Included in Pro' : 'Current plan');
@@ -9917,7 +9957,9 @@ async function startPaystackCheckout(plan, source) {
     if (!canUpgradeTo(planId, current)) {
       track('upgrade_blocked_already_on_plan', { plan: planId, current, source: source || 'unknown' });
       paintUpgradeButtons(current);
-      if (current === planId) {
+      if (current === 'custom') {
+        toast('You are on a Custom package — email support@invoicedey.com to change it');
+      } else if (current === planId) {
         toast('Already on ' + (e?.plan_name || label) + ' — no need to buy again');
       } else {
         toast((e?.plan_name || current) + ' already includes ' + label);
@@ -10840,7 +10882,9 @@ function whatsappHref(phoneRaw, message) {
     if (digits.startsWith('0')) digits = digits.slice(1);
     digits = dial + digits;
   }
-  const text = encodeURIComponent(message || '');
+  // Normalize newlines for wa.me (LF). Avoid collapsing URL into following text.
+  let msg = String(message || '').replace(/\r\n/g, '\n').replace(/\u00a0/g, ' ').trim();
+  const text = encodeURIComponent(msg);
   if (digits) return 'https://wa.me/' + digits + '?text=' + text;
   return 'https://wa.me/?text=' + text;
 }
@@ -10878,22 +10922,42 @@ function buildPaymentMessage(invoice, kind) {
   const amt = shareMoneyPlain(showAmt, invoice.currency || db.profile.reporting);
   const due = invoice.due || '';
   const num = invoice.number || 'invoice';
-  // URL alone on its own line so WhatsApp / iMessage linkify correctly
   const link = publicInvoiceUrl(invoice);
-  const safe = (s) => String(s || '').replace(/\u00a0/g, ' ').replace(/\u202f/g, ' ');
+  // WhatsApp linkifies poorly when text trails the URL on the same line, or when
+  // the whole message is one paragraph. Keep the https URL as the FINAL line.
+  const safe = (s) => String(s || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\u202f/g, ' ')
+    .replace(/\r\n/g, '\n')
+    .trim();
 
   if (kind === 'overdue') {
-    let msg = 'Hi ' + name + ', hope you are well. Gentle reminder that ' + num + ' from ' + biz +
-      ' for ' + amt + ' was due on ' + due + '.';
-    if (link) msg += '\n\nView invoice:\n' + link;
-    msg += '\n\nPlease let me know if you have already paid or need payment details. Thank you.';
-    return safe(msg);
+    const lines = [
+      'Hi ' + name + ',',
+      '',
+      'Gentle reminder that ' + num + ' from ' + biz + ' for ' + amt + ' was due on ' + due + '.',
+      'Please let me know if you have already paid or need payment details.',
+      'Thank you.'
+    ];
+    if (link) {
+      lines.push('');
+      lines.push(link); // URL must be last line — nothing after it
+    }
+    return safe(lines.join('\n'));
   }
-  let msg = 'Hi ' + name + ', please find invoice ' + num + ' from ' + biz + ' for ' + amt + '.';
-  if (due) msg += ' Due ' + due + '.';
-  if (link) msg += '\n\nView / download:\n' + link;
-  msg += '\n\nThank you.';
-  return safe(msg);
+
+  const lines = [
+    'Hi ' + name + ',',
+    '',
+    'Please find invoice ' + num + ' from ' + biz + ' for ' + amt + '.'
+  ];
+  if (due) lines.push('Due: ' + due + '.');
+  lines.push('Thank you.');
+  if (link) {
+    lines.push('');
+    lines.push(link); // last line = tappable link only
+  }
+  return safe(lines.join('\n'));
 }
 
 async function remindInvoice(invoiceId, channel) {
@@ -22844,7 +22908,7 @@ async function planView() {
 
   const e = await getEntitlements(true);
   const plan = String(e?.plan || 'free').toLowerCase();
-  const name = e?.plan_name || (plan === 'pro' ? 'Pro' : plan === 'starter' ? 'Starter' : 'Free');
+  const name = e?.plan_name || (plan === 'custom' ? 'Custom' : plan === 'pro' ? 'Pro' : plan === 'starter' ? 'Starter' : 'Free');
   const price = Number(e?.price_monthly_cents || 0);
   const invoiceLimitRaw = e?.limits?.invoices;
   const clientLimitRaw = e?.limits?.clients;
@@ -22861,6 +22925,32 @@ async function planView() {
   $('#planClientUsage').textContent = `${db.clients.length} / ${fmtLimit(clientLimit)}`;
   $('#planStatusBadge').textContent = e?.status === 'active' ? 'Active' : (e?.status || 'Inactive');
 
+  // Custom plan: show support path, hide self-serve pressure
+  try {
+    let customNote = document.getElementById('planCustomNote');
+    if (!customNote) {
+      const host = document.getElementById('planPricingContext')?.parentElement;
+      customNote = document.createElement('div');
+      customNote.id = 'planCustomNote';
+      customNote.style.cssText = 'display:none;margin:0 0 14px;padding:12px 14px;border-radius:12px;border:1px solid #bfdbfe;background:#eff6ff;font-size:13px;line-height:1.5;color:#1e3a5f';
+      const ctx = document.getElementById('planPricingContext');
+      if (ctx && ctx.parentElement) ctx.parentElement.insertBefore(customNote, ctx);
+    }
+    if (plan === 'custom') {
+      const notes = (e && e.custom_notes) ? String(e.custom_notes) : '';
+      customNote.style.display = 'block';
+      customNote.innerHTML = '<b>Custom package</b> — your limits and features are set for this business.'
+        + (notes ? ('<br><span style="opacity:.9">' + notes.replace(/</g, '') + '</span>') : '')
+        + '<br>Need a change? <a href="mailto:support@invoicedey.com?subject=Custom%20plan%20change" style="font-weight:700;color:#1d4ed8">Contact support</a>.';
+      const note = document.getElementById('planBillingNote');
+      if (note) note.textContent = 'Billing for Custom is handled with invoicedey (not self-serve checkout).';
+    } else if (customNote) {
+      customNote.style.display = 'none';
+      customNote.innerHTML = '';
+    }
+  } catch (_) {}
+
+
   let segment = 'New', score = 0;
   if (cloud.user && cloud.client) {
     try {
@@ -22874,7 +22964,8 @@ async function planView() {
   const descriptions = {
     free: 'A simple starting plan for freelancers and small businesses.',
     starter: 'More capacity for businesses sending invoices regularly.',
-    pro: 'Unlimited capacity plus invite your team — shared invoices and clients.'
+    pro: 'Unlimited capacity plus invite your team — shared invoices and clients.',
+    custom: 'A package tailored to your business. Limits and features are set with invoicedey — not self-serve.'
   };
   $('#planDescription').textContent = descriptions[plan] || descriptions.free;
 
