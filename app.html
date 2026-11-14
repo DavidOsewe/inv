@@ -39063,8 +39063,26 @@ async function loadTeamPanel() {
         }
         if (!db.profile) db.profile = {};
         db.profile.memberReportsTo = reportsByUser;
-        const locOpts = db.locations.filter(l => l.active !== false)
-          .map(l => ({ id: l.id, cloudId: l.cloudId, name: l.name }));
+        // Locations for assign/reassign — always refresh from cloud so outlets appear
+        // (otherwise only the local default "Main store" shows after a cold load).
+        try {
+          ensurePosDb();
+          await pullLocationsFromCloud();
+        } catch (locErr) {
+          console.warn('team locations pull', locErr);
+          try { ensurePosDb(); } catch (_) {}
+        }
+        let locOpts = (db.locations || [])
+          .filter(l => l && l.active !== false)
+          .map(l => ({ id: l.id, cloudId: l.cloudId, name: l.name || 'Store' }));
+        // De-dupe by cloudId or name so Main store is not listed twice
+        const seenLoc = new Set();
+        locOpts = locOpts.filter(l => {
+          const key = String(l.cloudId || l.name || l.id).toLowerCase();
+          if (seenLoc.has(key)) return false;
+          seenLoc.add(key);
+          return true;
+        });
         const rows = members.map(m => {
           const email = m.email || 'Member';
           const role = String(m.role || 'member').toLowerCase();
@@ -39080,11 +39098,13 @@ async function loadTeamPanel() {
           let locSelect = '';
           if ((isOwner || (typeof can === "function" && can("locations.manage"))) && locOpts.length) {
             const options = '<option value="">Any location</option>' + locOpts.map(l =>
-              `<option value="${l.id}" ${localLoc && localLoc.id === l.id ? 'selected' : ''}>${l.name}</option>`
+              `<option value="${String(l.id).replace(/"/g, '')}" ${localLoc && localLoc.id === l.id ? 'selected' : ''}>${String(l.name || 'Store').replace(/</g, '')}</option>`
             ).join('');
-            locSelect = `<select class="button small" data-member-location="${m.user_id}" title="Default POS location" style="max-width:140px">${options}</select>`;
+            locSelect = `<select class="button small" data-member-location="${m.user_id}" title="Default POS / store for this member" style="max-width:180px;min-width:120px">${options}</select>`;
           } else if (localLoc) {
             locSelect = `<span class="team-row-sub" title="Default location">${localLoc.name}</span>`;
+          } else if (isOwner || (typeof can === "function" && can("locations.manage"))) {
+            locSelect = `<span class="team-row-sub" title="No stores yet">No stores — add under Inventory</span>`;
           }
           // Pyramid: Reports to
           let reportsSelect = '';
@@ -39114,8 +39134,11 @@ async function loadTeamPanel() {
             </div>
           </div>`;
         }).join('');
+        const locHint = locOpts.length <= 1
+          ? ' Only one store is loaded — add outlets under Inventory → Locations, then refresh this page.'
+          : '';
         membersEl.innerHTML = `<div class="team-block"><div class="team-block-title">Members · ${members.length}</div>
-          <p class="team-help" style="margin:0 0 8px">Reports to = line manager for expense pyramid. Default location scopes POS for cashiers.</p>
+          <p class="team-help" style="margin:0 0 8px">Reports to = line manager for expense pyramid. Default location scopes POS for cashiers.${locHint}</p>
           ${rows}</div>`;
         membersEl.querySelectorAll('[data-member-location]').forEach(sel => {
           sel.addEventListener('change', async () => {
@@ -39123,9 +39146,13 @@ async function loadTeamPanel() {
             const lid = sel.value || null;
             try {
               await setMemberDefaultLocation(uid, lid);
-              toast(lid ? 'Default location saved' : 'Location cleared');
+              const locName = lid
+                ? ((db.locations || []).find(l => l.id === lid)?.name || 'store')
+                : null;
+              toast(lid ? ('Assigned to ' + locName) : 'Location cleared — any store');
             } catch (err) {
-              toast(err.message || 'Could not save location — run pos_member_location.sql?');
+              toast(err.message || 'Could not save location — run pos_member_location.sql and sync stores');
+              try { renderTeamSection && renderTeamSection(); } catch (_) {}
             }
           });
         });
