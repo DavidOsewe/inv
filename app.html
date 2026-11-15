@@ -21426,14 +21426,6 @@ async function pushLocationToCloud(loc) {
       .select('id')
       .single();
     if (error) {
-      // Retry: match existing row by local_id or name (unique / race)
-      const { data: existing } = await cloud.client
-        .from('locations')
-        .select('id, name, local_id')
-        .eq('organization_id', cloud.organizationId)
-        .or('local_id.eq.' + loc.id + ',name.eq.' + JSON.stringify(loc.name).slice(1, -1).replace(/"/g, ''))
-        .limit(5);
-      // Safer fallback queries
       let found = null;
       const { data: byLocal } = await cloud.client
         .from('locations')
