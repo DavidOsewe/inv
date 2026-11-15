@@ -4879,7 +4879,7 @@ body:has(.modalback.show) .notif-panel {
           </p>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="button primary" type="button" id="invCountStart">Start count</button>
-            <button class="button" type="button" id="invCountLocations">Manage locations</button>
+            <button class="button" type="button" id="invCountLocations">Stores (business setup)</button>
           </div>
         </div>
         <div class="insight">
@@ -4901,7 +4901,7 @@ body:has(.modalback.show) .notif-panel {
           <div class="client-count" id="productCount">Inventory for POS checkout</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="button" type="button" id="btnManageLocations">Locations</button>
+          <button class="button" type="button" id="btnManageLocations">Stores</button>
           <button class="button" type="button" id="btnPushAllStock" title="Upload every product × store qty to the cloud so other devices match">Push stock to cloud</button>
           <button class="button" type="button" id="btnPullAllStock" title="Download org stock ledger from cloud (overwrites local store qtys for synced products)">Pull stock from cloud</button>
           <button class="button" type="button" id="btnRebuildFromMovements" title="L1.1: set store quantities from sum of stock movements">Rebuild from movements</button>
@@ -4933,8 +4933,8 @@ body:has(.modalback.show) .notif-panel {
 
     <div class="modalback" id="locationsModal">
       <div class="modal" style="max-width:520px">
-        <h2>Locations</h2>
-        <p class="section-sub">Stores, warehouses and outlets. POS sells from the active location.</p>
+        <h2>Stores &amp; locations</h2>
+        <p class="section-sub">Business outlets, warehouses and branches. Create them here under Plan. Inventory holds stock per store; POS sells from the active store.</p>
         <div id="locationsList"></div>
         <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
           <div class="field"><label>New location name</label><input id="locationNewName" placeholder="e.g. Ikeja outlet"></div>
@@ -5818,6 +5818,19 @@ body:has(.modalback.show) .notif-panel {
         <h3>Feature access</h3>
         <p class="section-sub" style="margin:4px 0 14px">Premium features stay visible so you know exactly what your plan unlocks.</p>
         <div id="featureAccessList" class="feature-access-grid"></div>
+      </div>
+
+      <div class="insight stack-gap" id="storesSection">
+        <h3>Stores &amp; locations</h3>
+        <p class="section-sub" style="margin:4px 0 12px;max-width:560px">
+          Outlets, warehouses and branches belong to the <b>business</b> — not to inventory.
+          Create them here, then assign staff under Team. Inventory and POS use these stores for stock and sales.
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
+          <button class="button primary" type="button" id="btnPlanManageLocations">Manage stores</button>
+          <span class="section-sub" id="planLocationsSummary" style="margin:0;font-size:12px">—</span>
+        </div>
+        <div id="planLocationsPreview" class="team-list" style="margin:0"></div>
       </div>
 
       <div class="insight stack-gap" id="teamSection">
@@ -15861,7 +15874,7 @@ function openStockTransferModal() {
   ensurePosDb();
   try { migrateProductStockToLocations(); } catch (_) {}
   if (db.locations.filter(l => l.active !== false).length < 2) {
-    toast('Add at least two locations first (Inventory → Catalog → Locations)');
+    toast('Add at least two stores first (Plan → Stores & locations)');
     openLocationsModal();
     return;
   }
@@ -18935,7 +18948,7 @@ function openStockAdjustModal(productId) {
   const p = db.products.find(x => x.id === productId);
   if (!p) return;
   if (!(db.locations || []).filter(l => l.active !== false).length) {
-    toast('Add a store first (Locations)');
+    toast('Add a store first (Plan → Stores & locations)');
     openLocationsModal();
     return;
   }
@@ -21261,9 +21274,37 @@ function fillProductLocationFilter() {
   else if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
 }
 
-function openLocationsModal() {
+
+function refreshPlanLocationsCard() {
   ensurePosDb();
+  const sum = document.getElementById('planLocationsSummary');
+  const prev = document.getElementById('planLocationsPreview');
+  const locs = (db.locations || []).filter(l => l && l.active !== false);
+  if (sum) {
+    sum.textContent = locs.length
+      ? (locs.length + ' store' + (locs.length === 1 ? '' : 's') + ' · assign staff under Team')
+      : 'No stores yet — add your main store and outlets';
+  }
+  if (!prev) return;
+  if (!locs.length) {
+    prev.innerHTML = '<p class="section-sub" style="margin:0">Add Main store, then each outlet (e.g. Gbagada). Team members get a default store for POS.</p>';
+    return;
+  }
+  prev.innerHTML = locs.map(l => {
+    const bits = [l.location_type || 'store'];
+    if (l.code) bits.push(l.code);
+    if (l.is_default) bits.push('default');
+    return '<div class="team-row" style="padding:8px 0">'
+      + '<div class="team-row-main"><b>' + String(l.name || 'Store').replace(/</g, '') + '</b>'
+      + '<span class="team-row-sub">' + bits.join(' · ') + '</span></div></div>';
+  }).join('');
+}
+
+async function openLocationsModal() {
+  ensurePosDb();
+  try { await pullLocationsFromCloud(); } catch (e) { console.warn('locations modal pull', e); }
   renderLocationsList();
+  try { refreshPlanLocationsCard(); } catch (_) {}
   document.getElementById('locationsModal')?.classList.add('show');
 }
 
@@ -21333,8 +21374,9 @@ async function addLocationFromModal() {
   document.getElementById('locationNewCode').value = '';
   persistDb();
   renderLocationsList();
-  fillProductLocationFilter();
-  toast('Location added');
+  try { fillProductLocationFilter(); } catch (_) {}
+  try { refreshPlanLocationsCard(); } catch (_) {}
+  toast('Store added');
 }
 
 async function pushLocationToCloud(loc) {
@@ -23036,6 +23078,7 @@ async function planView() {
   }
 
   try { await loadTeamPanel(); } catch (e) { console.warn('team panel', e.message || e); }
+  try { refreshPlanLocationsCard(); } catch (e) { console.warn('plan locations card', e); }
 }
 
 function profile() {
@@ -36880,6 +36923,10 @@ document.getElementById('productSearch')?.addEventListener('input', () => render
 document.getElementById('productFilter')?.addEventListener('change', () => renderProductsList());
 document.getElementById('productLocationFilter')?.addEventListener('change', () => renderProductsList());
 document.getElementById('btnManageLocations')?.addEventListener('click', openLocationsModal);
+document.getElementById('btnPlanManageLocations')?.addEventListener('click', () => {
+  if (typeof openLocationsModal === 'function') openLocationsModal();
+});
+
 document.getElementById('btnPushAllStock')?.addEventListener('click', () => {
   pushAllStoreStockToCloud().catch(e => toast(e.message || 'Push failed'));
 });
