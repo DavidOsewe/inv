@@ -39152,7 +39152,7 @@ async function loadTeamPanel() {
               toast(lid ? ('Assigned to ' + locName) : 'Location cleared — any store');
             } catch (err) {
               toast(err.message || 'Could not save location — run pos_member_location.sql and sync stores');
-              try { renderTeamSection && renderTeamSection(); } catch (_) {}
+              try { if (typeof loadTeamPanel === "function") await loadTeamPanel(); } catch (_) {}
             }
           });
         });
