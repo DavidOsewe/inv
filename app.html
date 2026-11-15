@@ -4594,7 +4594,7 @@ body:has(.modalback.show) .notif-panel {
       </div>
       <div class="nav-divider" aria-hidden="true"></div>
       <div class="nav-group" role="group" aria-label="Account">
-        <button data-view="plan" data-app="plan" title="Plan &amp; team"><span aria-hidden="true">◆</span><span class="nav-label">Plan</span></button>
+        <button data-view="plan" data-app="plan" title="Plan, team &amp; stores"><span aria-hidden="true">◆</span><span class="nav-label">Plan</span></button>
         <button data-view="profile" data-app="profile" title="Settings"><span aria-hidden="true">⚙</span><span class="nav-label">Settings</span></button>
       </div>
     </nav>
@@ -5762,8 +5762,8 @@ body:has(.modalback.show) .notif-panel {
     <section class="view" id="plan">
       <div class="section-head">
         <div>
-          <h2>Plan & billing</h2>
-          <p class="section-sub">Manage your invoicedey plan, usage and feature access.</p>
+          <h2>Plan, team &amp; stores</h2>
+          <p class="section-sub">Billing, team invites, and business outlets (stores &amp; warehouses).</p>
         </div>
         <span class="badge" id="planStatusBadge">Active</span>
       </div>
@@ -5773,7 +5773,21 @@ body:has(.modalback.show) .notif-panel {
         <div class="card"><small>Clients</small><b id="planClientUsage">0 / 5</b><span class="mini">Saved clients</span></div>
         <div class="card"><small>User segment</small><b id="planSegment">New</b><span class="mini" id="planSegmentScore">Growth segment</span></div>
       </div>
-      <div class="insights stack-gap">
+
+<div class="insight stack-gap" id="storesSection" style="border:1px solid #bfdbfe;background:#f8fbff">
+        <h3>Stores &amp; locations</h3>
+        <p class="section-sub" style="margin:4px 0 12px;max-width:560px">
+          Outlets, warehouses and branches belong to the <b>business</b> — not to inventory.
+          Create them here, then assign staff under Team. Inventory and POS use these stores for stock and sales.
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
+          <button class="button primary" type="button" id="btnPlanManageLocations">Manage stores</button>
+          <span class="section-sub" id="planLocationsSummary" style="margin:0;font-size:12px">—</span>
+        </div>
+        <div id="planLocationsPreview" class="team-list" style="margin:0"></div>
+      </div>
+
+            <div class="insights stack-gap">
         <div class="insight">
           <h3>Your plan</h3>
           <p id="planDescription" class="section-sub" style="margin:0 0 12px">Free plan for getting started.</p>
@@ -5818,19 +5832,6 @@ body:has(.modalback.show) .notif-panel {
         <h3>Feature access</h3>
         <p class="section-sub" style="margin:4px 0 14px">Premium features stay visible so you know exactly what your plan unlocks.</p>
         <div id="featureAccessList" class="feature-access-grid"></div>
-      </div>
-
-      <div class="insight stack-gap" id="storesSection">
-        <h3>Stores &amp; locations</h3>
-        <p class="section-sub" style="margin:4px 0 12px;max-width:560px">
-          Outlets, warehouses and branches belong to the <b>business</b> — not to inventory.
-          Create them here, then assign staff under Team. Inventory and POS use these stores for stock and sales.
-        </p>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
-          <button class="button primary" type="button" id="btnPlanManageLocations">Manage stores</button>
-          <span class="section-sub" id="planLocationsSummary" style="margin:0;font-size:12px">—</span>
-        </div>
-        <div id="planLocationsPreview" class="team-list" style="margin:0"></div>
       </div>
 
       <div class="insight stack-gap" id="teamSection">
@@ -21318,23 +21319,26 @@ function renderLocationsList() {
   const note = locked
     ? `<p class="section-sub">Your POS is locked to <b>${(db.locations.find(l => l.id === myDef) || {}).name || 'your assigned store'}</b>. Ask an owner to change it under Plan → Team.</p>`
     : (myDef ? `<p class="section-sub">Your assigned location is selected for POS by default.</p>` : '');
-  el.innerHTML = note + (db.locations.map(l => {
+  const list = (db.locations || []).filter(l => l && l.active !== false);
+  el.innerHTML = note + (list.map(l => {
     const active = db.activeLocationId === l.id;
     const isMine = myDef && l.id === myDef;
     const canSwitch = !locked || l.id === myDef;
+    const sync = l.cloudId ? '' : ' <span class="badge" title="Not synced to cloud yet">Local only</span>';
     return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px">
       <div>
-        <b>${l.name}</b> <span class="client-meta">${l.location_type || 'store'}${l.code ? ' · ' + l.code : ''}</span>
+        <b>${String(l.name || 'Store').replace(/</g, '')}</b> <span class="client-meta">${l.location_type || 'store'}${l.code ? ' · ' + l.code : ''}</span>
         ${l.is_default ? ' <span class="badge">Default</span>' : ''}
         ${active ? ' <span class="badge">POS active</span>' : ''}
         ${isMine ? ' <span class="badge">Assigned to you</span>' : ''}
+        ${sync}
       </div>
       <div class="client-actions">
         ${canSwitch && !active ? `<button class="button small" type="button" data-set-active-loc="${l.id}">Use for POS</button>` : ''}
         ${role !== 'member' && !l.is_default ? `<button class="button small" type="button" data-set-default-loc="${l.id}">Default</button>` : ''}
       </div>
     </div>`;
-  }).join('') || '<p class="section-sub">No locations yet.</p>');
+  }).join('') || '<p class="section-sub">No stores yet. Add one below.</p>');
 }
 
 async function addLocationFromModal() {
@@ -21347,6 +21351,7 @@ async function addLocationFromModal() {
   );
   if (existing) {
     toast('A store named "' + name + '" already exists — use that one');
+    renderLocationsList();
     return;
   }
   const code = (document.getElementById('locationNewCode')?.value || '').trim() || null;
@@ -21363,39 +21368,98 @@ async function addLocationFromModal() {
     created_at: new Date().toISOString()
   };
   db.locations.push(loc);
-  // Seed zero stock rows for existing products
-  db.products.forEach(p => {
+  (db.products || []).forEach(p => {
     if (!db.locationStock.some(s => s.product_id === p.id && s.location_id === loc.id)) {
       db.locationStock.push({ product_id: p.id, location_id: loc.id, qty: 0 });
     }
   });
-  try { await pushLocationToCloud(loc); } catch (e) { console.warn(e); }
+  persistDb();
+  renderLocationsList();
+  try { refreshPlanLocationsCard(); } catch (_) {}
+
+  let synced = false;
+  try {
+    await pushLocationToCloud(loc);
+    synced = !!loc.cloudId;
+    persistDb();
+  } catch (e) {
+    console.warn('push location', e);
+    toast('Store saved on this device, but cloud sync failed: ' + (e.message || e) + ' — check RLS / sign-in');
+    renderLocationsList();
+    try { refreshPlanLocationsCard(); } catch (_) {}
+    return;
+  }
   document.getElementById('locationNewName').value = '';
   document.getElementById('locationNewCode').value = '';
-  persistDb();
+  // Confirm from cloud so Plan / Team see the same list
+  try { await pullLocationsFromCloud(); } catch (_) {}
   renderLocationsList();
   try { fillProductLocationFilter(); } catch (_) {}
   try { refreshPlanLocationsCard(); } catch (_) {}
-  toast('Store added');
+  toast(synced ? ('Store added: ' + name) : ('Store added locally: ' + name));
 }
 
 async function pushLocationToCloud(loc) {
-  if (!cloud?.client || !cloud?.organizationId || !loc) return;
+  if (!loc) return;
+  if (!cloud?.client) throw new Error('Not connected — sign in to sync stores');
+  if (!cloud.organizationId && typeof ensureCloudOrganization === 'function') {
+    try { await ensureCloudOrganization(); } catch (e) { console.warn('ensure org for location', e); }
+  }
+  if (!cloud.organizationId) throw new Error('No business selected — cannot save store to cloud');
   const payload = {
     organization_id: cloud.organizationId,
     local_id: loc.id,
     name: loc.name,
-    code: loc.code,
+    code: loc.code || null,
     location_type: loc.location_type || 'store',
-    address: loc.address,
+    address: loc.address || null,
     is_default: !!loc.is_default,
     active: loc.active !== false
   };
   if (loc.cloudId) {
-    await cloud.client.from('locations').update(payload).eq('id', loc.cloudId);
-  } else {
-    const { data, error } = await cloud.client.from('locations').insert(payload).select('id').single();
+    const { error } = await cloud.client.from('locations').update(payload).eq('id', loc.cloudId);
     if (error) throw error;
+  } else {
+    const { data, error } = await cloud.client
+      .from('locations')
+      .insert(payload)
+      .select('id')
+      .single();
+    if (error) {
+      // Retry: match existing row by local_id or name (unique / race)
+      const { data: existing } = await cloud.client
+        .from('locations')
+        .select('id, name, local_id')
+        .eq('organization_id', cloud.organizationId)
+        .or('local_id.eq.' + loc.id + ',name.eq.' + JSON.stringify(loc.name).slice(1, -1).replace(/"/g, ''))
+        .limit(5);
+      // Safer fallback queries
+      let found = null;
+      const { data: byLocal } = await cloud.client
+        .from('locations')
+        .select('id')
+        .eq('organization_id', cloud.organizationId)
+        .eq('local_id', loc.id)
+        .maybeSingle();
+      if (byLocal?.id) found = byLocal;
+      if (!found) {
+        const { data: byName } = await cloud.client
+          .from('locations')
+          .select('id')
+          .eq('organization_id', cloud.organizationId)
+          .ilike('name', loc.name)
+          .limit(1)
+          .maybeSingle();
+        if (byName?.id) found = byName;
+      }
+      if (found?.id) {
+        loc.cloudId = found.id;
+        const { error: upErr } = await cloud.client.from('locations').update(payload).eq('id', found.id);
+        if (upErr) throw upErr;
+        return;
+      }
+      throw error;
+    }
     loc.cloudId = data.id;
   }
 }
@@ -37065,8 +37129,9 @@ document.getElementById('transferShipMode')?.addEventListener('change', () => {
 
 document.getElementById('locationsModalClose')?.addEventListener('click', () => {
   document.getElementById('locationsModal')?.classList.remove('show');
-  fillProductLocationFilter();
-  renderProductsList();
+  try { fillProductLocationFilter(); } catch (_) {}
+  try { renderProductsList(); } catch (_) {}
+  try { refreshPlanLocationsCard(); } catch (_) {}
 });
 document.getElementById('locationAddBtn')?.addEventListener('click', () => {
   addLocationFromModal().catch(e => toast(e.message || 'Could not add location'));
