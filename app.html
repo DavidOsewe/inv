@@ -22299,16 +22299,35 @@ async function completePosSale({ payment_method, amount_tendered, change_given, 
       });
     }
     const posRevId = (typeof getRevenueAccountId === 'function') ? getRevenueAccountId() : '4000';
+    // Output VAT: POS prices treated as tax-inclusive when profile default tax rate > 0
+    const posTaxRate = Number(db.profile && db.profile.defaultTax) || 0;
+    let posTax = 0;
+    let posNet = total;
+    if (posTaxRate > 0 && total > 0) {
+      posNet = Math.round((total / (1 + posTaxRate / 100)) * 100) / 100;
+      posTax = Math.round((total - posNet) * 100) / 100;
+    }
+    sale.tax_rate = posTaxRate;
+    sale.tax_amount = posTax;
+    sale.net_amount = posNet;
+    sale.tax_inclusive = posTaxRate > 0;
+    const posTaxId = (typeof getOutputTaxAccountId === 'function') ? getOutputTaxAccountId() : '2100';
+    const posLines = [
+      { accountId: debitAcct, debit: total, credit: 0 },
+      { accountId: posRevId, debit: 0, credit: posNet }
+    ];
+    if (posTax > 0.0001) {
+      posLines.push({ accountId: posTaxId, debit: 0, credit: posTax });
+    } else {
+      posLines[1].credit = total;
+    }
     const rev = postJournal({
       date,
-      memo: 'POS sale ' + saleLabel,
+      memo: 'POS sale ' + saleLabel + (posTax > 0.0001 ? (' · VAT ' + posTaxRate + '% incl.') : ''),
       source: 'pos_sale',
       sourceKey: 'j:' + key,
       currency,
-      lines: [
-        { accountId: debitAcct, debit: total, credit: 0 },
-        { accountId: posRevId, debit: 0, credit: total }
-      ]
+      lines: posLines
     });
     if (rev) {
       rev.location_id = saleLoc.id || null;
@@ -22494,16 +22513,28 @@ function backfillPosSalesToBooks() {
       });
     }
     const posRevId2 = (typeof getRevenueAccountId === 'function') ? getRevenueAccountId() : '4000';
+    const bfRate = Number(sale.tax_rate != null ? sale.tax_rate : (db.profile && db.profile.defaultTax)) || 0;
+    let bfTax = Number(sale.tax_amount) || 0;
+    let bfNet = Number(sale.net_amount) || 0;
+    if (!(bfTax > 0) && bfRate > 0 && total > 0) {
+      bfNet = Math.round((total / (1 + bfRate / 100)) * 100) / 100;
+      bfTax = Math.round((total - bfNet) * 100) / 100;
+    }
+    if (!(bfNet > 0)) bfNet = total - bfTax;
+    const bfTaxId = (typeof getOutputTaxAccountId === 'function') ? getOutputTaxAccountId() : '2100';
+    const bfLines = [
+      { accountId: '1000', debit: total, credit: 0 },
+      { accountId: posRevId2, debit: 0, credit: bfNet > 0 ? bfNet : total }
+    ];
+    if (bfTax > 0.0001) bfLines.push({ accountId: bfTaxId, debit: 0, credit: bfTax });
+    else bfLines[1].credit = total;
     const rev = postJournal({
       date,
-      memo: 'POS sale ' + saleLabel,
+      memo: 'POS sale ' + saleLabel + (bfTax > 0.0001 ? (' · VAT ' + bfRate + '% incl.') : ''),
       source: 'pos_sale',
       sourceKey: jKey,
       currency,
-      lines: [
-        { accountId: '1000', debit: total, credit: 0 },
-        { accountId: posRevId2, debit: 0, credit: total }
-      ]
+      lines: bfLines
     });
     if (rev) {
       rev.location_id = sale.location_id || null;
@@ -24572,7 +24603,7 @@ function renderVatSummary() {
   ensureBooksDb();
   const outId = (typeof getOutputTaxAccountId === 'function') ? getOutputTaxAccountId() : '2100';
   const inId = (typeof resolveBooksControlAccount === 'function') ? resolveBooksControlAccount('input_tax') : '1200';
-  const range = (typeof booksPeriodRange === 'function') ? booksPeriodRange() : null;
+  const range = (typeof booksDateRange === 'function') ? booksDateRange() : null;
   const from = range && range.from ? range.from : null;
   const to = range && range.to ? range.to : null;
   const inPeriod = (d) => {

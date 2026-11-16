@@ -547,6 +547,12 @@ function loadUserLocalDb(userId) {
   if (!Array.isArray(db.locationStock)) db.locationStock = [];
   if (!db.posNextSaleNumber || db.posNextSaleNumber < 1) db.posNextSaleNumber = 1;
   if (!db.profile) db.profile = { reporting: 'NGN', name: '' };
+  // VAT rate for POS: keep profile.defaultTax; if unset and NGN books, default 7.5 (Nigeria)
+  if (db.profile.defaultTax == null || db.profile.defaultTax === '') {
+    db.profile.defaultTax = 0;
+  }
+  const rateN = Number(db.profile.defaultTax);
+  if (!Number.isFinite(rateN)) db.profile.defaultTax = 0;
   ensurePosLocation();
 }
 
@@ -1844,22 +1850,43 @@ function postLocalBooks(sale) {
       location_name: sale.location_name || null
     });
   }
-  // Revenue: Dr Cash/Bank · Cr Sales (Books uses `date`)
+  // Revenue + Output VAT (tax-inclusive when profile defaultTax > 0)
   if (!db.journals.some(j => j.sourceKey === 'j:' + key)) {
+    const totalAmt = Number(sale.total) || 0;
+    let taxRate = Number(sale.tax_rate);
+    if (!Number.isFinite(taxRate) || taxRate < 0) {
+      taxRate = Number(db.profile && db.profile.defaultTax) || 0;
+    }
+    let taxAmt = Number(sale.tax_amount);
+    let netAmt = Number(sale.net_amount);
+    if (!(taxAmt > 0) && taxRate > 0 && totalAmt > 0) {
+      netAmt = Math.round((totalAmt / (1 + taxRate / 100)) * 100) / 100;
+      taxAmt = Math.round((totalAmt - netAmt) * 100) / 100;
+    }
+    if (!(netAmt > 0)) netAmt = Math.max(0, totalAmt - (taxAmt > 0 ? taxAmt : 0));
+    if (!(taxAmt > 0)) { taxAmt = 0; netAmt = totalAmt; }
+    sale.tax_rate = taxRate;
+    sale.tax_amount = taxAmt;
+    sale.net_amount = netAmt;
+    sale.tax_inclusive = taxRate > 0;
+    const lines = [
+      { accountId: debitAcct, debit: totalAmt, credit: 0 },
+      { accountId: '4000', debit: 0, credit: netAmt }
+    ];
+    if (taxAmt > 0.0001) {
+      lines.push({ accountId: '2100', debit: 0, credit: taxAmt });
+    }
     db.journals.push({
       id: crypto.randomUUID(),
       date: date,
       entry_date: date,
-      memo: 'POS sale ' + saleLabel,
+      memo: 'POS sale ' + saleLabel + (taxAmt > 0.0001 ? (' · VAT ' + taxRate + '% incl.') : ''),
       source: 'pos_sale',
       sourceKey: 'j:' + key,
       currency: sale.currency,
       location_id: sale.location_id || null,
       location_name: sale.location_name || null,
-      lines: [
-        { accountId: debitAcct, debit: Number(sale.total) || 0, credit: 0 },
-        { accountId: '4000', debit: 0, credit: Number(sale.total) || 0 }
-      ],
+      lines: lines,
       createdAt: new Date().toISOString(),
       created_at: new Date().toISOString(),
       reversed: false
@@ -1928,12 +1955,23 @@ async function completeSale({ payment_method, amount_tendered, change_given, pay
     saleLoc.name = saleLoc.code || 'Main store';
   }
   const outletName = String(saleLoc?.name || saleLoc?.code || '').trim();
+  const taxRate0 = Number(db.profile && db.profile.defaultTax) || 0;
+  let taxAmt0 = 0;
+  let netAmt0 = total;
+  if (taxRate0 > 0 && total > 0) {
+    netAmt0 = Math.round((total / (1 + taxRate0 / 100)) * 100) / 100;
+    taxAmt0 = Math.round((total - netAmt0) * 100) / 100;
+  }
   const sale = {
     id: saleId,
     sale_number: saleNumber,
     sold_at: now,
     total,
     cost_total: costTotal,
+    tax_rate: taxRate0,
+    tax_amount: taxAmt0,
+    net_amount: netAmt0,
+    tax_inclusive: taxRate0 > 0,
     currency: currency(),
     payment_method,
     amount_tendered: amount_tendered != null ? amount_tendered : null,
