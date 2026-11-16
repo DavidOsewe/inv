@@ -5028,17 +5028,33 @@ body:has(.modalback.show) .notif-panel {
       </div>
       <div id="transferNeedsAttention" style="margin:0 0 12px"></div>
       <div id="transferList"></div>
-      <div class="insight" style="margin-top:24px">
-        <h3 style="font-size:15px;margin:0 0 8px">Approval log</h3>
-        <p class="section-sub" style="margin:0 0 10px">Submits, approvals, and rejections for transfers (and purchases).</p>
-        <div id="approvalAuditList"></div>
-      </div>
-      <div class="insight" style="margin-top:16px">
-        <h3 style="font-size:15px;margin:0 0 8px">Inventory activity</h3>
-        <p class="section-sub" style="margin:0 0 10px">Recent transfers, receives, and stock adjustments.</p>
-        <div id="inventoryAuditList"></div>
+      <div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:8px">
+        <button type="button" class="button" id="btnOpenInventoryActivity">Inventory activity</button>
+        <button type="button" class="button" id="btnOpenApprovalLog">Approval log</button>
       </div>
     </section>
+
+    <div class="modalback" id="inventoryActivityModal">
+      <div class="modal" style="max-width:560px">
+        <h2>Inventory activity</h2>
+        <p class="section-sub" style="margin:0 0 12px">Recent transfers, receives, and stock adjustments.</p>
+        <div id="inventoryAuditList" style="max-height:min(60vh,420px);overflow:auto"></div>
+        <div class="buttons" style="margin-top:14px;display:flex;justify-content:flex-end">
+          <button class="button" type="button" id="inventoryActivityModalClose">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modalback" id="approvalLogModal">
+      <div class="modal" style="max-width:560px">
+        <h2>Approval log</h2>
+        <p class="section-sub" style="margin:0 0 12px">Submits, approvals, and rejections for transfers (and purchases).</p>
+        <div id="approvalAuditList" style="max-height:min(60vh,420px);overflow:auto"></div>
+        <div class="buttons" style="margin-top:14px;display:flex;justify-content:flex-end">
+          <button class="button" type="button" id="approvalLogModalClose">Close</button>
+        </div>
+      </div>
+    </div>
 
     <div class="modalback" id="transferDetailModal">
       <div class="modal" style="max-width:560px">
@@ -5546,15 +5562,12 @@ body:has(.modalback.show) .notif-panel {
           </div>
           <p id="booksLockNextOpen" class="section-sub" style="margin:12px 0 0"></p>
           <div style="margin-top:18px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
-            <div style="font-weight:700;margin-bottom:6px">AR / AP sub-accounts (Phase 5)</div>
-            <p class="section-sub" style="margin:0 0 10px">
-              When on, each customer/supplier gets a dedicated COA line under the control account
-              (e.g. <code>AR-abc123</code>). Off by default — party tags on the control account are enough for most SMEs.
+            <div style="font-weight:700;margin-bottom:6px">AR / AP ledgers</div>
+            <p class="section-sub" style="margin:0">
+              Postings use the <b>AR and AP control accounts</b> with customer/supplier tags.
+              Per-party sub-accounts (AR-… / AP-…) are retired — they cluttered the COA and distorted control balances.
+              Party statements still show activity filtered by customer or supplier.
             </p>
-            <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer">
-              <input type="checkbox" id="booksPartySubAccounts">
-              Create per-party AR/AP sub-accounts on post
-            </label>
           </div>
         </div>
       </div>
@@ -17247,7 +17260,6 @@ function renderInventoryAuditList() {
       <div class="client-meta">${(typeof actorLabel === 'function' ? actorLabel(e) : String(e.actorEmail || 'local').replace(/</g, ''))} · ${e.entityType || ''}${e.entityId ? ' · ' + String(e.entityId).slice(0, 8) : ''}</div>
     </div>`;
   }).join('');
-  try { renderApprovalAuditList('approvalAuditList'); } catch (_) {}
 }
 
 function purchasesView() {
@@ -18702,39 +18714,80 @@ function isMemberLocationLocked() {
 
 async function setMemberDefaultLocation(userId, locationLocalId) {
   ensurePosDb();
-  let loc = locationLocalId ? db.locations.find(l => l.id === locationLocalId) : null;
-  if (loc && !loc.cloudId && cloud?.client && cloud?.organizationId) {
-    try { await pushLocationToCloud(loc); } catch (e) { console.warn('push location before assign', e); }
-    loc = db.locations.find(l => l.id === locationLocalId) || loc;
+  if (!userId) throw new Error('Member required');
+
+  let loc = locationLocalId ? (db.locations || []).find(l => l.id === locationLocalId) : null;
+
+  // Ensure org context
+  if (cloud?.client && !cloud.organizationId && typeof ensureCloudOrganization === 'function') {
+    try { await ensureCloudOrganization(); } catch (e) { console.warn(e); }
   }
-  if (!cloud?.client || !cloud?.organizationId || !userId) {
+
+  // Store must be in cloud before FK assign
+  if (loc && !loc.cloudId && cloud?.client && cloud?.organizationId) {
+    try {
+      await pushLocationToCloud(loc);
+      loc = (db.locations || []).find(l => l.id === locationLocalId) || loc;
+      try { persistDb(); } catch (_) {}
+    } catch (e) {
+      throw new Error('Store is not synced yet: ' + (e.message || e) + ' — open Plan → Manage stores and add/sync it first');
+    }
+  }
+  if (locationLocalId && loc && !loc.cloudId) {
+    throw new Error('Store is not synced to cloud yet — open Plan → Manage stores, then assign again');
+  }
+
+  // Offline / no cloud: only self
+  if (!cloud?.client || !cloud?.organizationId) {
     if (userId === (activeUserId || cloud?.user?.id)) {
       db.memberDefaultLocationId = locationLocalId || null;
       try {
         if (locationLocalId) localStorage.setItem(memberLocationStorageKey(), locationLocalId);
         else localStorage.removeItem(memberLocationStorageKey());
       } catch {}
-      if (locationLocalId) setActiveLocation(locationLocalId);
+      if (locationLocalId) setActiveLocation(locationLocalId, { force: true });
+      return;
     }
-    return;
+    throw new Error('Sign in to assign stores to team members');
   }
-  if (locationLocalId && loc && !loc.cloudId) {
-    throw new Error('Store is not synced to cloud yet — open Locations and wait for sync, then assign again');
+
+  const cloudLocId = loc?.cloudId || null;
+
+  // Preferred: security-definer RPC (avoids silent 0-row RLS updates)
+  try {
+    const { data, error } = await cloud.client.rpc('set_member_default_location', {
+      p_organization_id: cloud.organizationId,
+      p_user_id: userId,
+      p_location_id: cloudLocId
+    });
+    if (error) throw error;
+    if (data && data.ok === false) throw new Error(data.error || 'Assignment failed');
+  } catch (rpcErr) {
+    const msg = String(rpcErr?.message || rpcErr || '');
+    // Fallback to table update if RPC not deployed yet
+    if (/Could not find the function|PGRST202|42883/i.test(msg)) {
+      const { data: rows, error } = await cloud.client
+        .from('organization_members')
+        .update({ default_location_id: cloudLocId })
+        .eq('organization_id', cloud.organizationId)
+        .eq('user_id', userId)
+        .select('user_id, default_location_id');
+      if (error) throw error;
+      if (!rows || !rows.length) {
+        throw new Error('Could not assign store — run member_location_assign_v1.sql, or check you are owner/manager');
+      }
+    } else {
+      throw rpcErr;
+    }
   }
-  const payload = { default_location_id: loc?.cloudId || null };
-  const { error } = await cloud.client
-    .from('organization_members')
-    .update(payload)
-    .eq('organization_id', cloud.organizationId)
-    .eq('user_id', userId);
-  if (error) throw error;
+
   if (userId === (activeUserId || cloud?.user?.id)) {
     db.memberDefaultLocationId = locationLocalId || null;
     try {
       if (locationLocalId) localStorage.setItem(memberLocationStorageKey(), locationLocalId);
       else localStorage.removeItem(memberLocationStorageKey());
     } catch {}
-    if (locationLocalId) setActiveLocation(locationLocalId);
+    if (locationLocalId) setActiveLocation(locationLocalId, { force: true });
   }
 }
 
@@ -24043,17 +24096,12 @@ function updateDateLockHint(inputId, hintId) {
 }
 
 function syncPartySubAccountsUI() {
-  const el = document.getElementById('booksPartySubAccounts');
-  if (!el) return;
-  el.checked = !!(db.booksSettings && db.booksSettings.partySubAccounts);
-  el.onchange = () => {
-    if (!db.booksSettings) db.booksSettings = {};
-    db.booksSettings.partySubAccounts = !!el.checked;
+  // Feature retired — force off so old saved settings cannot re-enable sub-accounts.
+  if (!db.booksSettings) db.booksSettings = {};
+  if (db.booksSettings.partySubAccounts) {
+    db.booksSettings.partySubAccounts = false;
     try { save(); } catch (_) {}
-    toast(el.checked
-      ? 'Party sub-accounts on — next invoice/bill posts create AR-/AP- codes'
-      : 'Party sub-accounts off — control account + party tags only');
-  };
+  }
 }
 
 function syncBooksPeriodLockUI() {
@@ -24994,7 +25042,9 @@ async function exportPartyStatementPdf(partyType, partyId, partyName) {
  * Off by default — enable booksSettings.partySubAccounts = true.
  */
 function partySubAccountsEnabled() {
-  return !!(db.booksSettings && db.booksSettings.partySubAccounts);
+  // Deprecated: per-party AR/AP COA lines distort control ledgers.
+  // Always use AR/AP control + party tags. Existing AR-/AP- codes stay in COA for history only.
+  return false;
 }
 
 function ensurePartySubAccount(partyType, partyId, partyName) {
@@ -37119,6 +37169,27 @@ document.getElementById('transferShipMode')?.addEventListener('change', () => {
   try { updateTransferModalHints(); } catch (_) {}
 });
 
+
+document.getElementById('btnOpenInventoryActivity')?.addEventListener('click', () => {
+  try { renderInventoryAuditList(); } catch (e) { console.warn(e); }
+  document.getElementById('inventoryActivityModal')?.classList.add('show');
+});
+document.getElementById('inventoryActivityModalClose')?.addEventListener('click', () => {
+  document.getElementById('inventoryActivityModal')?.classList.remove('show');
+});
+document.getElementById('inventoryActivityModal')?.addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.classList.remove('show');
+});
+document.getElementById('btnOpenApprovalLog')?.addEventListener('click', () => {
+  try { renderApprovalAuditList('approvalAuditList'); } catch (e) { console.warn(e); }
+  document.getElementById('approvalLogModal')?.classList.add('show');
+});
+document.getElementById('approvalLogModalClose')?.addEventListener('click', () => {
+  document.getElementById('approvalLogModal')?.classList.remove('show');
+});
+document.getElementById('approvalLogModal')?.addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.classList.remove('show');
+});
 document.getElementById('locationsModalClose')?.addEventListener('click', () => {
   document.getElementById('locationsModal')?.classList.remove('show');
   try { fillProductLocationFilter(); } catch (_) {}
@@ -39249,14 +39320,19 @@ async function loadTeamPanel() {
             const uid = sel.getAttribute('data-member-location');
             const lid = sel.value || null;
             try {
+              sel.disabled = true;
               await setMemberDefaultLocation(uid, lid);
               const locName = lid
                 ? ((db.locations || []).find(l => l.id === lid)?.name || 'store')
                 : null;
               toast(lid ? ('Assigned to ' + locName) : 'Location cleared — any store');
+              try { await loadTeamPanel(); } catch (_) {}
             } catch (err) {
-              toast(err.message || 'Could not save location — run pos_member_location.sql and sync stores');
-              try { if (typeof loadTeamPanel === "function") await loadTeamPanel(); } catch (_) {}
+              console.warn('assign store', err);
+              toast(err.message || 'Could not assign store');
+              try { await loadTeamPanel(); } catch (_) {}
+            } finally {
+              try { sel.disabled = false; } catch (_) {}
             }
           });
         });
