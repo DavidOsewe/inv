@@ -5562,12 +5562,16 @@ body:has(.modalback.show) .notif-panel {
           </div>
           <p id="booksLockNextOpen" class="section-sub" style="margin:12px 0 0"></p>
           <div style="margin-top:18px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)">
-            <div style="font-weight:700;margin-bottom:6px">AR / AP ledgers</div>
-            <p class="section-sub" style="margin:0">
-              Postings use the <b>AR and AP control accounts</b> with customer/supplier tags.
-              Per-party sub-accounts (AR-… / AP-…) are retired — they cluttered the COA and distorted control balances.
-              Party statements still show activity filtered by customer or supplier.
+            <div style="font-weight:700;margin-bottom:6px">AR / AP sub-accounts</div>
+            <p class="section-sub" style="margin:0 0 10px">
+              When on, each customer/supplier can get a dedicated COA line under the control account
+              (e.g. <code>AR-abc123</code>). Off by default — party tags on the control account are enough for most SMEs.
+              Party statements work either way.
             </p>
+            <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer">
+              <input type="checkbox" id="booksPartySubAccounts">
+              Create per-party AR/AP sub-accounts on post
+            </label>
           </div>
         </div>
       </div>
@@ -5592,6 +5596,16 @@ body:has(.modalback.show) .notif-panel {
           <h3>Audit trail</h3>
           <p class="section-sub">Append-only log of books changes: journal posts, reversals, bank match/add/exclude, rules, and chart updates. Events cannot be edited or deleted here.</p>
           <div id="booksAuditList"></div>
+        </div>
+      </div>
+<div id="booksPanelVat" hidden>
+        <div class="insight">
+          <h3>VAT summary</h3>
+          <p class="section-sub" style="margin:0 0 12px">
+            Output VAT (sales) vs input VAT (purchases) for the selected period.
+            POS treats prices as <b>tax-inclusive</b> at your default tax rate. Invoices use exclusive tax.
+          </p>
+          <div id="booksVat"></div>
         </div>
       </div>
 <div id="booksPanelTrial" hidden>
@@ -24096,12 +24110,17 @@ function updateDateLockHint(inputId, hintId) {
 }
 
 function syncPartySubAccountsUI() {
-  // Feature retired — force off so old saved settings cannot re-enable sub-accounts.
+  const el = document.getElementById('booksPartySubAccounts');
+  if (!el) return;
   if (!db.booksSettings) db.booksSettings = {};
-  if (db.booksSettings.partySubAccounts) {
-    db.booksSettings.partySubAccounts = false;
+  el.checked = !!db.booksSettings.partySubAccounts;
+  el.onchange = () => {
+    db.booksSettings.partySubAccounts = !!el.checked;
     try { save(); } catch (_) {}
-  }
+    toast(el.checked
+      ? 'Party sub-accounts on — next invoice/bill posts can create AR-/AP- codes'
+      : 'Party sub-accounts off — control account + party tags only');
+  };
 }
 
 function syncBooksPeriodLockUI() {
@@ -24545,6 +24564,74 @@ function getArControlId() { return resolveBooksControlAccount('ar'); }
 function getApControlId() { return resolveBooksControlAccount('ap'); }
 function getRevenueAccountId() { return resolveBooksControlAccount('revenue'); }
 function getOutputTaxAccountId() { return resolveBooksControlAccount('output_tax'); }
+
+/** Period output vs input VAT from journals (reporting currency). */
+function renderVatSummary() {
+  const el = document.getElementById('booksVat');
+  if (!el) return;
+  ensureBooksDb();
+  const outId = (typeof getOutputTaxAccountId === 'function') ? getOutputTaxAccountId() : '2100';
+  const inId = (typeof resolveBooksControlAccount === 'function') ? resolveBooksControlAccount('input_tax') : '1200';
+  const range = (typeof booksPeriodRange === 'function') ? booksPeriodRange() : null;
+  const from = range && range.from ? range.from : null;
+  const to = range && range.to ? range.to : null;
+  const inPeriod = (d) => {
+    if (!d) return true;
+    const day = String(d).slice(0, 10);
+    if (from && day < from) return false;
+    if (to && day > to) return false;
+    return true;
+  };
+  let outputCr = 0, outputDr = 0, inputDr = 0, inputCr = 0;
+  const rows = [];
+  (db.journals || []).forEach(j => {
+    if (!j || j.reversed) return;
+    if (!inPeriod(j.date)) return;
+    (j.lines || []).forEach(line => {
+      const aid = String(line.accountId || '');
+      const dr = Number(line.debit) || 0;
+      const cr = Number(line.credit) || 0;
+      if (aid === String(outId)) {
+        outputCr += cr; outputDr += dr;
+        if (dr || cr) rows.push({ side: 'output', date: j.date, memo: j.memo, dr, cr, source: j.source });
+      }
+      if (aid === String(inId)) {
+        inputDr += dr; inputCr += cr;
+        if (dr || cr) rows.push({ side: 'input', date: j.date, memo: j.memo, dr, cr, source: j.source });
+      }
+    });
+  });
+  const outputNet = outputCr - outputDr; // liability increase
+  const inputNet = inputDr - inputCr;   // asset increase
+  const payable = outputNet - inputNet;
+  const fmt = (n) => (typeof money === 'function' ? money(n) : String(Math.round(n * 100) / 100));
+  const periodLabel = (typeof booksReportPeriodLabel === 'function') ? booksReportPeriodLabel() : 'Period';
+  const rate = Number(db.profile?.defaultTax || 0) || 0;
+  let html = '<div class="cards stack-gap" style="margin-bottom:14px">'
+    + '<div class="card"><small>Output VAT (sales)</small><b>' + fmt(outputNet) + '</b><span class="mini">Credits − debits on ' + outId + '</span></div>'
+    + '<div class="card"><small>Input VAT (purchases)</small><b>' + fmt(inputNet) + '</b><span class="mini">Debits − credits on ' + inId + '</span></div>'
+    + '<div class="card"><small>Net VAT ' + (payable >= 0 ? 'payable' : 'recoverable') + '</small><b>' + fmt(Math.abs(payable)) + '</b><span class="mini">' + periodLabel + '</span></div>'
+    + '</div>';
+  html += '<p class="section-sub" style="margin:0 0 10px">Default rate for POS (tax-inclusive): <b>' + rate + '%</b>. '
+    + 'Invoice output VAT posts when invoices are sent. Bill input VAT posts when tax amount is set on the bill.</p>';
+  if (!rows.length) {
+    html += '<p class="section-sub">No VAT movements in this period yet.</p>';
+  } else {
+    rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    html += '<div style="max-height:min(50vh,420px);overflow:auto">';
+    rows.slice(0, 80).forEach(r => {
+      html += '<div style="display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">'
+        + '<div><b style="text-transform:uppercase;font-size:10px;color:var(--muted)">' + r.side + '</b> · '
+        + String(r.date || '').slice(0, 10) + ' · ' + String(r.memo || '').replace(/</g, '').slice(0, 48)
+        + '</div><div style="font-variant-numeric:tabular-nums;white-space:nowrap">'
+        + (r.dr ? ('Dr ' + fmt(r.dr)) : '') + (r.dr && r.cr ? ' · ' : '') + (r.cr ? ('Cr ' + fmt(r.cr)) : '')
+        + '</div></div>';
+    });
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
 
 function partyFromInvoice(inv) {
   if (!inv) return { partyType: 'client', partyId: '', partyName: '' };
@@ -25042,9 +25129,9 @@ async function exportPartyStatementPdf(partyType, partyId, partyName) {
  * Off by default — enable booksSettings.partySubAccounts = true.
  */
 function partySubAccountsEnabled() {
-  // Deprecated: per-party AR/AP COA lines distort control ledgers.
-  // Always use AR/AP control + party tags. Existing AR-/AP- codes stay in COA for history only.
-  return false;
+  // Optional: per-party AR-/AP- COA lines under control accounts.
+  // Yellow "Control check" gap UI stays retired — it was misleading.
+  return !!(db.booksSettings && db.booksSettings.partySubAccounts);
 }
 
 function ensurePartySubAccount(partyType, partyId, partyName) {
@@ -25738,6 +25825,7 @@ function setBooksTab(tab) {
     coa: 'booksPanelCoa',
     periodlock: 'booksPanelPeriodLock',
     trial: 'booksPanelTrial',
+    vat: 'booksPanelVat',
     cashflow: 'booksPanelCashflow',
     cash: 'booksPanelCash',
     banktx: 'booksPanelBankTx',
@@ -25770,6 +25858,9 @@ function setBooksTab(tab) {
   }
   if (booksTab === 'banktx') {
     try { if (typeof renderBankTransactions === 'function') renderBankTransactions(); } catch (_) {}
+  }
+  if (booksTab === 'vat') {
+    try { renderVatSummary(); } catch (e) { console.warn('vat summary', e); }
   }
 }
 
