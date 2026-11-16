@@ -5387,6 +5387,7 @@ body:has(.modalback.show) .notif-panel {
         <button type="button" class="button small" data-books-page="banking">Banking</button>
         <button type="button" class="button small" data-books-page="recurring">Recurring</button>
         <button type="button" class="button small" data-books-page="reports">Reports</button>
+        <button type="button" class="button small" data-books-page="reports" data-books-open-tab="vat" id="booksNavVat">VAT</button>
         <button type="button" class="button small" data-books-page="setup">Settings</button>
       </nav>
 
@@ -25792,7 +25793,12 @@ function setBooksPage(page, tab) {
   booksPage = page;
   try { saveNavState('books'); } catch (_) {}
   document.querySelectorAll('[data-books-page]').forEach(btn => {
-    btn.classList.toggle('primary', btn.getAttribute('data-books-page') === booksPage);
+    const page = btn.getAttribute('data-books-page');
+    const openTab = btn.getAttribute('data-books-open-tab');
+    let on = page === booksPage;
+    if (openTab) on = on && (typeof booksTab === 'string' && booksTab === openTab);
+    else if (page === 'reports') on = on && booksTab !== 'vat';
+    btn.classList.toggle('primary', !!on);
   });
   try {
     const activePageBtn = document.querySelector('.books-nav [data-books-page].primary');
@@ -25894,6 +25900,17 @@ function setBooksTab(tab) {
   if (booksTab === 'vat') {
     try { renderVatSummary(); } catch (e) { console.warn('vat summary', e); }
   }
+  try {
+    document.querySelectorAll('.books-nav [data-books-page]').forEach(btn => {
+      const page = btn.getAttribute('data-books-page');
+      const openTab = btn.getAttribute('data-books-open-tab');
+      if (!openTab && page !== 'reports') return;
+      let on = page === booksPage;
+      if (openTab) on = on && booksTab === openTab;
+      else if (page === 'reports') on = on && booksTab !== 'vat';
+      btn.classList.toggle('primary', !!on);
+    });
+  } catch (_) {}
 }
 
 function accountPeriodNet(accountId, act) {
@@ -36574,7 +36591,9 @@ document.getElementById('booksTabs')?.addEventListener('click', (e) => {
 document.getElementById('booksPages')?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-books-page]');
   if (!btn) return;
-  setBooksPage(btn.getAttribute('data-books-page'));
+  const page = btn.getAttribute('data-books-page');
+  const openTab = btn.getAttribute('data-books-open-tab') || null;
+  setBooksPage(page, openTab || undefined);
 });
 
 /* AR desk modals */
