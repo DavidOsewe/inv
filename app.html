@@ -30106,49 +30106,10 @@ function renderArApSubledgers() {
       '</div>';
   };
 
-  // Phase 3 — control check + untagged lines
-  let checkHint = '';
-  try {
-    const c = arApControlCheck();
-    const gaps = untaggedArApLines();
-    const arGaps = gaps.filter(g => g.side === 'ar');
-    const apGaps = gaps.filter(g => g.side === 'ap');
-    if (Math.abs(c.arDiff) > 1 || Math.abs(c.apDiff) > 1 || gaps.length) {
-      checkHint = '<div style="margin-top:10px;padding:10px 12px;border:1px solid ' +
-        ((Math.abs(c.arDiff) > 1 || Math.abs(c.apDiff) > 1) ? '#fcd34d' : 'var(--line)') +
-        ';border-radius:10px;background:' +
-        ((Math.abs(c.arDiff) > 1 || Math.abs(c.apDiff) > 1) ? '#fffbeb' : 'var(--panel-2)') + '">' +
-        '<div style="font-size:11px;font-weight:800;text-transform:uppercase;color:#92400e;margin-bottom:6px">Control check</div>' +
-        '<div class="mini" style="color:var(--muted)">AR sub ' + fmt(c.subAr) + ' · GL ' + fmt(c.glAr) +
-        (Math.abs(c.arDiff) > 1 ? ' · <b style="color:#92400e">gap ' + fmt(c.arDiff) + '</b>' : ' · matched') +
-        '<br>AP sub ' + fmt(c.subAp) + ' · GL ' + fmt(c.glAp) +
-        (Math.abs(c.apDiff) > 1 ? ' · <b style="color:#92400e">gap ' + fmt(c.apDiff) + '</b>' : ' · matched') +
-        '</div>';
-      if (gaps.length) {
-        checkHint += '<div style="margin-top:8px;font-size:12px"><b>' + gaps.length +
-          ' untagged line' + (gaps.length === 1 ? '' : 's') + '</b> on control accounts — assign a party to close the gap.</div>';
-        checkHint += '<div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">';
-        gaps.slice(0, 8).forEach((g, i) => {
-          const opts = g.side === 'ar'
-            ? (db.clients || []).map(c => '<option value="' + c.id + '">' + String(c.name || '').replace(/</g, '') + '</option>').join('')
-            : (db.suppliers || []).map(s => '<option value="' + s.id + '">' + String(s.name || '').replace(/</g, '') + '</option>').join('');
-          checkHint += '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 0;border-top:1px solid rgba(0,0,0,.06)">' +
-            '<div style="flex:1;min-width:120px;font-size:12px"><b>' + (g.side === 'ar' ? 'AR' : 'AP') + '</b> · ' +
-            (g.date || '') + ' · ' + String(g.memo || '').slice(0, 40).replace(/</g, '') +
-            ' · ' + fmt(g.amount) + '</div>' +
-            '<select data-tag-side="' + g.side + '" data-tag-jid="' + g.journalId + '" data-tag-li="' + g.lineIndex +
-            '" style="font-size:12px;min-width:120px;max-width:180px">' +
-            '<option value="">— Party —</option>' + opts + '</select>' +
-            '<button type="button" class="button small" data-tag-apply="' + i + '">Tag</button></div>';
-        });
-        checkHint += '</div>';
-      }
-      checkHint += '</div>';
-    }
-  } catch (e) { console.warn('ar/ap check', e); }
-
+  // Control check UI retired — comparing "sub" vs GL misled users when opening stock,
+  // reversals, and untagged control lines are normal. Party statements remain the source of truth.
   if (arEl) {
-    arEl.innerHTML = rowHtml(arSubledgerBalances(), 'No tagged customer AR yet — send an invoice to build the subledger.', 'client') + checkHint;
+    arEl.innerHTML = rowHtml(arSubledgerBalances(), 'No tagged customer AR yet — send an invoice to build the subledger.', 'client');
     arEl.querySelectorAll('[data-party-type]').forEach(btn => {
       btn.onclick = () => openPartyLedgerModal({
         partyType: btn.getAttribute('data-party-type'),
