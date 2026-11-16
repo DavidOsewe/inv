@@ -24597,10 +24597,9 @@ function getApControlId() { return resolveBooksControlAccount('ap'); }
 function getRevenueAccountId() { return resolveBooksControlAccount('revenue'); }
 function getOutputTaxAccountId() { return resolveBooksControlAccount('output_tax'); }
 
-/** Period output vs input VAT from journals (reporting currency). */
-function renderVatSummary() {
-  const el = document.getElementById('booksVat');
-  if (!el) return;
+
+/** Collect VAT movements for the current books period. */
+function collectVatSummaryData() {
   ensureBooksDb();
   const outId = (typeof getOutputTaxAccountId === 'function') ? getOutputTaxAccountId() : '2100';
   const inId = (typeof resolveBooksControlAccount === 'function') ? resolveBooksControlAccount('input_tax') : '1200';
@@ -24623,35 +24622,53 @@ function renderVatSummary() {
       const aid = String(line.accountId || '');
       const dr = Number(line.debit) || 0;
       const cr = Number(line.credit) || 0;
-      if (aid === String(outId)) {
+      if (aid === String(outId) && (dr || cr)) {
         outputCr += cr; outputDr += dr;
-        if (dr || cr) rows.push({ side: 'output', date: j.date, memo: j.memo, dr, cr, source: j.source });
+        rows.push({ side: 'output', date: j.date, memo: j.memo || '', dr, cr, source: j.source || '', journalId: j.id });
       }
-      if (aid === String(inId)) {
+      if (aid === String(inId) && (dr || cr)) {
         inputDr += dr; inputCr += cr;
-        if (dr || cr) rows.push({ side: 'input', date: j.date, memo: j.memo, dr, cr, source: j.source });
+        rows.push({ side: 'input', date: j.date, memo: j.memo || '', dr, cr, source: j.source || '', journalId: j.id });
       }
     });
   });
-  const outputNet = outputCr - outputDr; // liability increase
-  const inputNet = inputDr - inputCr;   // asset increase
+  rows.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  const outputNet = outputCr - outputDr;
+  const inputNet = inputDr - inputCr;
   const payable = outputNet - inputNet;
-  const fmt = (n) => (typeof money === 'function' ? money(n) : String(Math.round(n * 100) / 100));
-  const periodLabel = (typeof booksReportPeriodLabel === 'function') ? booksReportPeriodLabel() : 'Period';
-  const rate = Number(db.profile?.defaultTax || 0) || 0;
-  let html = '<div class="cards stack-gap" style="margin-bottom:14px">'
-    + '<div class="card"><small>Output VAT (sales)</small><b>' + fmt(outputNet) + '</b><span class="mini">Credits − debits on ' + outId + '</span></div>'
-    + '<div class="card"><small>Input VAT (purchases)</small><b>' + fmt(inputNet) + '</b><span class="mini">Debits − credits on ' + inId + '</span></div>'
-    + '<div class="card"><small>Net VAT ' + (payable >= 0 ? 'payable' : 'recoverable') + '</small><b>' + fmt(Math.abs(payable)) + '</b><span class="mini">' + periodLabel + '</span></div>'
+  return {
+    outId, inId, from, to, rows,
+    outputCr, outputDr, inputDr, inputCr,
+    outputNet, inputNet, payable,
+    rate: Number(db.profile && db.profile.defaultTax) || 0,
+    periodLabel: (typeof booksReportPeriodLabel === 'function') ? booksReportPeriodLabel() : 'Period',
+    currency: (db.profile && db.profile.reporting) || 'NGN',
+    biz: (db.profile && (db.profile.businessName || db.profile.name)) || 'Business'
+  };
+}
+
+/** Period output vs input VAT from journals (reporting currency). */
+function renderVatSummary() {
+  const el = document.getElementById('booksVat');
+  if (!el) return;
+  const data = collectVatSummaryData();
+  const fmt = (n) => (typeof money === 'function' ? money(n) : String(Math.round((Number(n) || 0) * 100) / 100));
+  let html = '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">'
+    + '<button type="button" class="button small" id="btnVatExportCsv">Download Excel (CSV)</button>'
+    + '<button type="button" class="button small" id="btnVatExportPdf">Download PDF</button>'
     + '</div>';
-  html += '<p class="section-sub" style="margin:0 0 10px">Default rate for POS (tax-inclusive): <b>' + rate + '%</b>. '
+  html += '<div class="cards stack-gap" style="margin-bottom:14px">'
+    + '<div class="card"><small>Output VAT (sales)</small><b>' + fmt(data.outputNet) + '</b><span class="mini">Credits − debits on ' + data.outId + '</span></div>'
+    + '<div class="card"><small>Input VAT (purchases)</small><b>' + fmt(data.inputNet) + '</b><span class="mini">Debits − credits on ' + data.inId + '</span></div>'
+    + '<div class="card"><small>Net VAT ' + (data.payable >= 0 ? 'payable' : 'recoverable') + '</small><b>' + fmt(Math.abs(data.payable)) + '</b><span class="mini">' + String(data.periodLabel).replace(/</g, '') + '</span></div>'
+    + '</div>';
+  html += '<p class="section-sub" style="margin:0 0 10px">Default rate for POS (tax-inclusive): <b>' + data.rate + '%</b>. '
     + 'Invoice output VAT posts when invoices are sent. Bill input VAT posts when tax amount is set on the bill.</p>';
-  if (!rows.length) {
+  if (!data.rows.length) {
     html += '<p class="section-sub">No VAT movements in this period yet.</p>';
   } else {
-    rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
     html += '<div style="max-height:min(50vh,420px);overflow:auto">';
-    rows.slice(0, 80).forEach(r => {
+    data.rows.slice(0, 120).forEach(r => {
       html += '<div style="display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">'
         + '<div><b style="text-transform:uppercase;font-size:10px;color:var(--muted)">' + r.side + '</b> · '
         + String(r.date || '').slice(0, 10) + ' · ' + String(r.memo || '').replace(/</g, '').slice(0, 48)
@@ -24662,7 +24679,128 @@ function renderVatSummary() {
     html += '</div>';
   }
   el.innerHTML = html;
+  document.getElementById('btnVatExportCsv')?.addEventListener('click', () => {
+    try { exportVatSummaryCsv(); } catch (e) { toast(e.message || 'CSV export failed'); }
+  });
+  document.getElementById('btnVatExportPdf')?.addEventListener('click', () => {
+    try { exportVatSummaryPdf(); } catch (e) { toast(e.message || 'PDF export failed'); }
+  });
 }
+
+function exportVatSummaryCsv() {
+  const data = collectVatSummaryData();
+  const esc = (v) => {
+    const t = String(v == null ? '' : v);
+    if (/[",\n\r]/.test(t)) return '"' + t.replace(/"/g, '""') + '"';
+    return t;
+  };
+  const lines = [];
+  lines.push(['Business', data.biz].map(esc).join(','));
+  lines.push(['Period', data.periodLabel].map(esc).join(','));
+  lines.push(['Currency', data.currency].map(esc).join(','));
+  lines.push(['Output VAT account', data.outId].map(esc).join(','));
+  lines.push(['Input VAT account', data.inId].map(esc).join(','));
+  lines.push('');
+  lines.push(['Summary', 'Amount'].map(esc).join(','));
+  lines.push(['Output VAT (net)', data.outputNet].map(esc).join(','));
+  lines.push(['Input VAT (net)', data.inputNet].map(esc).join(','));
+  lines.push([data.payable >= 0 ? 'Net VAT payable' : 'Net VAT recoverable', Math.abs(data.payable)].map(esc).join(','));
+  lines.push('');
+  lines.push(['Side', 'Date', 'Memo', 'Debit', 'Credit', 'Source'].map(esc).join(','));
+  data.rows.forEach(r => {
+    lines.push([r.side, String(r.date || '').slice(0, 10), r.memo, r.dr || '', r.cr || '', r.source].map(esc).join(','));
+  });
+  const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = URL.createObjectURL(blob);
+  a.download = 'vat-summary-' + stamp + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { try { URL.revokeObjectURL(a.href); a.remove(); } catch (_) {} }, 500);
+  toast('VAT summary CSV downloaded');
+}
+
+function exportVatSummaryPdf() {
+  const data = collectVatSummaryData();
+  const fmt = (n) => {
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: data.currency, maximumFractionDigits: 2 }).format(Number(n) || 0);
+    } catch {
+      return data.currency + ' ' + (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
+    }
+  };
+  let body = '<h2 style="margin:0 0 8px;font-size:15px">VAT summary</h2>';
+  body += '<table style="width:100%;border-collapse:collapse;margin-bottom:14px;font-size:13px">';
+  body += '<tr><td style="padding:6px;border-bottom:1px solid #ddd">Output VAT (sales)</td><td style="padding:6px;border-bottom:1px solid #ddd;text-align:right;font-weight:700">' + fmt(data.outputNet) + '</td></tr>';
+  body += '<tr><td style="padding:6px;border-bottom:1px solid #ddd">Input VAT (purchases)</td><td style="padding:6px;border-bottom:1px solid #ddd;text-align:right;font-weight:700">' + fmt(data.inputNet) + '</td></tr>';
+  body += '<tr><td style="padding:6px;border-bottom:1px solid #111;font-weight:700">' + (data.payable >= 0 ? 'Net VAT payable' : 'Net VAT recoverable') + '</td>';
+  body += '<td style="padding:6px;border-bottom:1px solid #111;text-align:right;font-weight:800">' + fmt(Math.abs(data.payable)) + '</td></tr></table>';
+  body += '<p style="font-size:12px;color:#555;margin:0 0 12px">Accounts: output ' + data.outId + ' · input ' + data.inId + ' · POS default rate ' + data.rate + '%</p>';
+  if (data.rows.length) {
+    body += '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr>'
+      + '<th style="text-align:left;border-bottom:1px solid #111;padding:4px">Side</th>'
+      + '<th style="text-align:left;border-bottom:1px solid #111;padding:4px">Date</th>'
+      + '<th style="text-align:left;border-bottom:1px solid #111;padding:4px">Memo</th>'
+      + '<th style="text-align:right;border-bottom:1px solid #111;padding:4px">Debit</th>'
+      + '<th style="text-align:right;border-bottom:1px solid #111;padding:4px">Credit</th>'
+      + '</tr></thead><tbody>';
+    data.rows.forEach(r => {
+      body += '<tr>'
+        + '<td style="padding:4px;border-bottom:1px solid #eee">' + String(r.side) + '</td>'
+        + '<td style="padding:4px;border-bottom:1px solid #eee">' + String(r.date || '').slice(0, 10) + '</td>'
+        + '<td style="padding:4px;border-bottom:1px solid #eee">' + String(r.memo || '').replace(/</g, '').slice(0, 60) + '</td>'
+        + '<td style="padding:4px;border-bottom:1px solid #eee;text-align:right">' + (r.dr ? fmt(r.dr) : '') + '</td>'
+        + '<td style="padding:4px;border-bottom:1px solid #eee;text-align:right">' + (r.cr ? fmt(r.cr) : '') + '</td>'
+        + '</tr>';
+    });
+    body += '</tbody></table>';
+  } else {
+    body += '<p style="font-size:13px;color:#555">No VAT movements in this period.</p>';
+  }
+  const generated = new Date().toLocaleString();
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>VAT summary</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #111; background: #fff; margin: 0; padding: 16px; }
+</style></head><body>
+  <div style="display:flex;justify-content:space-between;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px">
+    <div>
+      <div style="font-size:18px;font-weight:800">${String(data.biz).replace(/</g, '')}</div>
+      <div style="font-size:12px;color:#555">${String(db.profile && db.profile.address || '').replace(/</g, '')}</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:16px;font-weight:700">VAT summary</div>
+      <div style="font-size:12px;color:#555">Period: ${String(data.periodLabel).replace(/</g, '')}</div>
+      <div style="font-size:12px;color:#555">Currency: ${data.currency}</div>
+      <div style="font-size:11px;color:#777">Generated ${generated}</div>
+    </div>
+  </div>
+  ${body}
+  <div style="margin-top:24px;font-size:10px;color:#888;border-top:1px solid #ddd;padding-top:8px">Prepared with invoicedey Books</div>
+<script>window.onload=function(){setTimeout(function(){try{window.focus();window.print();}catch(e){}},250);};</` + `script>
+</body></html>`;
+  try {
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, '_blank');
+    if (!w) {
+      const iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+      iframe.src = url;
+      document.body.appendChild(iframe);
+      setTimeout(() => { try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (_) {} }, 400);
+      setTimeout(() => { try { iframe.remove(); URL.revokeObjectURL(url); } catch (_) {} }, 3000);
+    } else {
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 5000);
+    }
+    toast('VAT summary ready to print / save as PDF');
+  } catch (e) {
+    toast(e.message || 'Could not open PDF');
+  }
+}
+
+
 
 
 function partyFromInvoice(inv) {
