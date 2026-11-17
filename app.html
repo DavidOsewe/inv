@@ -8986,71 +8986,142 @@ function loadUserLocalDb(userId) {
   }
   normalizeDbProfile();
   try { restoreApprovalSettingsMirror(); } catch (_) {}
+  // Shrink before first paint if this device already near quota
+  try {
+    const n = JSON.stringify(db).length;
+    if (n > 3500000) pruneBooksForStorage(1);
+    if (n > 4500000) pruneBooksForStorage(2);
+  } catch (_) {}
 }
 
-function pruneBooksForStorage() {
+/** Strip heavy fields that blow past ~5MB localStorage quotas. level 0 soft … 3 nuclear. */
+function pruneBooksForStorage(level) {
+  level = level == null ? 1 : level;
   try {
     ensureBooksDb();
-    // Cap bank transactions: keep pending first, then newest of the rest
+    const stripDocBodies = (docs) => {
+      if (!Array.isArray(docs)) return docs;
+      return docs.map(d => {
+        if (!d || typeof d !== 'object') return d;
+        const o = Object.assign({}, d);
+        // Base64 / data-URL bodies are the #1 quota killer
+        if (o.data && String(o.data).length > 500) o.data = null;
+        if (o.dataUrl && String(o.dataUrl).length > 500) o.dataUrl = null;
+        if (o.base64 && String(o.base64).length > 500) o.base64 = null;
+        if (o.content && String(o.content).length > 2000) o.content = '[trimmed]';
+        return o;
+      });
+    };
+    // Always light: strip attachment bodies from bills / cash / journals
+    (db.bills || []).forEach(b => { if (b && b.documents) b.documents = stripDocBodies(b.documents); });
+    (db.cashEntries || []).forEach(c => { if (c && c.documents) c.documents = stripDocBodies(c.documents); });
+    (db.journals || []).forEach(j => { if (j && j.documents) j.documents = stripDocBodies(j.documents); });
+    (db.auditEvents || []).forEach(ev => {
+      if (!ev) return;
+      if (ev.meta && ev.meta.documents) ev.meta.documents = stripDocBodies(ev.meta.documents);
+      if (Array.isArray(ev.documents)) ev.documents = stripDocBodies(ev.documents);
+    });
+
     const txs = db.bankTransactions || [];
-    if (txs.length > 2500) {
+    const bankCap = level >= 3 ? 400 : level >= 2 ? 800 : 1800;
+    if (txs.length > bankCap) {
       const pending = txs.filter(t => t.status === 'pending');
       const rest = txs.filter(t => t.status !== 'pending')
         .sort((a, b) => String(b.importedAt || b.date || '').localeCompare(String(a.importedAt || a.date || '')));
-      const room = Math.max(500, 2500 - pending.length);
+      const room = Math.max(100, bankCap - pending.length);
       db.bankTransactions = pending.concat(rest.slice(0, room));
     }
-    // Cap audit events
-    if ((db.booksAudit || []).length > 800) {
-      db.booksAudit = db.booksAudit.slice(-800);
+    const auditCap = level >= 3 ? 80 : level >= 2 ? 200 : 500;
+    if ((db.booksAudit || []).length > auditCap) db.booksAudit = db.booksAudit.slice(-auditCap);
+    if ((db.auditEvents || []).length > auditCap) db.auditEvents = db.auditEvents.slice(-auditCap);
+    if ((db.statementImports || []).length > (level >= 2 ? 8 : 20)) {
+      db.statementImports = db.statementImports.slice(-(level >= 2 ? 8 : 20));
     }
-    // Cap statement import log
-    if ((db.statementImports || []).length > 40) {
-      db.statementImports = db.statementImports.slice(-40);
+    // Journals: keep recent + non-reversed
+    const jCap = level >= 3 ? 400 : level >= 2 ? 800 : 2000;
+    if ((db.journals || []).length > jCap) {
+      const sorted = db.journals.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+      db.journals = sorted.slice(0, jCap);
+    }
+    // Inventory movements / POS sales history
+    const mCap = level >= 3 ? 300 : level >= 2 ? 800 : 2000;
+    if ((db.stockMovements || []).length > mCap) db.stockMovements = db.stockMovements.slice(-mCap);
+    if ((db.inventoryMovements || []).length > mCap) db.inventoryMovements = db.inventoryMovements.slice(-mCap);
+    if ((db.posSales || []).length > mCap) db.posSales = db.posSales.slice(-mCap);
+    if ((db.sales || []).length > mCap) db.sales = db.sales.slice(-mCap);
+    // Chat history is optional offline
+    if (level >= 2) {
+      if ((db.chatMessages || []).length > 200) db.chatMessages = db.chatMessages.slice(-200);
+      if ((db.notifications || []).length > 100) db.notifications = db.notifications.slice(-100);
+    }
+    if (level >= 3) {
+      db.bankTransactions = (db.bankTransactions || []).filter(t => t.status === 'pending').slice(0, 300);
+      db.booksAudit = (db.booksAudit || []).slice(-40);
+      db.auditEvents = (db.auditEvents || []).slice(-40);
+      db.statementImports = (db.statementImports || []).slice(-5);
+      db.chatMessages = (db.chatMessages || []).slice(-50);
+      // Drop document stubs entirely at nuclear level
+      (db.bills || []).forEach(b => { if (b) b.documents = []; });
+      (db.cashEntries || []).forEach(c => { if (c) c.documents = []; });
+      (db.journals || []).forEach(j => { if (j) j.documents = []; });
     }
   } catch (e) {
     console.warn('pruneBooksForStorage', e);
   }
 }
 
+function estimateLocalDbBytes() {
+  try {
+    return JSON.stringify(db).length;
+  } catch (_) {
+    return 0;
+  }
+}
+
 function persistDb() {
   const key = activeUserId ? scopedDbKey(activeUserId) : ANON_DB_KEY;
   const write = (payload) => localStorage.setItem(key, payload);
+  const quotaToast = (msg) => {
+    if (typeof toast !== 'function') return;
+    const now = Date.now();
+    if (window.__lastQuotaToast && now - window.__lastQuotaToast < 45000) return;
+    window.__lastQuotaToast = now;
+    toast(msg);
+  };
   try {
-    write(JSON.stringify(db));
+    // Proactive soft prune if payload is already large (~3.5MB of ~5MB quota)
+    let payload = JSON.stringify(db);
+    if (payload.length > 3500000) {
+      pruneBooksForStorage(1);
+      payload = JSON.stringify(db);
+    }
+    if (payload.length > 4500000) {
+      pruneBooksForStorage(2);
+      payload = JSON.stringify(db);
+    }
+    write(payload);
   } catch (err) {
     const quota = err && (err.name === 'QuotaExceededError' || /quota|exceeded/i.test(String(err.message || err)));
     if (!quota) {
       console.warn('persistDb', err);
       return false;
     }
-    console.warn('localStorage quota exceeded — pruning books data');
-    pruneBooksForStorage();
-    try {
-      write(JSON.stringify(db));
-      if (typeof toast === 'function') {
-        toast('Storage almost full — trimmed old bank lines. Data kept on this device.');
-      }
-      return true;
-    } catch (err2) {
-      // Last resort: drop non-pending bank txs and audit
+    console.warn('localStorage quota exceeded — multi-level prune');
+    for (let level = 1; level <= 3; level++) {
       try {
-        db.bankTransactions = (db.bankTransactions || []).filter(t => t.status === 'pending').slice(0, 1500);
-        db.booksAudit = (db.booksAudit || []).slice(-200);
-        db.statementImports = (db.statementImports || []).slice(-10);
+        pruneBooksForStorage(level);
         write(JSON.stringify(db));
-        if (typeof toast === 'function') {
-          toast('Storage full — kept pending bank lines only. Export journals if needed.');
-        }
+        quotaToast(level < 3
+          ? 'Storage was full — trimmed history (journals, bank lines, attachments). Cloud data is safe.'
+          : 'Storage was full — deep clean applied. Export from cloud if you need older history.');
         return true;
-      } catch (err3) {
-        console.error('persistDb failed after prune', err3);
-        if (typeof toast === 'function') {
-          toast('Browser storage full. Clear site data for this app or export books, then retry.');
-        }
-        return false;
+      } catch (e2) {
+        console.warn('persist prune level ' + level, e2);
       }
     }
+    console.error('persistDb failed after all prunes');
+    quotaToast('Browser storage full. Use Clear site data for this site, then sign in again — cloud will restore.');
+    return false;
   }
   return true;
 }
