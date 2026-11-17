@@ -11681,9 +11681,18 @@ function dashboard() {
     }
   } catch (_) {}
   try { applyRoleGates(); } catch (_) {}
+  // Local-first strip — never block home on network
   try {
     syncPendingApprovalNotifs();
     refreshNotificationUi();
+    if (typeof renderDashboardApprovals === 'function') renderDashboardApprovals();
+  } catch (_) {}
+  try {
+    pullApprovalsSliceFromCloud().then((changed) => {
+      if (!changed) return;
+      try { syncPendingApprovalNotifs(); refreshNotificationUi(); } catch (_) {}
+      try { renderDashboardApprovals(); } catch (_) {}
+    }).catch(() => {});
   } catch (_) {}
 }
 
@@ -15180,6 +15189,16 @@ function approvalsView() {
   renderApprovalsWorkspace();
   try { applyRoleGates(); } catch (_) {}
   try { refreshNotificationUi(); } catch (_) {}
+  // Background: only bills/cash — do not wait on full books pull
+  try {
+    pullApprovalsSliceFromCloud().then((changed) => {
+      if (changed) {
+        try { renderApprovalsWorkspace(); } catch (_) {}
+        try { refreshApprovalsUI(); } catch (_) {}
+        try { refreshNotificationUi(); } catch (_) {}
+      }
+    }).catch(() => {});
+  } catch (_) {}
 }
 
 function openApprovalsInbox() {
@@ -32574,8 +32593,8 @@ const LIVE_SYNC = {
   lastUiAt: 0,
   inFlight: false,
   pollTimer: null,
-  minPullMs: 8000,
-  pollMs: 45000
+  minPullMs: 15000,
+  pollMs: 60000
 };
 
 function refreshActiveViewAfterSync(reason) {
@@ -32596,8 +32615,14 @@ function refreshActiveViewAfterSync(reason) {
       if (typeof approvalsView === 'function') approvalsView();
       else if (typeof refreshApprovalsUI === 'function') refreshApprovalsUI();
     }
-    if (id === 'dashboard' || id === 'home' || document.getElementById('dashboard')?.classList.contains('active')) {
-      if (typeof dashboard === 'function') dashboard();
+    if (id === 'dashboard' || id === 'home' || document.getElementById('dashboard')?.classList.contains('active')
+        || document.getElementById('home')?.classList.contains('active')) {
+      // Avoid full dashboard() (ecosystem rebuild) — only approvals/metrics strip
+      try { if (typeof renderDashboardApprovals === 'function') renderDashboardApprovals(); } catch (_) {}
+      try { if (typeof refreshNotificationUi === 'function') refreshNotificationUi(); } catch (_) {}
+    }
+    if (id === 'approvals' || document.getElementById('approvals')?.classList.contains('active')) {
+      try { if (typeof renderApprovalsWorkspace === 'function') renderApprovalsWorkspace(); } catch (_) {}
     }
     if (id === 'products' || document.getElementById('products')?.classList.contains('active')) {
       if (typeof productsView === 'function') productsView();
@@ -32607,6 +32632,113 @@ function refreshActiveViewAfterSync(reason) {
   } catch (e) {
     console.warn('refreshActiveViewAfterSync', reason, e);
   }
+}
+
+/** Fast path: bills + cash only — what Approvals / dashboard badges need. */
+async function pullApprovalsSliceFromCloud() {
+  if (!cloud?.client || !cloud?.user) return false;
+  ensureBooksDb();
+  const organizationId = cloud.organizationId || (typeof ensureCloudOrganization === 'function' ? await ensureCloudOrganization() : null);
+  if (!organizationId) return false;
+  let changed = false;
+  try {
+    const { data: bills, error } = await cloud.client.from('books_bills')
+      .select('*').eq('organization_id', organizationId).limit(500);
+    if (!error && bills) {
+      if (!Array.isArray(db.bills)) db.bills = [];
+      bills.forEach(row => {
+        const lid = String(row.local_id || row.id || '');
+        if (!lid) return;
+        const meta = row.approval_meta || {};
+        const existing = db.bills.find(b => b && String(b.id) === lid);
+        if (existing) {
+          if (row.status && row.status !== existing.status) { existing.status = row.status; changed = true; }
+          if (meta.approval_chain) { existing.approval_chain = meta.approval_chain; changed = true; }
+          if (meta.approval_level_index != null && Number(existing.approval_level_index || 0) !== Number(meta.approval_level_index)) {
+            existing.approval_level_index = meta.approval_level_index; changed = true;
+          }
+          if (meta.approval_level != null) existing.approval_level = meta.approval_level;
+          if (row.requested_by && !existing.requested_by) existing.requested_by = row.requested_by;
+          if (row.requested_by_email && !existing.requested_by_email) existing.requested_by_email = row.requested_by_email;
+          if (row.paid_at) existing.paidAt = row.paid_at;
+          if (row.documents && (!existing.documents || !existing.documents.length)) existing.documents = row.documents;
+          existing.updated_at = row.updated_at || existing.updated_at;
+        } else {
+          db.bills.push({
+            id: lid,
+            supplier: row.supplier,
+            category: row.category,
+            amount: Number(row.amount) || 0,
+            tax: Number(row.tax) || 0,
+            currency: row.currency,
+            date: row.bill_date,
+            due: row.due_date,
+            note: row.note,
+            status: row.status || 'open',
+            paidAt: row.paid_at,
+            requested_by: row.requested_by || null,
+            requested_by_email: row.requested_by_email || null,
+            documents: row.documents || [],
+            approval_chain: meta.approval_chain || null,
+            approval_level_index: meta.approval_level_index || 0,
+            approval_level: meta.approval_level || null,
+            approved_by: meta.approved_by || null,
+            approved_at: meta.approved_at || null,
+            updated_at: row.updated_at || null
+          });
+          changed = true;
+        }
+      });
+    }
+  } catch (e) { console.warn('pullApprovalsSlice bills', e.message || e); }
+  try {
+    const { data: cashRows, error: cashErr } = await cloud.client.from('books_cash_entries')
+      .select('*').eq('organization_id', organizationId).limit(400);
+    if (!cashErr && cashRows) {
+      if (!Array.isArray(db.cashEntries)) db.cashEntries = [];
+      cashRows.forEach(row => {
+        const lid = String(row.local_id || row.id || '');
+        if (!lid) return;
+        const meta = row.approval_meta || {};
+        const existing = db.cashEntries.find(c => c && String(c.id) === lid);
+        if (existing) {
+          if (row.status && row.status !== existing.status) { existing.status = row.status; changed = true; }
+          if (meta.approval_chain) { existing.approval_chain = meta.approval_chain; changed = true; }
+          if (meta.approval_level_index != null && Number(existing.approval_level_index || 0) !== Number(meta.approval_level_index)) {
+            existing.approval_level_index = meta.approval_level_index; changed = true;
+          }
+          if (meta.approval_level != null) existing.approval_level = meta.approval_level;
+        } else {
+          db.cashEntries.push({
+            id: lid,
+            type: row.entry_type || 'out',
+            category: row.category,
+            amount: Number(row.amount) || 0,
+            currency: row.currency,
+            date: row.entry_date,
+            note: row.note,
+            bankAccountId: row.bank_account_id,
+            offsetAccountId: row.offset_account_id,
+            status: row.status || 'posted',
+            source: row.source || 'manual',
+            documents: row.documents || [],
+            requested_by: row.requested_by || null,
+            requested_by_email: row.requested_by_email || null,
+            approval_chain: meta.approval_chain || null,
+            approval_level_index: meta.approval_level_index || 0,
+            approval_level: meta.approval_level || null,
+            approved_by: row.approved_by || null,
+            approved_at: row.approved_at || null
+          });
+          changed = true;
+        }
+      });
+    }
+  } catch (e) { console.warn('pullApprovalsSlice cash', e.message || e); }
+  if (changed) {
+    try { save(); } catch (_) {}
+  }
+  return changed;
 }
 
 async function refreshFromCloudLive(opts) {
@@ -32623,10 +32755,18 @@ async function refreshFromCloudLive(opts) {
   }
   LIVE_SYNC.inFlight = true;
   try {
-    try { await pullBooksFromCloud(); } catch (e) { console.warn('live books', e.message || e); }
-    try { await pullProductsFromCloud(); } catch (e) { console.warn('live products', e.message || e); }
-    try { await pullLocationsFromCloud(); } catch (e) { console.warn('live locations', e.message || e); }
-    try { await pullPurchasesBundleFromCloud(); } catch (e) { console.warn('live purchases', e.message || e); }
+    // Approvals-first: cheap slice, then heavier pulls in parallel
+    if (opts.approvalsOnly) {
+      await pullApprovalsSliceFromCloud();
+    } else {
+      await Promise.all([
+        pullApprovalsSliceFromCloud().catch(e => console.warn('live appr', e.message || e)),
+        (typeof pullBooksFromCloud === 'function' ? pullBooksFromCloud() : Promise.resolve()).catch(e => console.warn('live books', e.message || e)),
+        (typeof pullProductsFromCloud === 'function' ? pullProductsFromCloud() : Promise.resolve()).catch(e => console.warn('live products', e.message || e)),
+        (typeof pullLocationsFromCloud === 'function' ? pullLocationsFromCloud() : Promise.resolve()).catch(e => console.warn('live locations', e.message || e)),
+        (typeof pullPurchasesBundleFromCloud === 'function' ? pullPurchasesBundleFromCloud() : Promise.resolve()).catch(e => console.warn('live purchases', e.message || e))
+      ]);
+    }
     LIVE_SYNC.lastPullAt = Date.now();
     if (opts.render !== false) refreshActiveViewAfterSync(opts.reason || 'cloud');
     return true;
@@ -32636,7 +32776,14 @@ async function refreshFromCloudLive(opts) {
 }
 
 function onLiveTabVisible() {
-  refreshFromCloudLive({ reason: 'visibility' }).catch(() => {});
+  const onAppr = document.getElementById('approvals')?.classList.contains('active');
+  const onHome = document.getElementById('home')?.classList.contains('active')
+    || document.getElementById('dashboard')?.classList.contains('active');
+  if (onAppr || onHome) {
+    refreshFromCloudLive({ reason: 'visibility', approvalsOnly: true, minMs: 5000 }).catch(() => {});
+  } else {
+    refreshFromCloudLive({ reason: 'visibility' }).catch(() => {});
+  }
 }
 
 function startLiveSyncWatchers() {
