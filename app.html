@@ -8835,6 +8835,7 @@ async function startCloudSync(client, user) {
     try { await pullLocationsFromCloud(); } catch (e) { console.warn('locations pull', e.message || e); }
     try { await pullPurchasesBundleFromCloud(); } catch (e) { console.warn('purchases pull', e.message || e); }
     try { await pushBooksToCloud(); } catch (e) { console.warn('books push', e.message || e); }
+    try { LIVE_SYNC.lastPullAt = Date.now(); startLiveSyncWatchers(); } catch (_) {}
     // After site-data clear: confirm restore so user knows the same org came back
     try {
       const orgName = (db.profile && db.profile.name) || '';
@@ -32561,6 +32562,126 @@ function queueBooksCloudSync() {
     pushBooksToCloud().catch(e => console.warn('books push', e.message || e));
   }, 400);
 }
+
+/* ------------------------------------------------------------------
+ * Live refresh — reduce "must hard-refresh" lag
+ *  - Pull cloud when tab becomes visible / focused (throttled)
+ *  - Light poll while tab is open
+ *  - Cross-tab: storage events from POS / other app tabs
+ * ------------------------------------------------------------------ */
+const LIVE_SYNC = {
+  lastPullAt: 0,
+  lastUiAt: 0,
+  inFlight: false,
+  pollTimer: null,
+  minPullMs: 8000,
+  pollMs: 45000
+};
+
+function refreshActiveViewAfterSync(reason) {
+  try {
+    const active = document.querySelector('section.view.active, section.view.books-shell.active, .view.active');
+    const id = active && active.id;
+    if (id === 'books' || (typeof booksPage === 'string' && document.getElementById('books')?.classList.contains('active'))) {
+      if (typeof booksView === 'function') booksView();
+      if (typeof booksTab === 'string' && booksTab === 'vat' && typeof renderVatSummary === 'function') renderVatSummary();
+    }
+    if (id === 'inventory' || document.getElementById('inventory')?.classList.contains('active')) {
+      if (typeof inventoryView === 'function') inventoryView(typeof _invTab !== 'undefined' ? _invTab : 'today');
+    }
+    if (id === 'purchases' || document.getElementById('purchases')?.classList.contains('active')) {
+      if (typeof purchasesView === 'function') purchasesView();
+    }
+    if (id === 'approvals' || document.getElementById('approvals')?.classList.contains('active')) {
+      if (typeof approvalsView === 'function') approvalsView();
+      else if (typeof refreshApprovalsUI === 'function') refreshApprovalsUI();
+    }
+    if (id === 'dashboard' || id === 'home' || document.getElementById('dashboard')?.classList.contains('active')) {
+      if (typeof dashboard === 'function') dashboard();
+    }
+    if (id === 'products' || document.getElementById('products')?.classList.contains('active')) {
+      if (typeof productsView === 'function') productsView();
+      else if (typeof renderProductsList === 'function') renderProductsList();
+    }
+    if (typeof applyRoleGates === 'function') applyRoleGates();
+  } catch (e) {
+    console.warn('refreshActiveViewAfterSync', reason, e);
+  }
+}
+
+async function refreshFromCloudLive(opts) {
+  opts = opts || {};
+  if (!cloud?.client || !cloud?.user) return false;
+  if (!cloud.hydrated && !opts.force) return false;
+  if (LIVE_SYNC.inFlight) return false;
+  const now = Date.now();
+  if (!opts.force && (now - LIVE_SYNC.lastPullAt) < (opts.minMs != null ? opts.minMs : LIVE_SYNC.minPullMs)) {
+    return false;
+  }
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden' && !opts.force) {
+    return false;
+  }
+  LIVE_SYNC.inFlight = true;
+  try {
+    try { await pullBooksFromCloud(); } catch (e) { console.warn('live books', e.message || e); }
+    try { await pullProductsFromCloud(); } catch (e) { console.warn('live products', e.message || e); }
+    try { await pullLocationsFromCloud(); } catch (e) { console.warn('live locations', e.message || e); }
+    try { await pullPurchasesBundleFromCloud(); } catch (e) { console.warn('live purchases', e.message || e); }
+    LIVE_SYNC.lastPullAt = Date.now();
+    if (opts.render !== false) refreshActiveViewAfterSync(opts.reason || 'cloud');
+    return true;
+  } finally {
+    LIVE_SYNC.inFlight = false;
+  }
+}
+
+function onLiveTabVisible() {
+  refreshFromCloudLive({ reason: 'visibility' }).catch(() => {});
+}
+
+function startLiveSyncWatchers() {
+  if (LIVE_SYNC._started) return;
+  LIVE_SYNC._started = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') onLiveTabVisible();
+  });
+  window.addEventListener('focus', () => {
+    refreshFromCloudLive({ reason: 'focus' }).catch(() => {});
+  });
+  window.addEventListener('online', () => {
+    refreshFromCloudLive({ force: true, reason: 'online' }).catch(() => {});
+    try { if (typeof queueBooksCloudSync === 'function') queueBooksCloudSync(); } catch (_) {}
+  });
+  // POS / other tab wrote shared localStorage
+  window.addEventListener('storage', (e) => {
+    if (!e || !e.key) return;
+    const uid = activeUserId || cloud?.user?.id;
+    if (!uid) return;
+    const myKey = typeof scopedDbKey === 'function' ? scopedDbKey(uid) : ('invoicedey-v2-user-' + uid);
+    if (e.key !== myKey && e.key.indexOf('invoicedey-') !== 0) return;
+    // Re-read local cache then pull cloud for journals POS pushed
+    try {
+      if (typeof loadUserLocalDb === 'function' && uid) loadUserLocalDb(uid);
+    } catch (_) {}
+    refreshActiveViewAfterSync('storage');
+    refreshFromCloudLive({ minMs: 3000, reason: 'storage' }).catch(() => {});
+  });
+  clearInterval(LIVE_SYNC.pollTimer);
+  LIVE_SYNC.pollTimer = setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    refreshFromCloudLive({ reason: 'poll' }).catch(() => {});
+  }, LIVE_SYNC.pollMs);
+}
+
+// Boot watchers once DOM is ready
+try {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { try { startLiveSyncWatchers(); } catch (_) {} });
+  } else {
+    startLiveSyncWatchers();
+  }
+} catch (_) {}
+
 
 /** Immediate push of pending bills + cash so other approvers see level advances. */
 async function pushBooksApprovalsImmediate() {
