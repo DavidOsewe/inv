@@ -5601,11 +5601,19 @@ body:has(.modalback.show) .notif-panel {
       </div>
 <div id="booksPanelVat" hidden>
         <div class="insight">
-          <h3>VAT summary</h3>
-          <p class="section-sub" style="margin:0 0 12px">
-            Output VAT (sales) vs input VAT (purchases) for the selected period.
-            POS treats prices as <b>tax-inclusive</b> at your default tax rate. Invoices use exclusive tax.
-          </p>
+          <div style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px">
+            <div>
+              <h3 style="margin:0">VAT summary</h3>
+              <p class="section-sub" style="margin:6px 0 0;max-width:520px">
+                Output VAT (sales) vs input VAT (purchases) for the selected period.
+                POS treats prices as <b>tax-inclusive</b> at your default tax rate. Invoices use exclusive tax.
+              </p>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;flex-shrink:0">
+              <button type="button" class="button small primary" id="btnVatExportCsv" style="min-height:40px">Download Excel (CSV)</button>
+              <button type="button" class="button small primary" id="btnVatExportPdf" style="min-height:40px">Download PDF</button>
+            </div>
+          </div>
           <div id="booksVat"></div>
         </div>
       </div>
@@ -24653,11 +24661,7 @@ function renderVatSummary() {
   if (!el) return;
   const data = collectVatSummaryData();
   const fmt = (n) => (typeof money === 'function' ? money(n) : String(Math.round((Number(n) || 0) * 100) / 100));
-  let html = '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">'
-    + '<button type="button" class="button small" id="btnVatExportCsv">Download Excel (CSV)</button>'
-    + '<button type="button" class="button small" id="btnVatExportPdf">Download PDF</button>'
-    + '</div>';
-  html += '<div class="cards stack-gap" style="margin-bottom:14px">'
+  let html = '<div class="cards stack-gap" style="margin-bottom:14px">'
     + '<div class="card"><small>Output VAT (sales)</small><b>' + fmt(data.outputNet) + '</b><span class="mini">Credits − debits on ' + data.outId + '</span></div>'
     + '<div class="card"><small>Input VAT (purchases)</small><b>' + fmt(data.inputNet) + '</b><span class="mini">Debits − credits on ' + data.inId + '</span></div>'
     + '<div class="card"><small>Net VAT ' + (data.payable >= 0 ? 'payable' : 'recoverable') + '</small><b>' + fmt(Math.abs(data.payable)) + '</b><span class="mini">' + String(data.periodLabel).replace(/</g, '') + '</span></div>'
@@ -24679,13 +24683,27 @@ function renderVatSummary() {
     html += '</div>';
   }
   el.innerHTML = html;
-  document.getElementById('btnVatExportCsv')?.addEventListener('click', () => {
-    try { exportVatSummaryCsv(); } catch (e) { toast(e.message || 'CSV export failed'); }
-  });
-  document.getElementById('btnVatExportPdf')?.addEventListener('click', () => {
-    try { exportVatSummaryPdf(); } catch (e) { toast(e.message || 'PDF export failed'); }
-  });
 }
+
+function wireVatExportButtons() {
+  const csv = document.getElementById('btnVatExportCsv');
+  const pdf = document.getElementById('btnVatExportPdf');
+  if (csv && !csv._vatWired) {
+    csv._vatWired = true;
+    csv.addEventListener('click', (e) => {
+      e.preventDefault();
+      try { exportVatSummaryCsv(); } catch (err) { toast(err.message || 'CSV export failed'); }
+    });
+  }
+  if (pdf && !pdf._vatWired) {
+    pdf._vatWired = true;
+    pdf.addEventListener('click', (e) => {
+      e.preventDefault();
+      try { exportVatSummaryPdf(); } catch (err) { toast(err.message || 'PDF export failed'); }
+    });
+  }
+}
+
 
 function exportVatSummaryCsv() {
   const data = collectVatSummaryData();
@@ -26036,7 +26054,9 @@ function setBooksTab(tab) {
     try { if (typeof renderBankTransactions === 'function') renderBankTransactions(); } catch (_) {}
   }
   if (booksTab === 'vat') {
+    try { wireVatExportButtons(); } catch (_) {}
     try { renderVatSummary(); } catch (e) { console.warn('vat summary', e); }
+    try { wireVatExportButtons(); } catch (_) {}
   }
   try {
     document.querySelectorAll('.books-nav [data-books-page]').forEach(btn => {
@@ -27793,6 +27813,16 @@ function accrueSupplierBill(bill) {
     lines,
     documents: Array.isArray(bill.documents) ? bill.documents : []
   });
+  try {
+    const orphan = typeof totalOpenGrni === 'function' ? totalOpenGrni() : 0;
+    const glBal = typeof glGrniBalance === 'function' ? glGrniBalance() : 0;
+    if (glBal > 0.009 && !(bill.purchase_id && purchaseHasInventoryReceipts(bill.purchase_id))) {
+      console.warn('Bill posted as expense while GRNI remains on the balance sheet', { glBal, orphan });
+      try {
+        toast('Posted. GRNI still on BS ' + (typeof money === 'function' ? money(glBal) : glBal) + ' — link the next bill to the PO (3-way) or clear GRNI on pay.');
+      } catch (_) {}
+    }
+  } catch (_) {}
 }
 
 /** Confirm pay: show Dr AP / Cr bank before posting. */
@@ -27984,7 +28014,43 @@ function paySupplierBill(billId, opts) {
   } catch (_) {}
   save();
   try { queueBooksCloudSync(); } catch (_) {}
-  toast('Payment posted — AP cleared');
+
+  // Payment only clears AP. If goods were received to GRNI but the bill never
+  // ran 3-way (expense path / missing PO link), GRNI would stick on the BS.
+  let grniNote = '';
+  try {
+    const pid = bill.purchase_id || null;
+    if (pid && !(bill.three_way || bill.grni_cleared > 0)) {
+      const open = typeof purchaseOpenGrni === 'function' ? purchaseOpenGrni(pid) : 0;
+      const glBal = typeof glGrniBalance === 'function' ? glGrniBalance() : 0;
+      const clearAmt = Math.min(open > 0.009 ? open : (Number(bill.amount) || 0), glBal > 0.009 ? glBal : (Number(bill.amount) || 0));
+      if (clearAmt > 0.009 && glBal > 0.009) {
+        const offset = (bill.category && bill.category !== '2010' && bill.category !== GRNI_ACCOUNT_ID)
+          ? bill.category
+          : (typeof getPpvAccountId === 'function' ? getPpvAccountId() : '5050');
+        const j = postGrniClearingJournal(pid, clearAmt, {
+          billId: bill.id,
+          date: payDate,
+          offsetAccountId: offset,
+          memo: 'Clear GRNI after payment · ' + (bill.supplier || '') + ' · ' + (bill.note || '')
+        });
+        if (j) {
+          bill.grni_cleared = clearAmt;
+          bill.three_way = true;
+          grniNote = ' · GRNI cleared ' + (typeof money === 'function' ? money(clearAmt) : clearAmt);
+          try { save(); } catch (_) {}
+        }
+      }
+    } else if (!pid) {
+      const glBal = typeof glGrniBalance === 'function' ? glGrniBalance() : 0;
+      if (glBal > 0.009) {
+        grniNote = ' · note: GRNI still on BS (' + (typeof money === 'function' ? money(glBal) : glBal) + ') — link bills to the PO next time';
+      }
+    }
+  } catch (e) { console.warn('grni clear on pay', e); }
+
+  try { queueBooksCloudSync(); } catch (_) {}
+  toast('Payment posted — AP cleared' + grniNote);
   try {
     setBooksPage('ap', 'payables');
     renderBooksPayables();

@@ -2139,6 +2139,29 @@ async function recoverSessionFromStorage() {
 async function boot() {
   setOnlineUI();
   window.addEventListener('online', setOnlineUI);
+
+const LIVE_POS_SYNC = { lastFlush: 0 };
+function startPosLiveSync() {
+  if (LIVE_POS_SYNC._started) return;
+  LIVE_POS_SYNC._started = true;
+  const kick = () => {
+    const now = Date.now();
+    if (now - LIVE_POS_SYNC.lastFlush < 4000) return;
+    LIVE_POS_SYNC.lastFlush = now;
+    try { flushSyncQueue().catch(() => {}); } catch (_) {}
+  };
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') kick(); });
+  window.addEventListener('focus', kick);
+  window.addEventListener('online', () => { LIVE_POS_SYNC.lastFlush = 0; kick(); });
+  setInterval(() => {
+    if (document.visibilityState === 'visible') kick();
+  }, 20000);
+}
+try {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startPosLiveSync);
+  else startPosLiveSync();
+} catch (_) {}
+
   window.addEventListener('offline', setOnlineUI);
 
   let session = null;
