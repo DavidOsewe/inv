@@ -5387,7 +5387,6 @@ body:has(.modalback.show) .notif-panel {
         <button type="button" class="button small" data-books-page="banking">Banking</button>
         <button type="button" class="button small" data-books-page="recurring">Recurring</button>
         <button type="button" class="button small" data-books-page="reports">Reports</button>
-        <button type="button" class="button small" data-books-page="reports" data-books-open-tab="vat" id="booksNavVat">VAT</button>
         <button type="button" class="button small" data-books-page="setup">Settings</button>
       </nav>
 
@@ -5597,6 +5596,35 @@ body:has(.modalback.show) .notif-panel {
           <h3>Audit trail</h3>
           <p class="section-sub">Append-only log of books changes: journal posts, reversals, bank match/add/exclude, rules, and chart updates. Events cannot be edited or deleted here.</p>
           <div id="booksAuditList"></div>
+        </div>
+      </div>
+<div id="booksPanelReportsList" hidden>
+        <div class="insight">
+          <h3 class="books-panel-title" style="margin:0 0 4px">Reports</h3>
+          <p class="section-sub" style="margin:0 0 14px">Pick a report. Period tools above apply to all statements.</p>
+          <div id="booksReportsCatalog" style="display:grid;gap:10px"></div>
+        </div>
+      </div>
+      <div id="booksPanelSales" hidden>
+        <div class="insight">
+          <div style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px">
+            <div>
+              <h3 style="margin:0">Sales summary</h3>
+              <p class="section-sub" style="margin:6px 0 0;max-width:560px">
+                POS-first product performance for the selected period — quantity, sales value, cost, margin, and remaining stock.
+              </p>
+              <button type="button" class="button small" id="btnSalesBackCatalog" style="margin-top:8px">← All reports</button>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end">
+              <div class="field" style="margin:0">
+                <label>Outlet</label>
+                <select id="salesSummaryLocation" style="min-width:160px"><option value="">All outlets</option></select>
+              </div>
+              <button type="button" class="button small primary" id="btnSalesExportCsv" style="min-height:40px">Download Excel (CSV)</button>
+              <button type="button" class="button small primary" id="btnSalesExportPdf" style="min-height:40px">Download PDF</button>
+            </div>
+          </div>
+          <div id="booksSalesSummary"></div>
         </div>
       </div>
 <div id="booksPanelVat" hidden>
@@ -24958,6 +24986,277 @@ function collectVatSummaryData() {
 }
 
 /** Period output vs input VAT from journals (reporting currency). */
+/** Catalog of all Books reports (single list under Reports). */
+function renderBooksReportsCatalog() {
+  const host = document.getElementById('booksPanelReportsList');
+  if (host) {
+    host.hidden = false;
+    host.removeAttribute('hidden');
+    host.style.display = '';
+  }
+  const el = document.getElementById('booksReportsCatalog');
+  if (!el) {
+    console.warn('booksReportsCatalog missing from DOM');
+    return;
+  }
+  const range = (typeof booksDateRange === 'function') ? booksDateRange() : null;
+  const periodLabel = range && range.from
+    ? (range.from + (range.to && range.to !== range.from ? (' → ' + range.to) : ''))
+    : 'Selected period';
+  const items = [
+    { id: 'sales', title: 'Sales summary', blurb: 'POS product performance — qty, value, cost, margin, stock left.', tag: 'POS' },
+    { id: 'pnl', title: 'Profit & loss', blurb: 'Revenue, COGS, operating expenses and net profit for the period.', tag: 'P&L' },
+    { id: 'balance', title: 'Balance sheet', blurb: 'Assets, liabilities and equity as at period end.', tag: 'BS' },
+    { id: 'cashflow', title: 'Cash flow', blurb: 'Indirect cash movements from operations, investing and financing.', tag: 'CF' },
+    { id: 'vat', title: 'VAT summary', blurb: 'Output VAT vs input VAT for the period · CSV / PDF export.', tag: 'Tax' },
+    { id: 'trial', title: 'Trial balance', blurb: 'Debits and credits by account · validate books equation.', tag: 'GL' },
+    { id: 'ledger', title: 'General ledger', blurb: 'Drill into any account and download ledger CSV / PDF.', tag: 'GL' }
+  ];
+  el.innerHTML = '<p class="section-sub" style="margin:0 0 8px">Period · ' + String(periodLabel).replace(/</g, '') + '</p>' +
+    items.map(it =>
+      '<button type="button" class="button" data-open-report="' + it.id + '" style="display:flex;width:100%;text-align:left;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:12px;border:1px solid var(--line);background:var(--panel)">' +
+      '<span style="font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:4px 8px;border-radius:999px;background:var(--panel-2);color:var(--muted);flex-shrink:0">' + it.tag + '</span>' +
+      '<span style="flex:1;min-width:0"><span style="display:block;font-weight:700;font-size:14px;color:var(--text)">' + it.title + '</span>' +
+      '<span style="display:block;margin-top:4px;font-size:12px;color:var(--muted);font-weight:400">' + it.blurb + '</span></span>' +
+      '<span style="color:var(--muted);font-size:18px;line-height:1">›</span></button>'
+    ).join('');
+  el.querySelectorAll('[data-open-report]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-open-report');
+      try { setBooksPage('reports', id); } catch (_) {
+        try { setBooksTab(id); } catch (__) {}
+      }
+      try { booksView(); } catch (_) {}
+    });
+  });
+}
+
+/** Build product-level POS sales rows for current books period. */
+function buildSalesSummaryRows(locationId) {
+  ensureBooksDb();
+  try { if (typeof ensurePosDb === 'function') ensurePosDb(); } catch (_) {}
+  const range = (typeof booksDateRange === 'function') ? booksDateRange() : null;
+  const from = range && range.from ? range.from : null;
+  const to = range && range.to ? range.to : null;
+  const inPeriod = (iso) => {
+    if (!iso) return !from && !to;
+    const d = String(iso).slice(0, 10);
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    return true;
+  };
+  const byPid = new Map();
+  (db.posSales || []).forEach(sale => {
+    if (!sale) return;
+    if (!inPeriod(sale.sold_at || sale.created_at || sale.date)) return;
+    if (locationId) {
+      if (sale.location_id && String(sale.location_id) !== String(locationId)) return;
+      // name fallback
+      if (!sale.location_id && sale.location_name) {
+        const loc = (db.locations || []).find(l => String(l.id) === String(locationId));
+        if (loc && String(sale.location_name).toLowerCase() !== String(loc.name || '').toLowerCase()) return;
+      }
+    }
+    (sale.lines || sale.items || []).forEach(line => {
+      if (!line) return;
+      const pid = line.product_id || line.productId || ('name:' + (line.name || 'item'));
+      let row = byPid.get(pid);
+      if (!row) {
+        const p = (db.products || []).find(x => String(x.id) === String(pid));
+        row = {
+          product_id: pid,
+          code: (p && (p.sku || p.barcode || p.code)) || (line.sku || line.code || String(pid).slice(0, 8)),
+          name: (line.name || (p && p.name) || 'Product'),
+          sell_price: Number(line.price != null ? line.price : (p && p.price)) || 0,
+          qty: 0,
+          sales_value: 0,
+          discount: 0,
+          surcharge: 0,
+          cost_value: 0,
+          remaining: 0
+        };
+        byPid.set(pid, row);
+      }
+      const q = Number(line.qty) || 0;
+      const price = Number(line.price != null ? line.price : 0) || 0;
+      const cost = Number(line.cost != null ? line.cost : 0) || 0;
+      const lineTotal = line.total != null ? Number(line.total) : (q * price);
+      const disc = Number(line.discount) || 0;
+      const sur = Number(line.surcharge) || 0;
+      row.qty += q;
+      row.sales_value += lineTotal;
+      row.discount += disc;
+      row.surcharge += sur;
+      row.cost_value += (cost > 0 ? cost * q : 0);
+      if (price > 0) row.sell_price = price;
+    });
+  });
+  // Remaining qty from stock_by_location or product
+  byPid.forEach((row, pid) => {
+    if (String(pid).startsWith('name:')) { row.remaining = ''; return; }
+    let rem = 0;
+    try {
+      if (typeof stockQtyAt === 'function') {
+        if (locationId) rem = Number(stockQtyAt(pid, locationId)) || 0;
+        else {
+          (db.locations || []).forEach(l => {
+            if (l && l.active === false) return;
+            rem += Number(stockQtyAt(pid, l.id)) || 0;
+          });
+          if (!rem) {
+            const p = (db.products || []).find(x => String(x.id) === String(pid));
+            rem = p ? (Number(p.stock_qty) || 0) : 0;
+          }
+        }
+      } else {
+        const p = (db.products || []).find(x => String(x.id) === String(pid));
+        rem = p ? (Number(p.stock_qty) || 0) : 0;
+      }
+    } catch (_) {}
+    row.remaining = rem;
+  });
+  return Array.from(byPid.values()).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+function renderSalesSummary() {
+  const el = document.getElementById('booksSalesSummary');
+  if (!el) return;
+  // Populate outlet filter
+  const sel = document.getElementById('salesSummaryLocation');
+  if (sel && !sel._wired) {
+    const locs = (db.locations || []).filter(l => l && l.active !== false);
+    const cur = sel.value || '';
+    sel.innerHTML = '<option value="">All outlets</option>' +
+      locs.map(l => '<option value="' + String(l.id).replace(/"/g, '') + '">' +
+        String(l.name || l.code || l.id).replace(/</g, '') + '</option>').join('');
+    if (cur) sel.value = cur;
+    sel.addEventListener('change', () => renderSalesSummary());
+    sel._wired = true;
+  }
+  const locationId = sel && sel.value ? sel.value : '';
+  const rows = buildSalesSummaryRows(locationId);
+  const range = (typeof booksDateRange === 'function') ? booksDateRange() : null;
+  const periodBit = range && range.from
+    ? ('For the period: ' + range.from + (range.to ? (' to ' + range.to) : ''))
+    : '';
+  const org = (db.profile && (db.profile.name || db.profile.businessName)) || 'Your company';
+  let totalQty = 0, totalSales = 0, totalCost = 0, totalMargin = 0;
+  rows.forEach(r => {
+    totalQty += r.qty;
+    totalSales += r.sales_value;
+    totalCost += r.cost_value;
+  });
+  totalMargin = totalSales - totalCost;
+  const marginPct = totalSales > 0.009 ? (totalMargin / totalSales * 100) : 0;
+
+  if (!rows.length) {
+    el.innerHTML = '<div class="empty" style="padding:20px 0"><h3 style="margin:0 0 6px;font-size:15px">No POS sales in this period</h3>' +
+      '<p class="section-sub" style="margin:0">Complete checkouts in POS, then return here. Use period chips above to widen the window.</p></div>';
+  } else {
+    const fmt = (n) => (typeof money === 'function' ? money(n) : (Math.round(n * 100) / 100));
+    el.innerHTML =
+      '<div style="margin-bottom:10px;font-size:13px"><b>' + String(org).replace(/</g, '') + '</b>' +
+      (periodBit ? (' · <span class="section-sub">' + periodBit + '</span>') : '') +
+      (locationId && sel ? (' · <span class="section-sub">' + String(sel.options[sel.selectedIndex].text).replace(/</g, '') + '</span>') : '') +
+      '</div>' +
+      '<div style="overflow:auto;border:1px solid var(--line);border-radius:10px">' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:920px">' +
+      '<thead><tr style="background:var(--panel-2);text-align:left">' +
+      ['#','Product code','Product name','Selling price','Sold qty','Sales value','Discount','Surcharge','Cost','Margin','% Margin','Remaining'].map(h =>
+        '<th style="padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;font-weight:700">' + h + '</th>'
+      ).join('') + '</tr></thead><tbody>' +
+      rows.map((r, i) => {
+        const margin = r.sales_value - r.cost_value;
+        const pct = r.sales_value > 0.009 ? (margin / r.sales_value * 100) : 0;
+        return '<tr>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line)">' + (i + 1) + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line)">' + String(r.code || '').replace(/</g, '') + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line)">' + String(r.name || '').replace(/</g, '') + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line);text-align:right">' + fmt(r.sell_price) + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line);text-align:right">' + (Math.round(r.qty * 1000) / 1000) + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line);text-align:right">' + fmt(r.sales_value) + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line);text-align:right">' + fmt(r.discount || 0) + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line);text-align:right">' + fmt(r.surcharge || 0) + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line);text-align:right">' + fmt(r.cost_value) + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line);text-align:right;font-weight:600">' + fmt(margin) + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line);text-align:right">' + (Math.round(pct * 100) / 100).toFixed(2) + '</td>' +
+          '<td style="padding:7px 10px;border-bottom:1px solid var(--line);text-align:right">' + (r.remaining === '' ? '—' : r.remaining) + '</td>' +
+          '</tr>';
+      }).join('') +
+      '<tr style="background:var(--panel-2);font-weight:700">' +
+      '<td colspan="4" style="padding:8px 10px">Totals</td>' +
+      '<td style="padding:8px 10px;text-align:right">' + (Math.round(totalQty * 1000) / 1000) + '</td>' +
+      '<td style="padding:8px 10px;text-align:right">' + fmt(totalSales) + '</td>' +
+      '<td style="padding:8px 10px;text-align:right">—</td><td style="padding:8px 10px;text-align:right">—</td>' +
+      '<td style="padding:8px 10px;text-align:right">' + fmt(totalCost) + '</td>' +
+      '<td style="padding:8px 10px;text-align:right">' + fmt(totalMargin) + '</td>' +
+      '<td style="padding:8px 10px;text-align:right">' + marginPct.toFixed(2) + '</td>' +
+      '<td style="padding:8px 10px;text-align:right">—</td></tr>' +
+      '</tbody></table></div>';
+  }
+
+  // Wire exports + back once
+  const csvBtn = document.getElementById('btnSalesExportCsv');
+  const pdfBtn = document.getElementById('btnSalesExportPdf');
+  const backBtn = document.getElementById('btnSalesBackCatalog');
+  if (csvBtn && !csvBtn._wired) {
+    csvBtn.addEventListener('click', () => exportSalesSummaryCsv());
+    csvBtn._wired = true;
+  }
+  if (pdfBtn && !pdfBtn._wired) {
+    pdfBtn.addEventListener('click', () => exportSalesSummaryPdf());
+    pdfBtn._wired = true;
+  }
+  if (backBtn && !backBtn._wired) {
+    backBtn.addEventListener('click', () => {
+      try { setBooksPage('reports', 'catalog'); renderBooksReportsCatalog(); } catch (_) {}
+    });
+    backBtn._wired = true;
+  }
+}
+
+function exportSalesSummaryCsv() {
+  const sel = document.getElementById('salesSummaryLocation');
+  const locationId = sel && sel.value ? sel.value : '';
+  const rows = buildSalesSummaryRows(locationId);
+  const esc = (v) => {
+    const t = String(v == null ? '' : v);
+    return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  };
+  const lines = [['#','Product code','Product name','Selling price','Sold qty','Sales value','Discount','Surcharge','Cost','Margin','% Margin','Remaining']];
+  rows.forEach((r, i) => {
+    const margin = r.sales_value - r.cost_value;
+    const pct = r.sales_value > 0.009 ? (margin / r.sales_value * 100) : 0;
+    lines.push([i + 1, r.code, r.name, r.sell_price, r.qty, r.sales_value, r.discount || 0, r.surcharge || 0, r.cost_value, margin, pct.toFixed(2), r.remaining === '' ? '' : r.remaining]);
+  });
+  const csv = lines.map(row => row.map(esc).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'sales-summary-' + (new Date().toISOString().slice(0, 10)) + '.csv';
+  a.click();
+  try { toast('Sales summary CSV downloaded'); } catch (_) {}
+}
+
+function exportSalesSummaryPdf() {
+  const host = document.getElementById('booksSalesSummary');
+  if (!host) return;
+  const org = (db.profile && (db.profile.name || db.profile.businessName)) || 'Your company';
+  const range = (typeof booksDateRange === 'function') ? booksDateRange() : null;
+  const periodBit = range && range.from ? (range.from + (range.to ? (' to ' + range.to) : '')) : '';
+  const w = window.open('', '_blank');
+  if (!w) { toast('Allow pop-ups to download PDF'); return; }
+  w.document.write('<!DOCTYPE html><html><head><title>Sales summary</title>' +
+    '<style>body{font-family:system-ui,sans-serif;padding:24px;color:#111}h1{font-size:18px;margin:0 0 4px}' +
+    'table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}' +
+    'th{background:#f3f4f6}td.num,th.num{text-align:right}.muted{color:#666;font-size:12px}</style></head><body>' +
+    '<h1>Sales Summary Report</h1>' +
+    '<div class="muted">' + String(org).replace(/</g, '') + (periodBit ? (' · ' + periodBit) : '') + '</div>' +
+    host.innerHTML +
+    '<script>window.onload=function(){setTimeout(function(){window.print()},200)}<\/script></body></html>');
+  w.document.close();
+}
+
 function renderVatSummary() {
   const el = document.getElementById('booksVat');
   if (!el) return;
@@ -26195,6 +26494,8 @@ const BOOKS_PAGES = {
   },
   reports: {
     tabs: [
+      { id: 'catalog', label: 'All reports' },
+      { id: 'sales', label: 'Sales summary' },
       { id: 'pnl', label: 'Profit & loss' },
       { id: 'balance', label: 'Balance sheet' },
       { id: 'cashflow', label: 'Cash flow' },
@@ -26202,7 +26503,7 @@ const BOOKS_PAGES = {
       { id: 'trial', label: 'Trial balance' },
       { id: 'ledger', label: 'General ledger' }
     ],
-    defaultTab: 'pnl',
+    defaultTab: 'catalog',
     actionLabel: 'PDF report',
     action: 'export'
   },
@@ -26255,7 +26556,6 @@ function setBooksPage(page, tab) {
     const openTab = btn.getAttribute('data-books-open-tab');
     let on = page === booksPage;
     if (openTab) on = on && (typeof booksTab === 'string' && booksTab === openTab);
-    else if (page === 'reports') on = on && booksTab !== 'vat';
     btn.classList.toggle('primary', !!on);
   });
   try {
@@ -26307,6 +26607,8 @@ function setBooksTab(tab) {
   } catch (_) {}
   const panels = {
     overview: 'booksPanelOverview',
+    catalog: 'booksPanelReportsList',
+    sales: 'booksPanelSales',
     pnl: 'booksPanelPnl',
     balance: 'booksPanelBalance',
     ledger: 'booksPanelLedger',
@@ -26335,7 +26637,14 @@ function setBooksTab(tab) {
     if (!el) return;
     // Panel may be shared by several tabs (e.g. all Money-out views)
     const shownFor = Object.entries(panels).filter(([, pid]) => pid === id).map(([tk]) => tk);
-    el.hidden = !shownFor.includes(booksTab);
+    const show = shownFor.includes(booksTab);
+    el.hidden = !show;
+    if (show) {
+      el.removeAttribute('hidden');
+      el.style.display = '';
+    } else {
+      el.setAttribute('hidden', '');
+    }
   });
   if (['payables', 'apqueue', 'apsuppliers', 'appaid'].includes(booksTab)) {
     try {
@@ -26360,6 +26669,12 @@ function setBooksTab(tab) {
     try { renderVatSummary(); } catch (e) { console.warn('vat summary', e); }
     try { wireVatExportButtons(); } catch (_) {}
   }
+  if (booksTab === 'catalog') {
+    try { renderBooksReportsCatalog(); } catch (e) { console.warn('reports catalog', e); }
+  }
+  if (booksTab === 'sales') {
+    try { renderSalesSummary(); } catch (e) { console.warn('sales summary', e); }
+  }
   try {
     document.querySelectorAll('.books-nav [data-books-page]').forEach(btn => {
       const page = btn.getAttribute('data-books-page');
@@ -26367,7 +26682,6 @@ function setBooksTab(tab) {
       if (!openTab && page !== 'reports') return;
       let on = page === booksPage;
       if (openTab) on = on && booksTab === openTab;
-      else if (page === 'reports') on = on && booksTab !== 'vat';
       btn.classList.toggle('primary', !!on);
     });
   } catch (_) {}
@@ -30842,9 +31156,21 @@ function booksView() {
   try { processDueRecurringJournals(); } catch (e) { console.warn('rj due', e); }
   try { save(); } catch {}
 
+  // Reports: prefer catalog when tab is stale / not a reports tab
+  if (booksPage === 'reports') {
+    const reportTabs = ['catalog', 'sales', 'pnl', 'balance', 'cashflow', 'vat', 'trial', 'ledger'];
+    if (!reportTabs.includes(booksTab)) booksTab = 'catalog';
+  }
   setBooksPage(booksPage, booksTab);
   try { renderBooksAttention(); } catch (e) {}
   try { if (booksTab === 'recurringj' || booksPage === 'recurring') renderBooksRecurringJ(); } catch (e) {}
+  try {
+    if (booksPage === 'reports') {
+      if (booksTab === 'catalog' && typeof renderBooksReportsCatalog === 'function') renderBooksReportsCatalog();
+      if (booksTab === 'sales' && typeof renderSalesSummary === 'function') renderSalesSummary();
+      if (booksTab === 'vat' && typeof renderVatSummary === 'function') renderVatSummary();
+    }
+  } catch (e) { console.warn('reports render', e); }
   try {
     const z = (db.bankTransactions || []).filter(t => t.status === 'pending' && Math.abs(Number(t.amount) || 0) < 0.001);
     if (z.length) {
@@ -37454,8 +37780,17 @@ document.getElementById('booksPages')?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-books-page]');
   if (!btn) return;
   const page = btn.getAttribute('data-books-page');
-  const openTab = btn.getAttribute('data-books-open-tab') || null;
+  let openTab = btn.getAttribute('data-books-open-tab') || null;
+  // Reports entry: always land on the catalog list unless a specific tab is requested
+  if (page === 'reports' && !openTab) openTab = 'catalog';
   setBooksPage(page, openTab || undefined);
+  try {
+    if (page === 'reports') {
+      if (openTab === 'catalog' && typeof renderBooksReportsCatalog === 'function') renderBooksReportsCatalog();
+      if (openTab === 'sales' && typeof renderSalesSummary === 'function') renderSalesSummary();
+      if (openTab === 'vat' && typeof renderVatSummary === 'function') renderVatSummary();
+    }
+  } catch (err) { console.warn('reports open', err); }
 });
 
 /* AR desk modals */
