@@ -8812,7 +8812,12 @@ async function startCloudSync(client, user) {
   // Hard account boundary: load ONLY this user's local cache.
   // Never carry the previous user's db, cloud IDs, clients or invoices.
   activeUserId = user.id;
-  loadUserLocalDb(user.id);
+  try {
+    await loadUserLocalDbAsync(user.id);
+  } catch (e) {
+    console.warn('local db load', e);
+    loadUserLocalDb(user.id);
+  }
 
   // Switch the growth meter immediately to this user's allowance.
   // Never display the previous/anonymous account's counter.
@@ -8977,7 +8982,22 @@ function loadUserLocalDb(userId) {
   const stored = localStorage.getItem(key);
   if (stored) {
     try {
-      db = JSON.parse(stored) || structuredClone(defaultDB);
+      const parsed = JSON.parse(stored) || structuredClone(defaultDB);
+      // Slim mirror is not the full books db — start clean and let cloud/IDB fill
+      if (parsed && parsed._slim) {
+        loadDefaultDb();
+        if (parsed.profile) db.profile = Object.assign({}, db.profile || {}, parsed.profile);
+        if (Array.isArray(parsed.clients)) db.clients = parsed.clients;
+        if (Array.isArray(parsed.invoices)) db.invoices = parsed.invoices;
+        if (Array.isArray(parsed.products)) db.products = parsed.products;
+        if (Array.isArray(parsed.locations)) db.locations = parsed.locations;
+        if (parsed.installedApps) db.installedApps = parsed.installedApps;
+        if (parsed.booksSettings) db.booksSettings = parsed.booksSettings;
+        if (parsed.coaOverrides) db.coaOverrides = parsed.coaOverrides;
+        if (Array.isArray(parsed.coaExtra)) db.coaExtra = parsed.coaExtra;
+      } else {
+        db = parsed;
+      }
     } catch {
       db = structuredClone(defaultDB);
     }
@@ -8986,7 +9006,6 @@ function loadUserLocalDb(userId) {
   }
   normalizeDbProfile();
   try { restoreApprovalSettingsMirror(); } catch (_) {}
-  // Shrink before first paint if this device already near quota
   try {
     const n = JSON.stringify(db).length;
     if (n > 3500000) pruneBooksForStorage(1);
@@ -9078,52 +9097,179 @@ function estimateLocalDbBytes() {
   }
 }
 
-function persistDb() {
-  const key = activeUserId ? scopedDbKey(activeUserId) : ANON_DB_KEY;
-  const write = (payload) => localStorage.setItem(key, payload);
-  const quotaToast = (msg) => {
-    if (typeof toast !== 'function') return;
-    const now = Date.now();
-    if (window.__lastQuotaToast && now - window.__lastQuotaToast < 45000) return;
-    window.__lastQuotaToast = now;
-    toast(msg);
-  };
+function openInvoicedeyIdb() {
+  return new Promise((resolve, reject) => {
+    try {
+      const req = indexedDB.open('invoicedey-idb-v1', 1);
+      req.onupgradeneeded = () => {
+        const idb = req.result;
+        if (!idb.objectStoreNames.contains('userDb')) idb.createObjectStore('userDb');
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('idb open failed'));
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function idbPutUserDb(userId, data) {
+  const key = userId || 'anon';
+  return openInvoicedeyIdb().then(idb => new Promise((resolve, reject) => {
+    try {
+      const tx = idb.transaction('userDb', 'readwrite');
+      tx.objectStore('userDb').put(data, key);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(tx.error || new Error('idb put failed'));
+    } catch (e) { reject(e); }
+  }));
+}
+
+function idbGetUserDb(userId) {
+  const key = userId || 'anon';
+  return openInvoicedeyIdb().then(idb => new Promise((resolve, reject) => {
+    try {
+      const tx = idb.transaction('userDb', 'readonly');
+      const req = tx.objectStore('userDb').get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error || new Error('idb get failed'));
+    } catch (e) { reject(e); }
+  }));
+}
+
+function idbDeleteUserDb(userId) {
+  const key = userId || 'anon';
+  return openInvoicedeyIdb().then(idb => new Promise((resolve) => {
+    try {
+      const tx = idb.transaction('userDb', 'readwrite');
+      tx.objectStore('userDb').delete(key);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch (_) { resolve(false); }
+  }));
+}
+
+/** Slim mirror for instant first paint only — never the full books history. */
+function buildSlimLocalMirror() {
   try {
-    // Proactive soft prune if payload is already large (~3.5MB of ~5MB quota)
-    let payload = JSON.stringify(db);
-    if (payload.length > 3500000) {
-      pruneBooksForStorage(1);
-      payload = JSON.stringify(db);
-    }
-    if (payload.length > 4500000) {
-      pruneBooksForStorage(2);
-      payload = JSON.stringify(db);
-    }
-    write(payload);
+    return {
+      _slim: true,
+      _idb: true,
+      profile: db.profile || {},
+      clients: (db.clients || []).slice(0, 80),
+      invoices: (db.invoices || []).slice(-40),
+      products: (db.products || []).slice(0, 200),
+      locations: db.locations || [],
+      installedApps: db.installedApps || null,
+      booksSettings: db.booksSettings || null,
+      coaOverrides: db.coaOverrides || null,
+      coaExtra: (db.coaExtra || []).slice(0, 100)
+    };
+  } catch (_) {
+    return { _slim: true, profile: db.profile || {} };
+  }
+}
+
+/**
+ * Primary offline store = IndexedDB (hundreds of MB available).
+ * localStorage only keeps a slim mirror so login still paints if IDB is slow.
+ * Users should never need to clear site data for normal growth.
+ */
+function persistDb() {
+  // Always strip attachment bodies before any write (cloud holds files when uploaded)
+  try { pruneBooksForStorage(0); } catch (_) {}
+  try {
+    // level 0 may not exist — soft strip docs only
+    const strip = (docs) => {
+      if (!Array.isArray(docs)) return docs;
+      return docs.map(d => {
+        if (!d || typeof d !== 'object') return d;
+        const o = Object.assign({}, d);
+        if (o.data && String(o.data).length > 500) o.data = null;
+        if (o.dataUrl && String(o.dataUrl).length > 500) o.dataUrl = null;
+        if (o.base64 && String(o.base64).length > 500) o.base64 = null;
+        return o;
+      });
+    };
+    (db.bills || []).forEach(b => { if (b && b.documents) b.documents = strip(b.documents); });
+    (db.cashEntries || []).forEach(c => { if (c && c.documents) c.documents = strip(c.documents); });
+    (db.journals || []).forEach(j => { if (j && j.documents) j.documents = strip(j.documents); });
+  } catch (_) {}
+
+  const uid = activeUserId || 'anon';
+  // 1) IndexedDB = source of local truth
+  try {
+    const snapshot = JSON.parse(JSON.stringify(db));
+    idbPutUserDb(uid, snapshot).catch(e => console.warn('idb persist', e && e.message || e));
+  } catch (e) {
+    console.warn('idb snapshot', e);
+  }
+
+  // 2) localStorage slim mirror only (avoid 5MB ceiling)
+  const key = activeUserId ? scopedDbKey(activeUserId) : ANON_DB_KEY;
+  try {
+    localStorage.setItem(key, JSON.stringify(buildSlimLocalMirror()));
   } catch (err) {
     const quota = err && (err.name === 'QuotaExceededError' || /quota|exceeded/i.test(String(err.message || err)));
-    if (!quota) {
-      console.warn('persistDb', err);
-      return false;
-    }
-    console.warn('localStorage quota exceeded — multi-level prune');
-    for (let level = 1; level <= 3; level++) {
+    if (quota) {
       try {
-        pruneBooksForStorage(level);
-        write(JSON.stringify(db));
-        quotaToast(level < 3
-          ? 'Storage was full — trimmed history (journals, bank lines, attachments). Cloud data is safe.'
-          : 'Storage was full — deep clean applied. Export from cloud if you need older history.');
-        return true;
-      } catch (e2) {
-        console.warn('persist prune level ' + level, e2);
+        // Drop legacy fat blob so the origin recovers
+        localStorage.removeItem(key);
+        localStorage.setItem(key, JSON.stringify({ _slim: true, _idb: true, profile: db.profile || {} }));
+      } catch (_) {
+        try { localStorage.removeItem(key); } catch (__) {}
       }
+      // Silent recovery — IDB already holds the full db
+      const now = Date.now();
+      if (typeof toast === 'function' && (!window.__lastQuotaToast || now - window.__lastQuotaToast > 120000)) {
+        window.__lastQuotaToast = now;
+        toast('Moved offline data to secure browser storage — no action needed.');
+      }
+    } else {
+      console.warn('persistDb local mirror', err);
     }
-    console.error('persistDb failed after all prunes');
-    quotaToast('Browser storage full. Use Clear site data for this site, then sign in again — cloud will restore.');
-    return false;
   }
   return true;
+}
+
+/** Async load: IndexedDB first, then migrate legacy localStorage full blob once. */
+async function loadUserLocalDbAsync(userId) {
+  activeUserId = userId || activeUserId;
+  let fromIdb = null;
+  try {
+    fromIdb = await idbGetUserDb(userId);
+  } catch (e) {
+    console.warn('idb load', e && e.message || e);
+  }
+  if (fromIdb && typeof fromIdb === 'object' && !fromIdb._slim) {
+    db = fromIdb;
+    normalizeDbProfile();
+    try { restoreApprovalSettingsMirror(); } catch (_) {}
+    return 'idb';
+  }
+  // Legacy path
+  loadUserLocalDb(userId);
+  // If we loaded a fat localStorage blob, migrate to IDB and slim LS
+  try {
+    const key = scopedDbKey(userId);
+    const raw = localStorage.getItem(key);
+    if (raw && raw.length > 200000) {
+      await idbPutUserDb(userId, JSON.parse(JSON.stringify(db)));
+      try {
+        localStorage.setItem(key, JSON.stringify(buildSlimLocalMirror()));
+      } catch (_) {
+        try { localStorage.removeItem(key); } catch (__) {}
+      }
+      return 'migrated';
+    }
+  } catch (e) {
+    console.warn('ls→idb migrate', e);
+  }
+  // Seed IDB from whatever we have so next boot is fast
+  try {
+    await idbPutUserDb(userId, JSON.parse(JSON.stringify(db)));
+  } catch (_) {}
+  return fromIdb ? 'idb-slim' : 'local';
 }
 
 /* ---------- Growth + tiering foundation ---------- */
@@ -14575,8 +14721,15 @@ function attachExpenseApprovalChain(entity, amount) {
   });
 
   entity.approval_chain = chain;
-  entity.approval_level_index = 0;
-  entity.approval_level = chain[0] ? chain[0].level : 1;
+  // Only reset index when attaching a brand-new chain (don't wipe in-progress approvals)
+  if (entity.approval_level_index == null || Number(entity.approval_level_index) < 0 ||
+      !Array.isArray(entity.approval_chain) || Number(entity.approval_level_index) >= chain.length) {
+    entity.approval_level_index = 0;
+  }
+  // Clamp
+  entity.approval_level_index = Math.min(Number(entity.approval_level_index) || 0, Math.max(0, chain.length - 1));
+  const cur = chain[entity.approval_level_index];
+  entity.approval_level = cur ? cur.level : (chain[0] ? chain[0].level : 1);
   return entity;
 }
 
@@ -14697,6 +14850,64 @@ function expenseChainProgressHtml(entity) {
 }
 
 /** Unified pending items for Home + Books attention */
+/** Merge remote bill/cash approval state without regressing local progress. */
+function approvalProgressScore(entity) {
+  if (!entity) return -1;
+  const st = String(entity.status || '');
+  let score = Math.max(0, Number(entity.approval_level_index) || 0) * 10;
+  if (st === 'open' || st === 'posted' || st === 'paid') score += 1000;
+  if (st === 'rejected') score += 500;
+  const chain = entity.approval_chain || [];
+  chain.forEach(l => { if (l && l.status === 'approved') score += 1; });
+  return score;
+}
+
+function mergeExpenseApprovalFromCloud(existing, row) {
+  if (!existing || !row) return false;
+  const meta = row.approval_meta || {};
+  const remote = {
+    status: row.status || existing.status,
+    approval_chain: meta.approval_chain || existing.approval_chain || null,
+    approval_level_index: meta.approval_level_index != null ? Number(meta.approval_level_index) : Number(existing.approval_level_index || 0),
+    approval_level: meta.approval_level != null ? meta.approval_level : existing.approval_level,
+    approved_by: meta.approved_by || row.approved_by || existing.approved_by,
+    approved_at: meta.approved_at || row.approved_at || existing.approved_at,
+    updated_at: row.updated_at || null
+  };
+  const localScore = approvalProgressScore(existing);
+  const remoteScore = approvalProgressScore(remote);
+  const localAt = String(existing.updated_at || existing.requested_at || '');
+  const remoteAt = String(row.updated_at || '');
+  // Prefer the side that is further along the matrix (or strictly newer timestamp)
+  const takeRemote = remoteScore > localScore ||
+    (remoteScore === localScore && remoteAt && localAt && remoteAt > localAt) ||
+    (remoteScore === localScore && remoteAt && !localAt);
+  let changed = false;
+  if (takeRemote) {
+    if (remote.status && remote.status !== existing.status) { existing.status = remote.status; changed = true; }
+    if (remote.approval_chain) { existing.approval_chain = remote.approval_chain; changed = true; }
+    if (Number(existing.approval_level_index || 0) !== Number(remote.approval_level_index || 0)) {
+      existing.approval_level_index = remote.approval_level_index; changed = true;
+    }
+    if (remote.approval_level != null) existing.approval_level = remote.approval_level;
+    if (remote.approved_by) existing.approved_by = remote.approved_by;
+    if (remote.approved_at) existing.approved_at = remote.approved_at;
+    if (remote.updated_at) existing.updated_at = remote.updated_at;
+  } else {
+    // Still fill missing requester fields from cloud
+    if (row.requested_by && !existing.requested_by) existing.requested_by = row.requested_by;
+    if (row.requested_by_email && !existing.requested_by_email) existing.requested_by_email = row.requested_by_email;
+    if (row.paid_at) existing.paidAt = row.paid_at;
+  }
+  if (row.requested_by && !existing.requested_by) { existing.requested_by = row.requested_by; changed = true; }
+  if (row.requested_by_email && !existing.requested_by_email) { existing.requested_by_email = row.requested_by_email; changed = true; }
+  if (row.paid_at) existing.paidAt = row.paid_at;
+  if (Array.isArray(row.documents) && row.documents.length && !(existing.documents || []).length) {
+    existing.documents = row.documents; changed = true;
+  }
+  return changed;
+}
+
 function listPendingApprovalItems() {
   const items = [];
   try {
@@ -27214,8 +27425,12 @@ function advanceExpenseBillLevel(billId, opts) {
         { level: idx + 1, actorName: actor.name, actorEmail: actor.email, documents: bill.documents || [] },
         { status: bill.status, documents: bill.documents || [] });
     } catch (_) {}
+    bill.updated_at = new Date().toISOString();
     save();
-    try { queueBooksCloudSync(); pushBooksApprovalsImmediate(); } catch (_) {}
+    try {
+      pushBillApprovalToCloud(bill).then(() => {}).catch(() => {});
+      queueBooksCloudSync();
+    } catch (_) {}
     toast('Level ' + (idx + 1) + ' approved → now waiting: ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)));
     try {
       notifyRequesterOfStatus(bill, 'bill', 'level_approved', 'Level approved',
@@ -27627,8 +27842,12 @@ function advanceExpenseCashLevel(cashId, opts) {
         { level: idx + 1, actorName: actor.name, actorEmail: actor.email, documents: entry.documents || [] },
         { status: entry.status, documents: entry.documents || [] });
     } catch (_) {}
+    bill.updated_at = new Date().toISOString();
     save();
-    try { queueBooksCloudSync(); pushBooksApprovalsImmediate(); } catch (_) {}
+    try {
+      pushBillApprovalToCloud(bill).then(() => {}).catch(() => {});
+      queueBooksCloudSync();
+    } catch (_) {}
     toast('Level ' + (idx + 1) + ' approved → now waiting: ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)));
     try {
       notifyRequesterOfStatus(entry, 'cash', 'level_approved', 'Level approved',
@@ -32723,17 +32942,7 @@ async function pullApprovalsSliceFromCloud() {
         const meta = row.approval_meta || {};
         const existing = db.bills.find(b => b && String(b.id) === lid);
         if (existing) {
-          if (row.status && row.status !== existing.status) { existing.status = row.status; changed = true; }
-          if (meta.approval_chain) { existing.approval_chain = meta.approval_chain; changed = true; }
-          if (meta.approval_level_index != null && Number(existing.approval_level_index || 0) !== Number(meta.approval_level_index)) {
-            existing.approval_level_index = meta.approval_level_index; changed = true;
-          }
-          if (meta.approval_level != null) existing.approval_level = meta.approval_level;
-          if (row.requested_by && !existing.requested_by) existing.requested_by = row.requested_by;
-          if (row.requested_by_email && !existing.requested_by_email) existing.requested_by_email = row.requested_by_email;
-          if (row.paid_at) existing.paidAt = row.paid_at;
-          if (row.documents && (!existing.documents || !existing.documents.length)) existing.documents = row.documents;
-          existing.updated_at = row.updated_at || existing.updated_at;
+          if (mergeExpenseApprovalFromCloud(existing, row)) changed = true;
         } else {
           db.bills.push({
             id: lid,
@@ -32773,12 +32982,7 @@ async function pullApprovalsSliceFromCloud() {
         const meta = row.approval_meta || {};
         const existing = db.cashEntries.find(c => c && String(c.id) === lid);
         if (existing) {
-          if (row.status && row.status !== existing.status) { existing.status = row.status; changed = true; }
-          if (meta.approval_chain) { existing.approval_chain = meta.approval_chain; changed = true; }
-          if (meta.approval_level_index != null && Number(existing.approval_level_index || 0) !== Number(meta.approval_level_index)) {
-            existing.approval_level_index = meta.approval_level_index; changed = true;
-          }
-          if (meta.approval_level != null) existing.approval_level = meta.approval_level;
+          if (mergeExpenseApprovalFromCloud(existing, row)) changed = true;
         } else {
           db.cashEntries.push({
             id: lid,
@@ -32902,12 +33106,134 @@ try {
 
 
 /** Immediate push of pending bills + cash so other approvers see level advances. */
+async function pushBillApprovalToCloud(bill) {
+  if (!bill || !cloud?.client || !cloud?.user) return false;
+  try {
+    const organizationId = cloud.organizationId || await ensureCloudOrganization();
+    if (!organizationId) return false;
+    bill.updated_at = new Date().toISOString();
+    const payload = {
+      organization_id: organizationId,
+      local_id: bill.id,
+      supplier: bill.supplier || null,
+      category: bill.category || null,
+      amount: Number(bill.amount) || 0,
+      tax: Number(bill.tax) || 0,
+      currency: bill.currency || 'NGN',
+      bill_date: bill.date || null,
+      due_date: bill.due || null,
+      note: bill.note || null,
+      status: bill.status || 'open',
+      paid_at: bill.paidAt || null,
+      requested_by: bill.requested_by || null,
+      requested_by_email: bill.requested_by_email || null,
+      documents: bill.documents || [],
+      approval_meta: {
+        approval_chain: bill.approval_chain || null,
+        approval_level_index: Number(bill.approval_level_index) || 0,
+        approval_level: bill.approval_level || null,
+        reviewed_by: bill.reviewed_by || null,
+        approved_by: bill.approved_by || null,
+        approved_at: bill.approved_at || null
+      },
+      updated_at: bill.updated_at
+    };
+    const { data: existing } = await cloud.client.from('books_bills')
+      .select('id').eq('organization_id', organizationId).eq('local_id', bill.id).maybeSingle();
+    if (existing?.id) {
+      let up = await cloud.client.from('books_bills').update(payload).eq('id', existing.id);
+      if (up.error) {
+        const slim = Object.assign({}, payload);
+        delete slim.approval_meta; delete slim.requested_by; delete slim.requested_by_email; delete slim.documents;
+        up = await cloud.client.from('books_bills').update(slim).eq('id', existing.id);
+        if (up.error) console.warn('bill approval push', up.error.message);
+        return !up.error;
+      }
+      return true;
+    }
+    let ins = await cloud.client.from('books_bills').insert(payload);
+    if (ins.error) {
+      const slim = Object.assign({}, payload);
+      delete slim.approval_meta; delete slim.requested_by; delete slim.requested_by_email; delete slim.documents;
+      ins = await cloud.client.from('books_bills').insert(slim);
+      if (ins.error) console.warn('bill approval insert', ins.error.message);
+      return !ins.error;
+    }
+    return true;
+  } catch (e) {
+    console.warn('pushBillApprovalToCloud', e.message || e);
+    return false;
+  }
+}
+
+async function pushCashApprovalToCloud(entry) {
+  if (!entry || !cloud?.client || !cloud?.user) return false;
+  try {
+    const organizationId = cloud.organizationId || await ensureCloudOrganization();
+    if (!organizationId) return false;
+    entry.updated_at = new Date().toISOString();
+    const payload = {
+      organization_id: organizationId,
+      local_id: entry.id,
+      entry_type: entry.type || 'out',
+      category: entry.category || null,
+      amount: Number(entry.amount) || 0,
+      currency: entry.currency || 'NGN',
+      entry_date: entry.date || null,
+      note: entry.note || null,
+      bank_account_id: entry.bankAccountId || null,
+      offset_account_id: entry.offsetAccountId || null,
+      status: entry.status || 'posted',
+      source: entry.source || 'manual',
+      documents: entry.documents || [],
+      requested_by: entry.requested_by || null,
+      requested_by_email: entry.requested_by_email || null,
+      approved_by: entry.approved_by || null,
+      approved_at: entry.approved_at || null,
+      approval_meta: {
+        approval_chain: entry.approval_chain || null,
+        approval_level_index: Number(entry.approval_level_index) || 0,
+        approval_level: entry.approval_level || null
+      },
+      updated_at: entry.updated_at
+    };
+    const { data: existing } = await cloud.client.from('books_cash_entries')
+      .select('id').eq('organization_id', organizationId).eq('local_id', entry.id).maybeSingle();
+    if (existing?.id) {
+      await cloud.client.from('books_cash_entries').update(payload).eq('id', existing.id);
+      return true;
+    }
+    const ins = await cloud.client.from('books_cash_entries').insert(payload);
+    if (ins.error && !/does not exist|schema cache/i.test(ins.error.message || '')) {
+      console.warn('cash approval insert', ins.error.message);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('pushCashApprovalToCloud', e.message || e);
+    return false;
+  }
+}
+
 async function pushBooksApprovalsImmediate() {
   if (!cloud?.client || !cloud?.user) return;
   try {
-    await pushBooksToCloud();
+    // Fast path: only pending/in-flight expense rows, not full books dump
+    const pendingBills = (db.bills || []).filter(b =>
+      b && (b.status === 'pending_approval' || b.status === 'pending_review' || b.status === 'open' || b.status === 'rejected')
+    ).slice(-80);
+    for (const b of pendingBills) {
+      try { await pushBillApprovalToCloud(b); } catch (_) {}
+    }
+    const pendingCash = (db.cashEntries || []).filter(c =>
+      c && c.type === 'out' && (c.status === 'pending_approval' || c.status === 'pending_review' || c.status === 'posted')
+    ).slice(-40);
+    for (const c of pendingCash) {
+      try { await pushCashApprovalToCloud(c); } catch (_) {}
+    }
   } catch (e) {
     console.warn('approvals push', e.message || e);
+    try { await pushBooksToCloud(); } catch (e2) { console.warn('approvals full push', e2.message || e2); }
   }
 }
 
@@ -33384,14 +33710,7 @@ async function pullBooksFromCloud() {
     const meta = row.approval_meta || {};
     const existing = (db.bills || []).find(b => b.id === lid);
     if (existing) {
-      // Merge status / matrix from cloud so other members' advances land here
-      if (row.status && row.status !== existing.status) existing.status = row.status;
-      if (meta.approval_chain) existing.approval_chain = meta.approval_chain;
-      if (meta.approval_level_index != null) existing.approval_level_index = meta.approval_level_index;
-      if (meta.approval_level != null) existing.approval_level = meta.approval_level;
-      if (row.requested_by && !existing.requested_by) existing.requested_by = row.requested_by;
-      if (row.requested_by_email && !existing.requested_by_email) existing.requested_by_email = row.requested_by_email;
-      if (row.paid_at) existing.paidAt = row.paid_at;
+      mergeExpenseApprovalFromCloud(existing, row);
       return;
     }
     db.bills.push({
@@ -33426,12 +33745,7 @@ async function pullBooksFromCloud() {
         const meta = row.approval_meta || {};
         const existing = (db.cashEntries || []).find(c => c.id === lid);
         if (existing) {
-          if (row.status && row.status !== existing.status) existing.status = row.status;
-          if (meta.approval_chain) existing.approval_chain = meta.approval_chain;
-          if (meta.approval_level_index != null) existing.approval_level_index = meta.approval_level_index;
-          if (meta.approval_level != null) existing.approval_level = meta.approval_level;
-          if (row.requested_by && !existing.requested_by) existing.requested_by = row.requested_by;
-          if (row.requested_by_email && !existing.requested_by_email) existing.requested_by_email = row.requested_by_email;
+          mergeExpenseApprovalFromCloud(existing, row);
           return;
         }
         db.cashEntries.push({
@@ -36996,6 +37310,7 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
   }
   db.bills = db.bills || [];
   db.bills.push(bill);
+  try { bill.updated_at = new Date().toISOString(); } catch (_) {}
 
   const afterBillQueuedOrPosted = () => {
     try { refreshApprovalsUI(); } catch (_) {}
