@@ -27842,10 +27842,10 @@ function advanceExpenseCashLevel(cashId, opts) {
         { level: idx + 1, actorName: actor.name, actorEmail: actor.email, documents: entry.documents || [] },
         { status: entry.status, documents: entry.documents || [] });
     } catch (_) {}
-    bill.updated_at = new Date().toISOString();
+    entry.updated_at = new Date().toISOString();
     save();
     try {
-      pushBillApprovalToCloud(bill).then(() => {}).catch(() => {});
+      pushCashApprovalToCloud(entry).then(() => {}).catch(() => {});
       queueBooksCloudSync();
     } catch (_) {}
     toast('Level ' + (idx + 1) + ' approved → now waiting: ' + (chain[idx + 1].label || ('Level ' + chain[idx + 1].level)));
@@ -37421,7 +37421,11 @@ document.getElementById('billSave')?.addEventListener('click', async () => {
     );
   } catch (_) {}
   save();
-  try { queueBooksCloudSync(); } catch (_) {}
+  try {
+    // Fast cloud write so the next approver sees this without waiting for full books sync
+    pushBillApprovalToCloud(bill).then(() => {}).catch(() => {});
+    queueBooksCloudSync();
+  } catch (_) {}
   closeBillModal();
   const variance = path.match && path.match.status === 'variance';
   toast(variance
