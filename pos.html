@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#071a38">
+<meta name="theme-color" content="#f4f6fa">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <title>invoicedey POS</title>
@@ -33,17 +33,19 @@
   --radius: 12px;
   --ease: 0.15s ease;
 }
+/* POS stays light: checkout readability on phones (ignore system dark mode). */
+html { color-scheme: light; }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0b1220;
-    --panel: #121a2b;
-    --panel-2: #1a2438;
-    --text: #e8eef8;
-    --muted: #8fa3c0;
-    --line: #243049;
-    --blue: #4b86f5;
-    --blue-soft: #1a2744;
-    --shadow: 0 8px 28px rgba(0,0,0,.35);
+    --bg: #f4f6fa;
+    --panel: #ffffff;
+    --panel-2: #f0f4fa;
+    --text: #071a38;
+    --muted: #5f7698;
+    --line: #dce4ef;
+    --blue: #2467E3;
+    --blue-soft: #e8f0fe;
+    --shadow: 0 8px 28px rgba(7,26,56,.08);
   }
 }
 * { box-sizing: border-box; }

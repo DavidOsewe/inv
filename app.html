@@ -31356,6 +31356,7 @@ function renderArApSubledgers() {
 }
 
 function booksView() {
+  try { wireReportPreviewModal(); } catch (_) {}
   ensureBooksDb();
   try { restoreBooksPeriodPreference(); } catch {}
   try { syncBooksCustomDateUI(); } catch {}
