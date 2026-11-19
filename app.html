@@ -7298,7 +7298,7 @@ body:has(.modalback.show) .notif-panel {
 </div>
 
 
-<div class="modalback" id="docViewerModal" style="z-index:90">
+<div class="modalback" id="docViewerModal" style="z-index:300">
   <div class="modal" style="max-width:min(960px,96vw);width:100%;max-height:92vh;display:flex;flex-direction:column;padding:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;flex-shrink:0">
       <h2 id="docViewerTitle" style="margin:0;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Document</h2>
@@ -9112,15 +9112,29 @@ function pruneBooksForStorage(level) {
         return o;
       });
     };
-    // Always light: strip attachment bodies from bills / cash / journals
-    (db.bills || []).forEach(b => { if (b && b.documents) b.documents = stripDocBodies(b.documents); });
-    (db.cashEntries || []).forEach(c => { if (c && c.documents) c.documents = stripDocBodies(c.documents); });
-    (db.journals || []).forEach(j => { if (j && j.documents) j.documents = stripDocBodies(j.documents); });
-    (db.auditEvents || []).forEach(ev => {
-      if (!ev) return;
-      if (ev.meta && ev.meta.documents) ev.meta.documents = stripDocBodies(ev.meta.documents);
-      if (Array.isArray(ev.documents)) ev.documents = stripDocBodies(ev.documents);
-    });
+    // Level 0: stash bodies then strip from live only if over soft cap (prefer IDB attachments)
+    const softStrip = level >= 1;
+    if (softStrip) {
+      try {
+        (db.bills || []).forEach(b => { if (b && b.documents) b.documents = stashSupportingDocsBodies(b.documents); });
+        (db.cashEntries || []).forEach(c => { if (c && c.documents) c.documents = stashSupportingDocsBodies(c.documents); });
+        (db.journals || []).forEach(j => { if (j && j.documents) j.documents = stashSupportingDocsBodies(j.documents); });
+      } catch (_) {}
+      (db.bills || []).forEach(b => { if (b && b.documents) b.documents = stripDocBodies(b.documents); });
+      (db.cashEntries || []).forEach(c => { if (c && c.documents) c.documents = stripDocBodies(c.documents); });
+      (db.journals || []).forEach(j => { if (j && j.documents) j.documents = stripDocBodies(j.documents); });
+      (db.auditEvents || []).forEach(ev => {
+        if (!ev) return;
+        if (ev.meta && ev.meta.documents) ev.meta.documents = stripDocBodies(ev.meta.documents);
+        if (Array.isArray(ev.documents)) ev.documents = stripDocBodies(ev.documents);
+      });
+    } else {
+      try {
+        (db.bills || []).forEach(b => { if (b && b.documents) b.documents = stashSupportingDocsBodies(b.documents); });
+        (db.cashEntries || []).forEach(c => { if (c && c.documents) c.documents = stashSupportingDocsBodies(c.documents); });
+        (db.journals || []).forEach(j => { if (j && j.documents) j.documents = stashSupportingDocsBodies(j.documents); });
+      } catch (_) {}
+    }
 
     const txs = db.bankTransactions || [];
     const bankCap = level >= 3 ? 400 : level >= 2 ? 800 : 1800;
@@ -9181,10 +9195,11 @@ function estimateLocalDbBytes() {
 function openInvoicedeyIdb() {
   return new Promise((resolve, reject) => {
     try {
-      const req = indexedDB.open('invoicedey-idb-v1', 1);
+      const req = indexedDB.open('invoicedey-idb-v1', 2);
       req.onupgradeneeded = () => {
         const idb = req.result;
         if (!idb.objectStoreNames.contains('userDb')) idb.createObjectStore('userDb');
+        if (!idb.objectStoreNames.contains('attachments')) idb.createObjectStore('attachments');
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error || new Error('idb open failed'));
@@ -9193,6 +9208,73 @@ function openInvoicedeyIdb() {
     }
   });
 }
+
+function idbPutAttachment(docId, payload) {
+  if (!docId || !payload) return Promise.resolve(false);
+  return openInvoicedeyIdb().then(idb => new Promise((resolve, reject) => {
+    try {
+      const tx = idb.transaction('attachments', 'readwrite');
+      tx.objectStore('attachments').put(payload, String(docId));
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(tx.error || new Error('idb att put failed'));
+    } catch (e) { reject(e); }
+  })).catch(e => { console.warn('idbPutAttachment', e); return false; });
+}
+
+function idbGetAttachment(docId) {
+  if (!docId) return Promise.resolve(null);
+  return openInvoicedeyIdb().then(idb => new Promise((resolve, reject) => {
+    try {
+      const tx = idb.transaction('attachments', 'readonly');
+      const req = tx.objectStore('attachments').get(String(docId));
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error || new Error('idb att get failed'));
+    } catch (e) { reject(e); }
+  })).catch(() => null);
+}
+
+/** Persist document bodies outside the main DB JSON (so prune can strip mirrors safely). */
+function stashSupportingDocsBodies(docs) {
+  if (!Array.isArray(docs)) return docs;
+  return docs.map(d => {
+    if (!d || typeof d !== 'object') return d;
+    const o = Object.assign({}, d);
+    if (!o.id) o.id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+    const body = o.dataUrl || o.data || o.base64 || null;
+    if (body && String(body).length > 100) {
+      try {
+        idbPutAttachment(o.id, {
+          id: o.id,
+          name: o.name || 'file',
+          type: o.type || 'application/octet-stream',
+          size: o.size || 0,
+          dataUrl: o.dataUrl || (String(body).startsWith('data:') ? body : null),
+          data: o.dataUrl ? null : body,
+          at: o.at || new Date().toISOString()
+        });
+      } catch (_) {}
+    }
+    return o;
+  });
+}
+
+async function hydrateSupportingDoc(doc) {
+  if (!doc) return null;
+  if (doc.dataUrl && String(doc.dataUrl).length > 100) return doc;
+  if (doc.data && String(doc.data).length > 100 && String(doc.data).startsWith('data:')) {
+    doc.dataUrl = doc.data;
+    return doc;
+  }
+  if (!doc.id) return doc;
+  const stored = await idbGetAttachment(doc.id);
+  if (stored && stored.dataUrl) {
+    doc.dataUrl = stored.dataUrl;
+    if (stored.type) doc.type = doc.type || stored.type;
+    if (stored.name) doc.name = doc.name || stored.name;
+  }
+  return doc;
+}
+
 
 function idbPutUserDb(userId, data) {
   const key = userId || 'anon';
@@ -9257,36 +9339,55 @@ function buildSlimLocalMirror() {
  * Users should never need to clear site data for normal growth.
  */
 function persistDb() {
-  // Always strip attachment bodies before any write (cloud holds files when uploaded)
-  try { pruneBooksForStorage(0); } catch (_) {}
+  // Stash attachment bodies into IDB attachments store (keeps memory/IDB usable)
   try {
-    // level 0 may not exist — soft strip docs only
-    const strip = (docs) => {
+    (db.bills || []).forEach(b => { if (b && b.documents) b.documents = stashSupportingDocsBodies(b.documents); });
+    (db.cashEntries || []).forEach(c => { if (c && c.documents) c.documents = stashSupportingDocsBodies(c.documents); });
+    (db.journals || []).forEach(j => { if (j && j.documents) j.documents = stashSupportingDocsBodies(j.documents); });
+  } catch (_) {}
+
+  const uid = activeUserId || 'anon';
+  // 1) IndexedDB userDb snapshot WITH dataUrls still present in memory
+  try {
+    const snapshot = JSON.parse(JSON.stringify(db));
+    // Strip bodies in the snapshot copy only if huge — attachments store is the durable body
+    const stripSnap = (docs) => {
       if (!Array.isArray(docs)) return docs;
       return docs.map(d => {
         if (!d || typeof d !== 'object') return d;
         const o = Object.assign({}, d);
-        if (o.data && String(o.data).length > 500) o.data = null;
-        if (o.dataUrl && String(o.dataUrl).length > 500) o.dataUrl = null;
-        if (o.base64 && String(o.base64).length > 500) o.base64 = null;
+        if (o.dataUrl && String(o.dataUrl).length > 8000) o.dataUrl = null;
+        if (o.data && String(o.data).length > 8000) o.data = null;
+        if (o.base64 && String(o.base64).length > 8000) o.base64 = null;
         return o;
       });
     };
-    (db.bills || []).forEach(b => { if (b && b.documents) b.documents = strip(b.documents); });
-    (db.cashEntries || []).forEach(c => { if (c && c.documents) c.documents = strip(c.documents); });
-    (db.journals || []).forEach(j => { if (j && j.documents) j.documents = strip(j.documents); });
-  } catch (_) {}
-
-  const uid = activeUserId || 'anon';
-  // 1) IndexedDB = source of local truth
-  try {
-    const snapshot = JSON.parse(JSON.stringify(db));
+    try {
+      (snapshot.bills || []).forEach(b => { if (b && b.documents) b.documents = stripSnap(b.documents); });
+      (snapshot.cashEntries || []).forEach(c => { if (c && c.documents) c.documents = stripSnap(c.documents); });
+      (snapshot.journals || []).forEach(j => { if (j && j.documents) j.documents = stripSnap(j.documents); });
+    } catch (_) {}
     idbPutUserDb(uid, snapshot).catch(e => console.warn('idb persist', e && e.message || e));
   } catch (e) {
     console.warn('idb snapshot', e);
   }
 
-  // 2) localStorage slim mirror only (avoid 5MB ceiling)
+  // 2) localStorage slim mirror — must strip bodies (5MB ceiling)
+  try {
+    const strip = (docs) => {
+      if (!Array.isArray(docs)) return docs;
+      return docs.map(d => {
+        if (!d || typeof d !== 'object') return d;
+        const o = Object.assign({}, d);
+        if (o.data && String(o.data).length > 200) o.data = null;
+        if (o.dataUrl && String(o.dataUrl).length > 200) o.dataUrl = null;
+        if (o.base64 && String(o.base64).length > 200) o.base64 = null;
+        return o;
+      });
+    };
+    // Do NOT mutate live db.documents for open-session viewing — only slim mirror
+  } catch (_) {}
+
   const key = activeUserId ? scopedDbKey(activeUserId) : ANON_DB_KEY;
   try {
     localStorage.setItem(key, JSON.stringify(buildSlimLocalMirror()));
@@ -15423,15 +15524,19 @@ function openApprovalDetail(kind, id) {
   if (body) body.innerHTML = html;
   // Bind doc open buttons
   if (body) {
-    body.querySelectorAll('[data-audit-doc-idx]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        const idx = Number(btn.getAttribute('data-audit-doc-idx'));
-        const doc = docs[idx];
-        if (doc && typeof openSupportingDocument === 'function') openSupportingDocument(doc);
-        else if (doc && doc.dataUrl) window.open(doc.dataUrl, '_blank');
+    try { bindAuditDocButtons(body, docs); } catch (_) {
+      body.querySelectorAll('[data-audit-doc-idx]').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const idx = Number(btn.getAttribute('data-audit-doc-idx'));
+          const doc = docs[idx];
+          if (doc && typeof openSupportingDocument === 'function') await openSupportingDocument(doc);
+          else if (doc && doc.dataUrl) window.open(doc.dataUrl, '_blank');
+          else toast('Document not available on this device');
+        });
       });
-    });
+    }
   }
   if (actions) {
     actions.innerHTML = '';
@@ -24369,19 +24474,24 @@ function readSupportingDocsFromInput(inputId) {
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => resolve({
-      name: f.name,
-      type: f.type || 'application/octet-stream',
-      size: f.size,
-      dataUrl: reader.result,
-      at: new Date().toISOString()
-    });
+    reader.onload = () => {
+      const doc = {
+        id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)),
+        name: f.name,
+        type: f.type || 'application/octet-stream',
+        size: f.size,
+        dataUrl: reader.result,
+        at: new Date().toISOString()
+      };
+      try { if (typeof stashSupportingDocsBodies === 'function') stashSupportingDocsBodies([doc]); } catch (_) {}
+      resolve(doc);
+    };
     reader.onerror = () => resolve({ name: f.name, type: f.type, size: f.size, note: 'read failed' });
     reader.readAsDataURL(f);
   }))).then(docs => {
     if (listEl) {
       listEl.innerHTML = docs.map(d =>
-        '• ' + String(d.name).replace(/</g,'') + (d.note ? ' (' + d.note + ')' : '')
+        '• ' + String(d.name).replace(/</g, '') + (d.note ? ' (' + d.note + ')' : '')
       ).join('<br>') || '';
     }
     return docs.filter(d => d.dataUrl);
@@ -27865,10 +27975,11 @@ function supportingDocsHtml(docs, compact) {
   const items = docs.map((d, i) => {
     const label = String(d.name || ('File ' + (i + 1))).replace(/</g, '');
     const size = d.size ? (' · ' + Math.round(d.size / 1024) + ' KB') : '';
-    const canOpen = !!(d.dataUrl);
+    const canOpen = !!(d.dataUrl || d.id || d.url || d.cloudUrl);
     return '<button type="button" class="button small" data-audit-doc-idx="' + i + '"' +
-      (canOpen ? '' : ' disabled title="File data not stored"') + '>' +
-      (canOpen ? '📎 ' : '') + label + size + '</button>';
+      (canOpen ? '' : ' disabled title="File data not stored"') +
+      ' style="min-height:40px">' +
+      '📎 ' + label + size + '</button>';
   }).join(' ');
   return '<div class="audit-docs" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">' +
     (compact ? '' : '<span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-right:4px">Documents</span>') +
@@ -27907,9 +28018,17 @@ function closeDocViewer() {
   else document.getElementById('docViewerModal')?.classList.remove('show');
 }
 
-function openSupportingDocument(doc) {
-  if (!doc || !doc.dataUrl) {
+async function openSupportingDocument(doc) {
+  if (!doc) {
     toast('Document not available');
+    return;
+  }
+  try { doc = await hydrateSupportingDoc(doc); } catch (_) {}
+  if (!doc.dataUrl && (doc.url || doc.cloudUrl)) {
+    try { window.open(doc.url || doc.cloudUrl, '_blank'); return; } catch (_) {}
+  }
+  if (!doc.dataUrl) {
+    toast('Document file is not on this device — re-attach or open from the original request device');
     return;
   }
   let type = String(doc.type || '').toLowerCase();
@@ -27996,12 +28115,25 @@ function openSupportingDocument(doc) {
 function bindAuditDocButtons(root, docs) {
   if (!root || !docs || !docs.length) return;
   root.querySelectorAll('[data-audit-doc-idx]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    if (btn._docBound) return;
+    btn._docBound = true;
+    btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
       const i = Number(btn.getAttribute('data-audit-doc-idx'));
-      if (Number.isFinite(i) && docs[i]) openSupportingDocument(docs[i]);
+      if (!Number.isFinite(i) || !docs[i]) {
+        toast('Document not found');
+        return;
+      }
+      try {
+        await openSupportingDocument(docs[i]);
+      } catch (err) {
+        console.warn('open doc', err);
+        toast('Could not open document');
+      }
     });
+  });
+});
   });
 }
 
@@ -28845,7 +28977,7 @@ function openPayBillModal(billId, opts) {
     return;
   }
   if (bill.status === 'rejected') { toast('Rejected expenses cannot be paid'); return; }
-  if (bill.status && bill.status !== 'open' && bill.status !== 'approved') {
+  if (bill.status && bill.status !== 'open' && bill.status !== 'approved' && bill.status !== 'partial') {
     toast('Bill must be open on the ledger before payment');
     return;
   }
@@ -28860,6 +28992,9 @@ function openPayBillModal(billId, opts) {
       '<p class="section-sub" id="payBillSub" style="margin:0 0 12px">Clears accounts payable into the bank/cash account you choose.</p>' +
       '<div id="payBillMeta" style="font-size:13px;margin-bottom:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)"></div>' +
       '<div class="field"><label>Pay from (credit)</label><select id="payBillAccount" class="searchable" data-searchable="1"></select></div>' +
+      '<div class="field"><label>Amount to pay</label>' +
+      '<input type="number" id="payBillAmount" min="0.01" step="0.01" inputmode="decimal">' +
+      '<div class="section-sub" id="payBillAmountHint" style="margin-top:4px"></div></div>' +
       '<div class="field"><label>Payment date</label><input type="date" id="payBillDate"></div>' +
       '<div id="payBillEntry" style="font-size:12px;margin:10px 0;padding:10px 12px;border:1px dashed var(--line);border-radius:10px"></div>' +
       '<div id="payBillDocs" style="margin-bottom:8px"></div>' +
@@ -28874,8 +29009,9 @@ function openPayBillModal(billId, opts) {
       const id = m.dataset.billId;
       const accountId = document.getElementById('payBillAccount')?.value || '';
       const date = document.getElementById('payBillDate')?.value || today;
+      const amount = Number(document.getElementById('payBillAmount')?.value || 0);
       closePayBillModal();
-      paySupplierBill(id, { accountId, date });
+      paySupplierBill(id, { accountId, date, amount });
     });
   }
   m.dataset.billId = billId;
@@ -28891,12 +29027,28 @@ function openPayBillModal(billId, opts) {
   const dateEl = document.getElementById('payBillDate');
   if (dateEl) dateEl.value = typeof today === 'string' ? today : new Date().toISOString().slice(0, 10);
   const meta = document.getElementById('payBillMeta');
+  const billTotal = Number(bill.amount) || 0;
+  const alreadyPaid = Number(bill.amount_paid || bill.paidAmount || 0) || 0;
+  const balanceDue = Math.max(0, Math.round((billTotal - alreadyPaid) * 100) / 100);
   if (meta) {
     meta.innerHTML = '<b>' + String(bill.supplier || 'Supplier').replace(/</g, '') + '</b>' +
       (bill.note ? (' · ' + String(bill.note).slice(0, 80).replace(/</g, '')) : '') +
-      '<div style="margin-top:4px">Amount <b>' +
-      (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) + '</b>' +
+      '<div style="margin-top:4px">Bill total <b>' +
+      (typeof money === 'function' ? money(billTotal, bill.currency) : billTotal) + '</b>' +
+      (alreadyPaid > 0.009 ? (' · Paid so far <b>' + (typeof money === 'function' ? money(alreadyPaid, bill.currency) : alreadyPaid) + '</b>') : '') +
+      ' · Balance <b>' + (typeof money === 'function' ? money(balanceDue, bill.currency) : balanceDue) + '</b>' +
       (bill.category ? (' · ledger ' + String(bill.category).replace(/</g, '')) : '') + '</div>';
+  }
+  const amtEl = document.getElementById('payBillAmount');
+  const amtHint = document.getElementById('payBillAmountHint');
+  if (amtEl) {
+    amtEl.value = balanceDue > 0 ? String(balanceDue) : String(billTotal || '');
+    amtEl.max = String(balanceDue > 0 ? balanceDue : billTotal);
+  }
+  if (amtHint) {
+    amtHint.textContent = balanceDue > 0.009 && alreadyPaid > 0.009
+      ? ('Part payment allowed · max remaining ' + (typeof money === 'function' ? money(balanceDue, bill.currency) : balanceDue))
+      : ('Enter full amount or a smaller part payment (max ' + (typeof money === 'function' ? money(balanceDue || billTotal, bill.currency) : (balanceDue || billTotal)) + ')');
   }
   const entry = document.getElementById('payBillEntry');
   const refreshEntry = () => {
@@ -28905,12 +29057,19 @@ function openPayBillModal(billId, opts) {
     const bankName = (typeof coaName === 'function' ? coaName(bankId) : bankId) || bankId;
     const apId = (typeof getApControlId === 'function') ? getApControlId() : '2000';
     const apName = (typeof coaName === 'function' ? coaName(apId) : 'Trade payables') || apId;
+    const payAmt = Number(document.getElementById('payBillAmount')?.value || 0) || balanceDue || billTotal;
+    const left = Math.max(0, Math.round((balanceDue - payAmt) * 100) / 100);
     entry.innerHTML =
-      '<div style="font-weight:700;margin-bottom:4px">Journal preview</div>' +
-      '<div>Dr <b>' + String(apId).replace(/</g, '') + ' · ' + String(apName).replace(/</g, '') + '</b> (clear AP)</div>' +
-      '<div>Cr <b>' + String(bankId).replace(/</g, '') + ' · ' + String(bankName).replace(/</g, '') + '</b> (cash out)</div>';
+      '<div style="font-weight:700;margin-bottom:4px">Journal preview' +
+      (payAmt + 0.009 < balanceDue ? ' · <span style="color:#c2410c">part payment</span>' : '') + '</div>' +
+      '<div>Dr <b>' + String(apId).replace(/</g, '') + ' · ' + String(apName).replace(/</g, '') + '</b> ' +
+      (typeof money === 'function' ? money(payAmt, bill.currency) : payAmt) + ' (reduce AP)</div>' +
+      '<div>Cr <b>' + String(bankId).replace(/</g, '') + ' · ' + String(bankName).replace(/</g, '') + '</b> (cash out)</div>' +
+      (left > 0.009 ? ('<div class="section-sub" style="margin-top:6px">Remaining on bill after this: <b>' +
+        (typeof money === 'function' ? money(left, bill.currency) : left) + '</b></div>') : '');
   };
   sel?.addEventListener('change', refreshEntry);
+  amtEl?.addEventListener('input', refreshEntry);
   refreshEntry();
   const docsEl = document.getElementById('payBillDocs');
   if (docsEl) {
@@ -28933,6 +29092,13 @@ function closePayBillModal() {
 }
 
 /** Pay supplier bill: Dr AP / Cr Cash */
+function billBalanceDue(bill) {
+  if (!bill) return 0;
+  const total = Number(bill.amount) || 0;
+  const paid = Number(bill.amount_paid || bill.paidAmount || 0) || 0;
+  return Math.max(0, Math.round((total - paid) * 100) / 100);
+}
+
 function paySupplierBill(billId, opts) {
   ensureBooksDb();
   opts = opts || {};
@@ -28947,12 +29113,28 @@ function paySupplierBill(billId, opts) {
     toast('Rejected expenses cannot be paid');
     return;
   }
-  if (bill.status && bill.status !== 'open' && bill.status !== 'approved') {
+  if (bill.status && bill.status !== 'open' && bill.status !== 'approved' && bill.status !== 'partial') {
     toast('Bill must be open on the ledger before payment');
     return;
   }
-  const amt = toRep(bill.amount, bill.currency);
-  if (!(amt > 0)) { toast('Invalid bill amount'); return; }
+  const totalRep = toRep(bill.amount, bill.currency);
+  if (!(totalRep > 0)) { toast('Invalid bill amount'); return; }
+  const already = Number(bill.amount_paid || 0) || 0;
+  const balance = Math.max(0, Math.round((totalRep - already) * 100) / 100);
+  if (!(balance > 0.0001)) {
+    toast('Bill is already fully paid');
+    bill.status = 'paid';
+    save();
+    try { renderBooksPayables(); } catch (_) {}
+    return;
+  }
+  let payAmt = opts.amount != null ? Number(opts.amount) : balance;
+  if (!(payAmt > 0)) { toast('Enter a payment amount'); return; }
+  if (payAmt > balance + 0.009) {
+    toast('Amount exceeds balance due (' + (typeof money === 'function' ? money(balance, bill.currency) : balance) + ')');
+    return;
+  }
+  payAmt = Math.round(payAmt * 100) / 100;
   // Prefer selected bank / cash equivalent, else default cash
   let bankId = opts.accountId || bill.payFromAccountId || '';
   if (!bankId) {
@@ -28960,28 +29142,33 @@ function paySupplierBill(billId, opts) {
     bankId = (banks[0] && banks[0].id) || '1000';
   }
   const payDate = opts.date || (typeof today === 'string' ? today : new Date().toISOString().slice(0, 10));
-  const key = 'billpay:' + bill.id;
-  if ((db.journals || []).some(j => j.sourceKey === 'j:' + key && !j.reversed)) {
+  const payId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+  const key = 'billpay:' + bill.id + ':' + payId;
+  // Legacy full-pay key: only block if balance already zero
+  const legacyKey = 'j:billpay:' + bill.id;
+  if (balance >= totalRep - 0.009 && (db.journals || []).some(j => j.sourceKey === legacyKey && !j.reversed)) {
     toast('Payment already posted for this bill');
     bill.status = 'paid';
     bill.paidAt = bill.paidAt || payDate;
+    bill.amount_paid = totalRep;
     save();
     renderBooksPayables();
     return;
   }
   const party = partyFromBill(bill);
   const apPayId = (typeof getApControlId === 'function') ? getApControlId() : AP_CONTROL_ID;
-  // Carry the same supporting docs as the accrual journal (both GL legs / payment entry)
   const payDocs = Array.isArray(bill.documents) ? bill.documents : [];
+  const isPartial = payAmt + 0.009 < balance;
   postJournal({
     date: payDate,
-    memo: 'Pay bill · ' + (party.partyName || bill.supplier || 'Supplier') + (bill.note ? ' · ' + bill.note : ''),
+    memo: (isPartial ? 'Part pay bill · ' : 'Pay bill · ') + (party.partyName || bill.supplier || 'Supplier') +
+      (bill.note ? ' · ' + bill.note : ''),
     source: 'bill_payment',
     sourceKey: 'j:' + key,
     documents: payDocs,
     lines: [
-      withPartyOnArApLine({ accountId: apPayId, debit: amt, credit: 0 }, party),
-      { accountId: bankId, debit: 0, credit: amt }
+      withPartyOnArApLine({ accountId: apPayId, debit: payAmt, credit: 0 }, party),
+      { accountId: bankId, debit: 0, credit: payAmt }
     ]
   });
   db.cashEntries = db.cashEntries || [];
@@ -28989,23 +29176,32 @@ function paySupplierBill(billId, opts) {
     id: crypto.randomUUID(),
     type: 'out',
     category: bill.category || 'other_out',
-    amount: Number(bill.amount) || 0,
+    amount: payAmt,
     currency: bill.currency,
     date: payDate,
-    note: 'Paid bill · ' + (bill.supplier || '') + (bill.note ? ' · ' + bill.note : ''),
+    note: (isPartial ? 'Part paid bill · ' : 'Paid bill · ') + (bill.supplier || '') + (bill.note ? ' · ' + bill.note : ''),
     source: 'bill_payment',
     sourceKey: key,
     billId: bill.id,
     accountId: bankId
   });
-  bill.status = 'paid';
-  bill.paidAt = payDate;
+  if (!Array.isArray(bill.payments)) bill.payments = [];
+  bill.payments.push({ id: payId, amount: payAmt, date: payDate, accountId: bankId, at: new Date().toISOString() });
+  bill.amount_paid = Math.round((already + payAmt) * 100) / 100;
   bill.payFromAccountId = bankId;
+  if (bill.amount_paid + 0.009 >= totalRep) {
+    bill.status = 'paid';
+    bill.paidAt = payDate;
+  } else {
+    bill.status = 'partial';
+    bill.paidAt = null;
+  }
   try {
     const actor = expenseActorMeta();
-    appendBooksAudit('bill.paid', 'bill', bill.id,
-      'Paid · ' + (bill.supplier || 'Supplier') + ' · ' +
-        (typeof money === 'function' ? money(bill.amount, bill.currency) : bill.amount) +
+    appendBooksAudit(bill.status === 'paid' ? 'bill.paid' : 'bill.part_paid', 'bill', bill.id,
+      (bill.status === 'paid' ? 'Paid · ' : 'Part paid · ') + (bill.supplier || 'Supplier') + ' · ' +
+        (typeof money === 'function' ? money(payAmt, bill.currency) : payAmt) +
+        (bill.status !== 'paid' ? (' (balance ' + (typeof money === 'function' ? money(billBalanceDue(bill), bill.currency) : billBalanceDue(bill)) + ')') : '') +
         ' · from ' + bankId +
         ' · by ' + (actor.name || actor.email || 'user') +
         ((payDocs || []).length ? (' · ' + payDocs.length + ' file(s)') : ''),
