@@ -8903,7 +8903,7 @@ async function startCloudSync(client, user) {
   // Switch the growth meter immediately to this user's allowance.
   // Never display the previous/anonymous account's counter.
   updateGrowthMeter();
-  dashboard();
+  try { switchTo('dashboard'); } catch (_) { try { dashboard(); } catch (__) {} }
 
   try {
     const loaded = await hydrateFromCloud();
@@ -9196,13 +9196,16 @@ function openInvoicedeyIdb() {
   return new Promise((resolve, reject) => {
     try {
       const req = indexedDB.open('invoicedey-idb-v1', 2);
-      req.onupgradeneeded = () => {
-        const idb = req.result;
-        if (!idb.objectStoreNames.contains('userDb')) idb.createObjectStore('userDb');
-        if (!idb.objectStoreNames.contains('attachments')) idb.createObjectStore('attachments');
+      req.onupgradeneeded = (ev) => {
+        try {
+          const idb = req.result;
+          if (!idb.objectStoreNames.contains('userDb')) idb.createObjectStore('userDb');
+          if (!idb.objectStoreNames.contains('attachments')) idb.createObjectStore('attachments');
+        } catch (e) { console.warn('idb upgrade', e); }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error || new Error('idb open failed'));
+      req.onblocked = () => console.warn('idb open blocked — close other tabs');
     } catch (e) {
       reject(e);
     }
@@ -9211,13 +9214,14 @@ function openInvoicedeyIdb() {
 
 function idbPutAttachment(docId, payload) {
   if (!docId || !payload) return Promise.resolve(false);
-  return openInvoicedeyIdb().then(idb => new Promise((resolve, reject) => {
+  return openInvoicedeyIdb().then(idb => new Promise((resolve) => {
     try {
+      if (!idb.objectStoreNames.contains('attachments')) { resolve(false); return; }
       const tx = idb.transaction('attachments', 'readwrite');
       tx.objectStore('attachments').put(payload, String(docId));
       tx.oncomplete = () => resolve(true);
-      tx.onerror = () => reject(tx.error || new Error('idb att put failed'));
-    } catch (e) { reject(e); }
+      tx.onerror = () => resolve(false);
+    } catch (e) { console.warn('idbPutAttachment', e); resolve(false); }
   })).catch(e => { console.warn('idbPutAttachment', e); return false; });
 }
 
@@ -9231,6 +9235,120 @@ function idbGetAttachment(docId) {
       req.onerror = () => reject(req.error || new Error('idb att get failed'));
     } catch (e) { reject(e); }
   })).catch(() => null);
+}
+
+/** ---- Supporting documents: org-scoped cloud storage (audit-ready) ----
+ * Path: org/{organization_id}/supporting-docs/{doc_id}/{safe_filename}
+ * Bucket: supporting-docs (private). See supporting_docs_storage_v1.sql
+ */
+const SUPPORTING_DOCS_BUCKET = 'supporting-docs';
+const SUPPORTING_DOCS_MAX_BYTES = 5 * 1024 * 1024; // 5 MB (bucket limit matches)
+
+function getActiveOrgIdForDocs() {
+  try {
+    if (typeof cloud !== 'undefined' && cloud && cloud.organizationId) return String(cloud.organizationId);
+  } catch (_) {}
+  return null;
+}
+
+function safeDocFileName(name) {
+  const base = String(name || 'document').replace(/[^\w.\-()+ ]+/g, '_').replace(/\s+/g, ' ').trim();
+  return (base || 'document').slice(0, 180);
+}
+
+function supportingDocStoragePath(orgId, docId, fileName) {
+  return 'org/' + String(orgId) + '/supporting-docs/' + String(docId) + '/' + safeDocFileName(fileName);
+}
+
+function dataUrlToUint8Array(dataUrl) {
+  const parts = String(dataUrl || '').split(',');
+  const b64 = parts.slice(1).join(',');
+  if (!b64) return null;
+  const binary = atob(b64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/** Upload one supporting doc to org storage. Mutates doc with storage_path on success. */
+async function uploadSupportingDocToCloud(doc, opts) {
+  if (!doc || doc.storage_path) return doc;
+  const orgId = (opts && opts.organizationId) || getActiveOrgIdForDocs();
+  if (!orgId) return doc;
+  const body = doc.dataUrl || doc.data || null;
+  if (!body || String(body).length < 32) return doc;
+  try {
+    const client = await getSupabase();
+    if (!client) return doc;
+    const { data: { session } } = await client.auth.getSession();
+    if (!session) return doc;
+
+    if (!doc.id) {
+      doc.id = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : ('doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+    }
+    const path = supportingDocStoragePath(orgId, doc.id, doc.name || 'document');
+    const bytes = dataUrlToUint8Array(String(body).startsWith('data:') ? body : ('data:application/octet-stream;base64,' + body));
+    if (!bytes || !bytes.length) return doc;
+    if (bytes.length > SUPPORTING_DOCS_MAX_BYTES) {
+      console.warn('supporting doc too large for cloud', doc.name, bytes.length);
+      return doc;
+    }
+    const contentType = doc.type || 'application/octet-stream';
+    const { error } = await client.storage
+      .from(SUPPORTING_DOCS_BUCKET)
+      .upload(path, bytes, { contentType, upsert: true });
+    if (error) {
+      console.warn('uploadSupportingDocToCloud', error.message || error);
+      return doc;
+    }
+    doc.storage_path = path;
+    doc.storage_bucket = SUPPORTING_DOCS_BUCKET;
+    doc.organization_id = orgId;
+    doc.uploaded_at = new Date().toISOString();
+    // Keep local body for offline; strip happens on persist
+    return doc;
+  } catch (e) {
+    console.warn('uploadSupportingDocToCloud', e && e.message || e);
+    return doc;
+  }
+}
+
+/** Upload any docs that still only have a local body (best-effort, non-blocking callers). */
+async function uploadSupportingDocsBatch(docs) {
+  if (!Array.isArray(docs) || !docs.length) return docs || [];
+  const orgId = getActiveOrgIdForDocs();
+  if (!orgId) return docs;
+  const out = [];
+  for (const d of docs) {
+    try {
+      out.push(await uploadSupportingDocToCloud(d, { organizationId: orgId }));
+    } catch (_) {
+      out.push(d);
+    }
+  }
+  return out;
+}
+
+async function createSupportingDocSignedUrl(storagePath, expiresSec) {
+  if (!storagePath) return null;
+  try {
+    const client = await getSupabase();
+    if (!client) return null;
+    const { data, error } = await client.storage
+      .from(SUPPORTING_DOCS_BUCKET)
+      .createSignedUrl(String(storagePath), expiresSec || 180);
+    if (error) {
+      console.warn('createSupportingDocSignedUrl', error.message || error);
+      return null;
+    }
+    return data && data.signedUrl ? data.signedUrl : null;
+  } catch (e) {
+    console.warn('createSupportingDocSignedUrl', e && e.message || e);
+    return null;
+  }
 }
 
 /** Persist document bodies outside the main DB JSON (so prune can strip mirrors safely). */
@@ -9250,6 +9368,8 @@ function stashSupportingDocsBodies(docs) {
           size: o.size || 0,
           dataUrl: o.dataUrl || (String(body).startsWith('data:') ? body : null),
           data: o.dataUrl ? null : body,
+          storage_path: o.storage_path || null,
+          storage_bucket: o.storage_bucket || null,
           at: o.at || new Date().toISOString()
         });
       } catch (_) {}
@@ -9271,6 +9391,7 @@ async function hydrateSupportingDoc(doc) {
     doc.dataUrl = stored.dataUrl;
     if (stored.type) doc.type = doc.type || stored.type;
     if (stored.name) doc.name = doc.name || stored.name;
+    if (stored.storage_path && !doc.storage_path) doc.storage_path = stored.storage_path;
   }
   return doc;
 }
@@ -11747,10 +11868,12 @@ function isAppInstalled(id) {
   if (!app) return false;
   if (app.core) return true;
   if (app.comingSoon) return false;
-  // Legacy orgs: null map means all defaultInstalled apps are on
-  if (db.installedApps == null) return !!(app.defaultInstalled || app.core);
-  const map = db.installedApps;
-  if (Object.prototype.hasOwnProperty.call(map, id)) return !!map[id];
+  try {
+    // Legacy orgs: null map means all defaultInstalled apps are on
+    if (!db || db.installedApps == null) return !!(app.defaultInstalled || app.core);
+    const map = db.installedApps;
+    if (map && typeof map === 'object' && Object.prototype.hasOwnProperty.call(map, id)) return !!map[id];
+  } catch (_) {}
   return !!(app.defaultInstalled || app.core);
 }
 
@@ -11892,37 +12015,73 @@ function openEcoApp(tile) {
 function renderEcosystemHome() {
   const grid = document.getElementById('ecoGrid');
   if (!grid) return;
-  const role = (typeof currentOrgRole === 'function') ? currentOrgRole() : 'owner';
-  const tiles = ecoAppCatalog().filter(t => {
-    try { return typeof t.when === 'function' ? t.when() : true; } catch (_) { return true; }
-  });
+  let role = 'owner';
+  try { role = (typeof currentOrgRole === 'function') ? currentOrgRole() : 'owner'; } catch (_) {}
+  let tiles = [];
+  try {
+    tiles = ecoAppCatalog().filter(t => {
+      try { return typeof t.when === 'function' ? t.when() : true; } catch (_) { return true; }
+    });
+  } catch (e) {
+    console.warn('eco catalog', e);
+    tiles = [];
+  }
+  // Never leave Home empty — fall back to core / default apps
+  if (!tiles.length) {
+    try {
+      tiles = (APP_REGISTRY || []).filter(a => {
+        try {
+          return isHomeTileApp(a) && (a.core || a.defaultInstalled);
+        } catch (_) { return !!(a && a.core); }
+      }).map(a => ({
+        id: a.id,
+        name: a.name,
+        desc: a.desc,
+        icon: a.icon,
+        tone: a.tone,
+        view: a.view,
+        href: a.href,
+        need: a.need || null,
+        core: !!a.core,
+        category: a.category
+      }));
+    } catch (_) { tiles = []; }
+  }
   // Locked tiles (installed but role-gated) for discoverability
   const locked = [];
   if (role === 'member') {
-    ecoAppCatalog().forEach(t => {
-      if (tiles.find(x => x.id === t.id)) return;
-      if (!isAppInstalled(t.id)) return;
-      if (t.id === 'books') locked.push({ ...t, locked: true });
-    });
+    try {
+      ecoAppCatalog().forEach(t => {
+        if (tiles.find(x => x.id === t.id)) return;
+        if (!isAppInstalled(t.id)) return;
+        if (t.id === 'books') locked.push(Object.assign({}, t, { locked: true }));
+      });
+    } catch (_) {}
   }
   const all = tiles.concat(locked);
   grid.innerHTML = all.map(t => {
-    const badge = (!t.locked && typeof t.badge === 'function') ? (t.badge() || '') : (t.locked ? 'Role' : '');
+    let badge = '';
+    try {
+      badge = (!t.locked && typeof t.badge === 'function') ? (t.badge() || '') : (t.locked ? 'Role' : '');
+    } catch (_) { badge = t.locked ? 'Role' : ''; }
     const badgeCls = t.locked ? 'eco-tile-badge' : 'eco-tile-badge eco-badge-new';
     const tone = t.tone || 'blue';
     return '<button type="button" class="eco-tile' + (t.locked ? ' eco-tile-locked' : '') +
       '" data-eco-id="' + t.id + '" data-tone="' + tone + '"' +
-      (t.locked ? ' disabled title="Requires a higher role"' : ' title="' + String(t.name).replace(/"/g, '') + '"') + '>' +
+      (t.locked ? ' disabled title="Requires a higher role"' : ' title="' + String(t.name || '').replace(/"/g, '') + '"') + '>' +
       (badge ? '<span class="' + badgeCls + '">' + String(badge).replace(/</g, '') + '</span>' : '') +
       '<span class="eco-tile-icon" aria-hidden="true">' + (t.icon || '·') + '</span>' +
-      '<span class="eco-tile-name">' + String(t.name).replace(/</g, '') + '</span>' +
+      '<span class="eco-tile-name">' + String(t.name || '').replace(/</g, '') + '</span>' +
       '<span class="eco-tile-desc">' + String(t.desc || '').replace(/</g, '') + '</span>' +
       '</button>';
-  }).join('');
+  }).join('') || '<p class="section-sub">No apps available. Open <b>Manage apps</b> from the account menu, or refresh.</p>';
   grid.querySelectorAll('.eco-tile:not([disabled])').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-eco-id');
-      const tile = ecoAppCatalog().find(x => x.id === id) || appRegistryEntry(id);
+      let tile = null;
+      try { tile = ecoAppCatalog().find(x => x.id === id) || appRegistryEntry(id); } catch (_) {
+        tile = appRegistryEntry(id);
+      }
       openEcoApp(tile);
     });
   });
@@ -12068,7 +12227,24 @@ function renderManageAppsBody() {
 
 /** Home = apps launcher only. */
 function dashboard() {
-  try { renderEcosystemHome(); } catch (e) { console.warn('eco home', e); }
+  try {
+    const h = document.getElementById('heading');
+    const sub = document.getElementById('subheading');
+    if (h) h.textContent = 'Home';
+    if (sub) sub.textContent = 'Open an app — invoices, books, shops, team.';
+  } catch (_) {}
+  try { renderEcosystemHome(); } catch (e) {
+    console.warn('eco home', e);
+    try {
+      const grid = document.getElementById('ecoGrid');
+      if (grid && !grid.innerHTML.trim()) {
+        grid.innerHTML = '<p class="section-sub">Could not load apps. <button type="button" class="button small" id="ecoRetryBtn">Retry</button></p>';
+        document.getElementById('ecoRetryBtn')?.addEventListener('click', () => {
+          try { renderEcosystemHome(); } catch (err) { toast(err.message || 'Still failing'); }
+        });
+      }
+    } catch (_) {}
+  }
   try {
     const btn = document.getElementById('homeExpenseRequestBtn');
     if (btn) {
@@ -24468,9 +24644,10 @@ function readSupportingDocsFromInput(inputId) {
   const listEl = document.getElementById(inputId + 'List') || document.getElementById(inputId.replace(/Docs$/, 'DocsList'));
   if (!input || !input.files || !input.files.length) return Promise.resolve([]);
   const files = Array.from(input.files).slice(0, 5);
+  const maxBytes = (typeof SUPPORTING_DOCS_MAX_BYTES === 'number') ? SUPPORTING_DOCS_MAX_BYTES : (5 * 1024 * 1024);
   return Promise.all(files.map(f => new Promise((resolve) => {
-    if (f.size > 1.5 * 1024 * 1024) {
-      resolve({ name: f.name, type: f.type, size: f.size, note: 'skipped (over 1.5MB)' });
+    if (f.size > maxBytes) {
+      resolve({ name: f.name, type: f.type, size: f.size, note: 'skipped (over ' + Math.round(maxBytes / (1024 * 1024)) + 'MB)' });
       return;
     }
     const reader = new FileReader();
@@ -24488,13 +24665,24 @@ function readSupportingDocsFromInput(inputId) {
     };
     reader.onerror = () => resolve({ name: f.name, type: f.type, size: f.size, note: 'read failed' });
     reader.readAsDataURL(f);
-  }))).then(docs => {
+  }))).then(async (docs) => {
+    // Upload to organisation storage so any team member / auditor can open later
+    let finalDocs = docs.filter(d => d && d.dataUrl);
+    try {
+      if (typeof uploadSupportingDocsBatch === 'function' && getActiveOrgIdForDocs()) {
+        finalDocs = await uploadSupportingDocsBatch(finalDocs);
+      }
+    } catch (e) {
+      console.warn('cloud upload supporting docs', e);
+    }
     if (listEl) {
-      listEl.innerHTML = docs.map(d =>
-        '• ' + String(d.name).replace(/</g, '') + (d.note ? ' (' + d.note + ')' : '')
+      listEl.innerHTML = finalDocs.map(d =>
+        '• ' + String(d.name).replace(/</g, '') +
+        (d.storage_path ? ' ✓' : '') +
+        (d.note ? ' (' + d.note + ')' : '')
       ).join('<br>') || '';
     }
-    return docs.filter(d => d.dataUrl);
+    return finalDocs;
   });
 }
 function wireDocsPreview(inputId, listId) {
@@ -28024,9 +28212,116 @@ async function openSupportingDocument(doc) {
     return;
   }
   try { doc = await hydrateSupportingDoc(doc); } catch (_) {}
+
+  // Prefer organisation cloud storage (any authorised device)
+  const cloudPath = doc.storage_path || doc.storagePath || null;
+  if (cloudPath && !doc.dataUrl) {
+    try {
+      const signed = await createSupportingDocSignedUrl(cloudPath, 300);
+      if (signed) {
+        doc.cloudUrl = signed;
+        // For images/PDF try in-app viewer via fetch → blob; fall back to new tab
+        try {
+          const res = await fetch(signed);
+          if (res.ok) {
+            const blob = await res.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            if (_docViewerObjectUrl) {
+              try { URL.revokeObjectURL(_docViewerObjectUrl); } catch (_) {}
+            }
+            _docViewerObjectUrl = objectUrl;
+            const name = String(doc.name || 'document');
+            let type = String(doc.type || blob.type || '').toLowerCase();
+            if (!type || type === 'application/octet-stream') {
+              if (/\.pdf$/i.test(name)) type = 'application/pdf';
+              else if (/\.(png|jpe?g|gif|webp)$/i.test(name)) type = 'image/' + (name.split('.').pop() || 'png').toLowerCase();
+            }
+            const modal = document.getElementById('docViewerModal');
+            const body = document.getElementById('docViewerBody');
+            const title = document.getElementById('docViewerTitle');
+            const dl = document.getElementById('docViewerDownload');
+            if (title) title.textContent = name;
+            if (dl) {
+              dl.href = objectUrl;
+              dl.download = name;
+              dl.style.display = '';
+            }
+            if (body) {
+              body.innerHTML = '';
+              if (type.startsWith('image/')) {
+                const img = document.createElement('img');
+                img.src = objectUrl;
+                img.alt = name;
+                img.style.cssText = 'display:block;max-width:100%;max-height:75vh;margin:0 auto;object-fit:contain';
+                body.appendChild(img);
+              } else if (type === 'application/pdf' || type.includes('pdf')) {
+                const iframe = document.createElement('iframe');
+                iframe.src = objectUrl;
+                iframe.title = name;
+                iframe.style.cssText = 'width:100%;height:min(75vh,720px);border:0;background:#fff';
+                body.appendChild(iframe);
+              } else {
+                body.innerHTML =
+                  '<div style="padding:28px;text-align:center">' +
+                  '<p style="margin:0 0 12px;color:var(--muted)">Preview not available for this file type.</p>' +
+                  '<a class="button primary" href="' + objectUrl + '" download="' + name.replace(/"/g, '') + '">Download ' + name.replace(/</g, '') + '</a>' +
+                  '</div>';
+              }
+            }
+            if (modal) {
+              if (typeof showModal === 'function') showModal('docViewerModal');
+              else {
+                modal.classList.add('show');
+                modal.style.display = 'grid';
+              }
+            } else {
+              window.open(signed, '_blank');
+            }
+            return;
+          }
+        } catch (_) {
+          window.open(signed, '_blank');
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('open cloud doc', e);
+    }
+  }
+
   if (!doc.dataUrl && (doc.url || doc.cloudUrl)) {
     try { window.open(doc.url || doc.cloudUrl, '_blank'); return; } catch (_) {}
   }
+
+  // Best-effort: if we still have local body but no cloud path, upload for future org access
+  if (doc.dataUrl && !doc.storage_path && getActiveOrgIdForDocs()) {
+    try {
+      uploadSupportingDocToCloud(doc).then((updated) => {
+        if (updated && updated.storage_path) {
+          // Persist path onto any in-memory bills/cash that reference this doc id
+          try {
+            const stamp = (list) => {
+              (list || []).forEach((row) => {
+                if (!row || !Array.isArray(row.documents)) return;
+                row.documents.forEach((d) => {
+                  if (d && d.id === updated.id) {
+                    d.storage_path = updated.storage_path;
+                    d.storage_bucket = updated.storage_bucket;
+                    d.uploaded_at = updated.uploaded_at;
+                  }
+                });
+              });
+            };
+            stamp(db.bills);
+            stamp(db.cashEntries);
+            stamp(db.journals);
+            if (typeof save === 'function') save();
+          } catch (_) {}
+        }
+      });
+    } catch (_) {}
+  }
+
   if (!doc.dataUrl) {
     toast('Document file is not on this device — re-attach or open from the original request device');
     return;
