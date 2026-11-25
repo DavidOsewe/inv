@@ -1,46 +1,322 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>invoicedey — Sign in</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>invoicedey — Sign in · Invoice, get paid, keep books intuitive</title>
+<meta name="description" content="invoicedey helps African SMEs and diaspora freelancers invoice clients, collect with local rails, and keep intuitive books — with team approvals when you grow.">
 <style>
-:root{--blue:#2467E3;--text:#071a38;--muted:#5f7698;--line:#dce4ef;--bg:#f7f9fc}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-.wrap{min-height:100vh;display:grid;grid-template-columns:1fr 1fr}.left{padding:12vh 9vw;display:flex;flex-direction:column;justify-content:center}.brand{font-weight:900;font-size:28px;letter-spacing:-1.5px}.brand span{color:var(--blue)}h1{font-size:48px;line-height:1.05;letter-spacing:-2px;max-width:600px;margin:34px 0 18px}.sub{color:var(--muted);font-size:18px;line-height:1.6;max-width:560px}.points{margin-top:34px;display:grid;gap:14px;color:#173052}.points div:before{content:'✓';display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#E8F0FE;color:var(--blue);font-weight:800;margin-right:10px}.right{background:white;border-left:1px solid var(--line);display:flex;align-items:center;justify-content:center;padding:50px}.card{width:min(430px,100%)}h2{font-size:28px;margin:0 0 8px}.hint{color:var(--muted);margin:0 0 28px}.label{display:block;font-size:12px;font-weight:800;color:#587091;margin:16px 0 8px;letter-spacing:.05em}.input{width:100%;height:54px;border:1px solid var(--line);border-radius:10px;padding:0 15px;font-size:16px;outline:none}.input:focus{border-color:var(--blue);box-shadow:0 0 0 3px #E8F0FE}.btn{width:100%;height:54px;border:0;border-radius:28px;background:var(--blue);color:#fff;font-size:15px;font-weight:800;cursor:pointer;margin-top:22px}.btn:disabled{opacity:.6;cursor:wait}.btn.secondary{background:#fff;color:var(--blue);border:1px solid var(--line);margin-top:10px}.status{margin-top:16px;padding:13px 15px;border-radius:10px;background:#f1f6ff;color:#274e86;line-height:1.5;display:none}.back{display:block;text-align:center;margin-top:18px;color:var(--muted);font-size:13px;text-decoration:none}.fine{font-size:12px;color:var(--muted);line-height:1.5;margin-top:20px;text-align:center}.otp-box{display:none;margin-top:8px}.otp-box.show{display:block}@media(max-width:800px){.wrap{grid-template-columns:1fr}.left{padding:50px 28px}.right{border-left:0;border-top:1px solid var(--line);padding:45px 28px}h1{font-size:38px}}
+:root{
+  --blue:#1B4FD8;
+  --blue-deep:#0B2A6B;
+  --blue-soft:#E8F0FE;
+  --green:#0F9F6E;
+  --green-soft:#E6F7F0;
+  --text:#071A38;
+  --muted:#5A7194;
+  --line:#D7E0EE;
+  --bg:#F4F7FC;
+  --card:#FFFFFF;
+  --shadow:0 18px 50px rgba(11,42,107,.08);
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{
+  min-height:100vh;
+  display:grid;
+  grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);
+}
+/* ---- Brand panel ---- */
+.left{
+  position:relative;
+  padding:10vh 8vw 8vh;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  background:
+    radial-gradient(ellipse 80% 60% at 10% 0%, rgba(27,79,216,.18), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 90% 100%, rgba(15,159,110,.12), transparent 50%),
+    linear-gradient(165deg, #F8FAFF 0%, #EEF3FB 45%, #E8F0FE 100%);
+  overflow:hidden;
+}
+.left::before{
+  content:'';
+  position:absolute;
+  inset:auto -20% -30% 40%;
+  height:70%;
+  background:radial-gradient(circle, rgba(27,79,216,.06), transparent 65%);
+  pointer-events:none;
+}
+.brand-row{display:flex;align-items:center;gap:12px;position:relative;z-index:1}
+.brand-mark{
+  width:36px;height:36px;border-radius:10px;
+  background:linear-gradient(145deg,var(--blue) 0%,var(--blue-deep) 100%);
+  display:grid;place-items:center;
+  box-shadow:0 8px 20px rgba(27,79,216,.28);
+}
+.brand-mark svg{width:18px;height:18px}
+.brand{font-weight:900;font-size:26px;letter-spacing:-1.4px;line-height:1}
+.brand span{color:var(--blue)}
+.eyebrow{
+  position:relative;z-index:1;
+  display:inline-flex;align-items:center;gap:8px;
+  margin-top:36px;
+  padding:6px 12px 6px 8px;
+  border-radius:999px;
+  background:rgba(255,255,255,.72);
+  border:1px solid rgba(27,79,216,.12);
+  font-size:12px;font-weight:700;color:var(--blue-deep);
+  letter-spacing:.02em;
+}
+.eyebrow-dot{
+  width:8px;height:8px;border-radius:50%;
+  background:var(--green);
+  box-shadow:0 0 0 3px var(--green-soft);
+}
+h1{
+  position:relative;z-index:1;
+  font-size:clamp(32px,4.2vw,48px);
+  line-height:1.08;
+  letter-spacing:-1.8px;
+  max-width:540px;
+  margin:18px 0 16px;
+  font-weight:850;
+}
+h1 em{
+  font-style:normal;
+  background:linear-gradient(120deg,var(--blue) 0%,#3B7AE8 50%,var(--green) 100%);
+  -webkit-background-clip:text;
+  background-clip:text;
+  color:transparent;
+}
+.sub{
+  position:relative;z-index:1;
+  color:var(--muted);
+  font-size:17px;
+  line-height:1.65;
+  max-width:480px;
+  margin:0;
+}
+.points{
+  position:relative;z-index:1;
+  margin-top:32px;
+  display:grid;
+  gap:12px;
+  max-width:480px;
+}
+.point{
+  display:grid;
+  grid-template-columns:40px 1fr;
+  gap:12px;
+  align-items:start;
+  padding:14px 16px;
+  background:rgba(255,255,255,.75);
+  border:1px solid rgba(220,228,239,.9);
+  border-radius:14px;
+  backdrop-filter:blur(6px);
+}
+.point-icon{
+  width:40px;height:40px;border-radius:12px;
+  display:grid;place-items:center;
+  font-size:18px;
+  background:var(--blue-soft);
+  color:var(--blue);
+}
+.point.green .point-icon{background:var(--green-soft);color:var(--green)}
+.point strong{display:block;font-size:14px;font-weight:800;color:var(--text);margin-bottom:2px}
+.point span{font-size:13px;line-height:1.45;color:var(--muted)}
+.trust{
+  position:relative;z-index:1;
+  margin-top:28px;
+  display:flex;flex-wrap:wrap;gap:10px 18px;
+  font-size:12px;font-weight:650;color:var(--muted);
+}
+.trust span{display:inline-flex;align-items:center;gap:6px}
+.trust span::before{content:'✓';color:var(--green);font-weight:900}
+/* ---- Auth panel ---- */
+.right{
+  background:var(--card);
+  border-left:1px solid var(--line);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:48px 40px;
+}
+.card{width:min(420px,100%)}
+.card-head{margin-bottom:6px}
+h2{font-size:26px;margin:0 0 6px;letter-spacing:-.6px;font-weight:850}
+.hint{color:var(--muted);margin:0 0 18px;font-size:14px;line-height:1.55}
+.tabs{
+  display:flex;gap:4px;margin-bottom:6px;
+  padding:4px;background:#F1F5F9;border-radius:12px;
+}
+.tab{
+  flex:1;border:0;background:transparent;
+  padding:11px 8px;border-radius:10px;
+  font-size:13px;font-weight:750;color:var(--muted);cursor:pointer;
+  transition:background .15s,color .15s,box-shadow .15s;
+}
+.tab.active{
+  background:#fff;color:var(--text);
+  box-shadow:0 1px 3px rgba(15,23,42,.08);
+}
+.panel{display:none}
+.panel.active{display:block}
+.label{
+  display:block;font-size:11px;font-weight:800;
+  color:#5C7596;margin:16px 0 7px;letter-spacing:.06em;
+}
+.input{
+  width:100%;height:52px;
+  border:1px solid var(--line);border-radius:12px;
+  padding:0 15px;font-size:15px;outline:none;
+  background:#fff;color:var(--text);
+  transition:border-color .15s,box-shadow .15s;
+}
+.input:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-soft)}
+.input::placeholder{color:#9AADC4}
+.btn{
+  width:100%;height:52px;border:0;border-radius:26px;
+  background:linear-gradient(180deg,#2A6AE8 0%,var(--blue) 100%);
+  color:#fff;font-size:15px;font-weight:800;cursor:pointer;
+  margin-top:20px;
+  box-shadow:0 10px 24px rgba(27,79,216,.28);
+  transition:transform .12s,box-shadow .12s,opacity .12s;
+}
+.btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 14px 28px rgba(27,79,216,.32)}
+.btn:disabled{opacity:.6;cursor:wait;transform:none;box-shadow:none}
+.btn.secondary{
+  background:#fff;color:var(--blue);
+  border:1px solid var(--line);margin-top:10px;
+  box-shadow:none;
+}
+.btn.secondary:hover:not(:disabled){background:#F8FAFF;box-shadow:none}
+.status{
+  margin-top:16px;padding:13px 15px;border-radius:12px;
+  background:var(--blue-soft);color:#274E86;
+  line-height:1.5;display:none;font-size:14px;
+}
+.otp-box{display:none;margin-top:4px}
+.otp-box.show{display:block}
+.pw-hint{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.45}
+.back{
+  display:block;text-align:center;margin-top:20px;
+  color:var(--muted);font-size:13px;text-decoration:none;font-weight:600;
+}
+.back:hover{color:var(--blue)}
+.fine{
+  font-size:12px;color:var(--muted);line-height:1.5;
+  margin-top:18px;text-align:center;
+}
+.fine a{color:var(--blue);text-decoration:none;font-weight:650}
+.fine a:hover{text-decoration:underline}
+@media(max-width:880px){
+  .wrap{grid-template-columns:1fr}
+  .left{padding:40px 28px 32px}
+  .right{border-left:0;border-top:1px solid var(--line);padding:36px 28px 48px}
+  h1{font-size:34px;letter-spacing:-1.2px}
+  .point{padding:12px 14px}
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-</head><body>
+</head>
+<body>
 <div class="wrap">
-  <section class="left">
-    <div class="brand">invoice<span>dey</span></div>
-    <h1>Simple invoicing for independent businesses</h1>
-    <p class="sub">Create clean invoices, track what’s paid, and keep your data private. Sign in when you’re ready to sync with the cloud.</p>
+  <section class="left" aria-label="Why invoicedey">
+    <div class="brand-row">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M6 7.5h12M6 12h8M6 16.5h10" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+          <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="#fff" stroke-width="1.6" opacity=".5"/>
+        </svg>
+      </div>
+      <div class="brand">invoice<span>dey</span></div>
+    </div>
+
+    <div class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> Built for African SMEs &amp; diaspora teams</div>
+
+    <h1>Invoice. Get paid.<br><em>Keep books intuitive.</em></h1>
+    <p class="sub">
+      Professional invoices, local collection, and intuitive books —
+      with approvals and team controls when your business grows.
+    </p>
+
     <div class="points">
-      <div>Free account — no subscription required</div>
-      <div>Cloud sync when signed in</div>
-      <div>Professional invoice sharing</div>
+      <div class="point">
+        <div class="point-icon" aria-hidden="true">📄</div>
+        <div>
+          <strong>Share a link, get paid</strong>
+          <span>Clear invoices clients can open and pay — bank details or Paystack on the public page.</span>
+        </div>
+      </div>
+      <div class="point green">
+        <div class="point-icon" aria-hidden="true">💱</div>
+        <div>
+          <strong>Dual currency when you need it</strong>
+          <span>Think in one currency, invoice in another — built for diaspora teams and multi-market work.</span>
+        </div>
+      </div>
+      <div class="point">
+        <div class="point-icon" aria-hidden="true">✓</div>
+        <div>
+          <strong>Approvals &amp; intuitive books</strong>
+          <span>Expense ladders, supporting docs in the cloud, and a cash ledger without heavy accounting software.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="trust">
+      <span>Free to start</span>
+      <span>Cloud sync when signed in</span>
+      <span>Invite your team with one link</span>
     </div>
   </section>
+
   <section class="right">
     <div class="card">
-      <h2>Sign in</h2>
-      <p class="hint">We’ll email a one-time code (and a magic link). Prefer the <b>code</b> if the link fails after clearing browser data.</p>
-      <form id="signupForm">
-        <label class="label" for="email">EMAIL</label>
-        <input class="input" id="email" type="email" placeholder="you@company.com" autocomplete="email" required>
-        <label class="label" for="name">YOUR NAME (OPTIONAL)</label>
-        <input class="input" id="name" type="text" placeholder="Ada Lovelace" autocomplete="name">
-        <button class="btn" id="submitBtn" type="submit">Send sign-in code</button>
-      </form>
-      <div class="otp-box" id="otpBox">
-        <label class="label" for="otp">CODE FROM EMAIL</label>
-        <input class="input" id="otp" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" maxlength="12">
-        <button class="btn" id="verifyBtn" type="button">Verify &amp; open app</button>
-        <button class="btn secondary" id="resendBtn" type="button">Resend code</button>
+      <div class="card-head">
+        <h2>Sign in</h2>
+        <p class="hint" id="modeHint">Use a one-time code from your inbox, or sign in with a password.</p>
       </div>
+
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab active" data-mode="otp" role="tab" aria-selected="true">Email code</button>
+        <button type="button" class="tab" data-mode="password" role="tab" aria-selected="false">Password</button>
+      </div>
+
+      <label class="label" for="email">EMAIL</label>
+      <input class="input" id="email" type="email" placeholder="you@company.com" autocomplete="email" required>
+
+      <label class="label" for="name">YOUR NAME (OPTIONAL)</label>
+      <input class="input" id="name" type="text" placeholder="Ada Lovelace" autocomplete="name">
+
+      <div class="panel active" id="panelOtp">
+        <button class="btn" id="sendCodeBtn" type="button">Send sign-in code</button>
+        <div class="otp-box" id="otpBox">
+          <label class="label" for="otp">CODE FROM EMAIL</label>
+          <input class="input" id="otp" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" maxlength="12">
+          <button class="btn" id="verifyBtn" type="button">Verify &amp; open app</button>
+          <button class="btn secondary" id="resendBtn" type="button">Resend code</button>
+        </div>
+      </div>
+
+      <div class="panel" id="panelPassword">
+        <label class="label" for="password">PASSWORD</label>
+        <input class="input" id="password" type="password" autocomplete="current-password" placeholder="At least 6 characters" minlength="6">
+        <p class="pw-hint">New here? We’ll create your account with this password. Already registered? Sign in with the same email + password.</p>
+        <button class="btn" id="passwordBtn" type="button">Sign in with password</button>
+        <button class="btn secondary" id="forgotBtn" type="button">Email me a reset link</button>
+      </div>
+
       <div class="status" id="status"></div>
-      <a class="back" href="app.html">Back to invoicedey</a>
-      <p class="fine">By continuing you agree to use invoicedey for legitimate invoicing.</p>
+      <a class="back" href="app.html">← Back to invoicedey</a>
+      <p class="fine">By continuing you agree to our <a href="terms.html">Terms</a> and <a href="privacy.html">Privacy</a>. For legitimate business use.</p>
     </div>
   </section>
 </div>
@@ -54,25 +330,51 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, 
     detectSessionInUrl: true,
     flowType: 'pkce',
     storage: window.localStorage
+  },
+  db: { schema: 'public' },
+  global: {
+    headers: {
+      'Accept-Profile': 'public',
+      'Content-Profile': 'public'
+    }
   }
 });
+
 const qs = new URLSearchParams(location.search);
 const statusEl = document.getElementById('status');
-const btn = document.getElementById('submitBtn');
 const otpBox = document.getElementById('otpBox');
 const otpInput = document.getElementById('otp');
+const sendCodeBtn = document.getElementById('sendCodeBtn');
 const verifyBtn = document.getElementById('verifyBtn');
 const resendBtn = document.getElementById('resendBtn');
+const passwordBtn = document.getElementById('passwordBtn');
+const forgotBtn = document.getElementById('forgotBtn');
 
 function setStatus(msg, ok = true) {
   statusEl.textContent = msg;
   statusEl.style.display = 'block';
-  statusEl.style.background = ok ? '#f1f6ff' : '#fff1f1';
+  statusEl.style.background = ok ? '#E8F0FE' : '#fff1f1';
   statusEl.style.color = ok ? '#274e86' : '#b42318';
 }
 
+/** Canonical public origin — always absolute so Supabase emails open on your domain. */
+function publicOrigin() {
+  try {
+    const host = (location.hostname || '').toLowerCase();
+    if (host === 'invoicedey.com' || host === 'www.invoicedey.com') {
+      return location.origin;
+    }
+    if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local')) {
+      return location.origin;
+    }
+    if (location.protocol === 'https:') return location.origin;
+  } catch (_) {}
+  return 'https://invoicedey.com';
+}
+
+/** Email confirm / magic-link / recovery always land on auth-callback on the custom domain. */
 function appRedirectUrl() {
-  const redirect = new URL('app.html', location.href);
+  const redirect = new URL('auth-callback.html', publicOrigin() + '/');
   qs.forEach((v, k) => {
     if (['ref', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'invite'].includes(k)) {
       redirect.searchParams.set(k, v);
@@ -83,6 +385,11 @@ function appRedirectUrl() {
     if (inv) redirect.searchParams.set('invite', inv);
   } catch (_) {}
   return redirect;
+}
+
+function goToApp() {
+  const inv = qs.get('invite') || localStorage.getItem('invoicedey-pending-invite');
+  location.replace(inv ? ('app.html?invite=' + encodeURIComponent(inv)) : 'app.html');
 }
 
 function captureAttribution() {
@@ -105,37 +412,60 @@ function captureAttribution() {
   }
 }
 
-(function () {
+(function stashInvite() {
   const inv = qs.get('invite');
   if (inv) {
     try { localStorage.setItem('invoicedey-pending-invite', inv); } catch (_) {}
   }
 })();
 
-(async function () {
+(async function resumeIfSignedIn() {
   try {
+    try {
+      if (typeof sb.auth.getSessionFromUrl === 'function') {
+        await sb.auth.getSessionFromUrl({ storeSession: true });
+      } else if (location.hash && /access_token|refresh_token|type=/.test(location.hash)) {
+        await new Promise(r => setTimeout(r, 200));
+      }
+    } catch (_) {}
     const inv = qs.get('invite') || localStorage.getItem('invoicedey-pending-invite');
     const { data: { session } } = await sb.auth.getSession();
     if (session?.user) {
       location.replace(inv ? ('app.html?invite=' + encodeURIComponent(inv)) : 'app.html');
-      return;
     }
   } catch (_) {}
 })();
 
 captureAttribution();
 try {
-  const em = qs.get('email');
+  const em = qs.get('email') || localStorage.getItem('invoicedey-pending-email');
   if (em) {
     const el = document.getElementById('email');
     if (el) el.value = em;
   }
 } catch (_) {}
 
+/* ---- Mode tabs ---- */
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => {
+      t.classList.toggle('active', t === tab);
+      t.setAttribute('aria-selected', t === tab ? 'true' : 'false');
+    });
+    const mode = tab.getAttribute('data-mode');
+    document.getElementById('panelOtp').classList.toggle('active', mode === 'otp');
+    document.getElementById('panelPassword').classList.toggle('active', mode === 'password');
+    document.getElementById('modeHint').textContent = mode === 'otp'
+      ? 'We’ll email a one-time code (and a magic link). Prefer the code if links fail after clearing browser data.'
+      : 'Sign in with email + password, or create an account if you’re new.';
+  });
+});
+
+/* ---- OTP flow ---- */
 async function sendOtp() {
   const email = document.getElementById('email').value.trim();
   const name = document.getElementById('name').value.trim();
-  if (!email) return false;
+  if (!email) throw new Error('Enter your email');
   const redirect = appRedirectUrl();
   const { error } = await sb.auth.signInWithOtp({
     email,
@@ -147,23 +477,21 @@ async function sendOtp() {
   });
   if (error) throw error;
   try { localStorage.setItem('invoicedey-pending-email', email); } catch (_) {}
-  return true;
 }
 
-document.getElementById('signupForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  btn.disabled = true;
-  btn.textContent = 'Sending…';
+sendCodeBtn.addEventListener('click', async () => {
+  sendCodeBtn.disabled = true;
+  sendCodeBtn.textContent = 'Sending…';
   try {
     await sendOtp();
     otpBox.classList.add('show');
-    setStatus('Code sent. Check your email for a 6-digit code (or use the magic link). Enter the code below — more reliable after clearing browser data.');
-    btn.textContent = 'Code sent';
+    setStatus('Code sent. Check your email for a 6-digit code (or use the magic link).');
+    sendCodeBtn.textContent = 'Code sent';
     otpInput.focus();
   } catch (err) {
     setStatus(err.message || 'Could not send code', false);
-    btn.disabled = false;
-    btn.textContent = 'Send sign-in code';
+    sendCodeBtn.disabled = false;
+    sendCodeBtn.textContent = 'Send sign-in code';
   }
 });
 
@@ -187,20 +515,109 @@ verifyBtn.addEventListener('click', async () => {
   verifyBtn.disabled = true;
   verifyBtn.textContent = 'Verifying…';
   try {
-    // Email OTP codes use type 'email'; some projects use 'magiclink'
     let result = await sb.auth.verifyOtp({ email, token, type: 'email' });
     if (result.error) {
       result = await sb.auth.verifyOtp({ email, token, type: 'magiclink' });
     }
     if (result.error) throw result.error;
-    if (!result.data?.session) throw new Error('No session returned — try the magic link instead');
+    if (!result.data?.session) throw new Error('No session returned — try the magic link in the email');
     setStatus('Signed in. Opening app…');
-    const inv = qs.get('invite') || localStorage.getItem('invoicedey-pending-invite');
-    location.replace(inv ? ('app.html?invite=' + encodeURIComponent(inv)) : 'app.html');
+    goToApp();
   } catch (err) {
     setStatus(err.message || 'Invalid or expired code', false);
     verifyBtn.disabled = false;
     verifyBtn.textContent = 'Verify & open app';
+  }
+});
+
+/* ---- Password flow ---- */
+async function signInWithPassword() {
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const name = document.getElementById('name').value.trim();
+  if (!email) throw new Error('Enter your email');
+  if (!password || password.length < 6) throw new Error('Password must be at least 6 characters');
+
+  let { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (!error && data?.session) {
+    try { localStorage.setItem('invoicedey-pending-email', email); } catch (_) {}
+    return { created: false };
+  }
+
+  const msg = String(error && error.message || '').toLowerCase();
+  const looksNew = /invalid login|invalid credentials|user not found|email not confirmed/i.test(msg)
+    || error?.status === 400;
+
+  if (looksNew || error) {
+    const signUp = await sb.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: appRedirectUrl().toString(),
+        data: name ? { full_name: name } : undefined
+      }
+    });
+    if (signUp.error) {
+      if (/already|registered|exists/i.test(String(signUp.error.message || ''))) {
+        throw error || signUp.error;
+      }
+      throw signUp.error;
+    }
+    if (signUp.data?.session) {
+      try { localStorage.setItem('invoicedey-pending-email', email); } catch (_) {}
+      return { created: true, needsConfirm: false };
+    }
+    return { created: true, needsConfirm: true };
+  }
+  throw error || new Error('Sign-in failed');
+}
+
+passwordBtn.addEventListener('click', async () => {
+  passwordBtn.disabled = true;
+  passwordBtn.textContent = 'Please wait…';
+  try {
+    const result = await signInWithPassword();
+    if (result.needsConfirm) {
+      setStatus('Account created. Check your email to confirm, then sign in here with the same password.');
+      passwordBtn.disabled = false;
+      passwordBtn.textContent = 'Sign in with password';
+      return;
+    }
+    setStatus(result.created ? 'Account created. Opening app…' : 'Signed in. Opening app…');
+    goToApp();
+  } catch (err) {
+    setStatus(err.message || 'Could not sign in', false);
+    passwordBtn.disabled = false;
+    passwordBtn.textContent = 'Sign in with password';
+  }
+});
+
+forgotBtn.addEventListener('click', async () => {
+  const email = document.getElementById('email').value.trim();
+  if (!email) { setStatus('Enter your email first', false); return; }
+  forgotBtn.disabled = true;
+  try {
+    const { error } = await sb.auth.resetPasswordForEmail(email, {
+      redirectTo: appRedirectUrl().toString()
+    });
+    if (error) throw error;
+    setStatus('Password reset email sent. Open the link, then come back and sign in.');
+  } catch (err) {
+    setStatus(err.message || 'Could not send reset email', false);
+  }
+  forgotBtn.disabled = false;
+});
+
+document.getElementById('password').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    passwordBtn.click();
+  }
+});
+document.getElementById('otp').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    verifyBtn.click();
   }
 });
 </script>
